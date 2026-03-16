@@ -106,6 +106,7 @@ class CapabilitySurface:
         symbiote_id: str,
         session_id: str,
         content: str,
+        extra_context: dict | None = None,
     ) -> str:
         """Build context, select ChatRunner, run, return response text."""
         runner = self._runner_registry.select("chat")
@@ -116,6 +117,7 @@ class CapabilitySurface:
             session_id=session_id,
             symbiote_id=symbiote_id,
             user_input=content,
+            extra_context=extra_context,
         )
 
         result = runner.run(context)

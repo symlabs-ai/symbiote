@@ -26,6 +26,7 @@ class AssembledContext(BaseModel):
     relevant_memories: list[dict] = Field(default_factory=list)
     relevant_knowledge: list[dict] = Field(default_factory=list)
     available_tools: list[dict] = Field(default_factory=list)
+    extra_context: dict | None = None
     user_input: str
     total_tokens_estimate: int = 0
 
@@ -72,6 +73,7 @@ class ContextAssembler:
         symbiote_id: str,
         user_input: str,
         working_memory: WorkingMemory | None = None,
+        extra_context: dict | None = None,
     ) -> AssembledContext:
         """Assemble context within token budget.
 
@@ -145,6 +147,7 @@ class ContextAssembler:
             relevant_memories=memories_dicts,
             relevant_knowledge=knowledge_dicts,
             available_tools=tool_dicts,
+            extra_context=extra_context,
             user_input=user_input,
             total_tokens_estimate=total,
         )

@@ -123,6 +123,12 @@ class ChatRunner:
                 if params:
                     parts.append(f"Parameters: ```json\n{json.dumps(params, indent=2)}\n```")
 
+        # Extra context (host-injected, e.g. page context)
+        if context.extra_context:
+            parts.append("## Context")
+            for key, value in context.extra_context.items():
+                parts.append(f"### {key}\n{value}")
+
         # Relevant memories
         if context.relevant_memories:
             parts.append("## Relevant Memories")

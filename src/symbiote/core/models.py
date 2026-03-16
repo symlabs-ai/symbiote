@@ -41,6 +41,7 @@ class Session(BaseModel):
     symbiote_id: str
     goal: str | None = None
     workspace_id: str | None = None
+    external_key: str | None = None
     status: str = "active"
     started_at: datetime = Field(default_factory=_utcnow)
     ended_at: datetime | None = None

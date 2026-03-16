@@ -59,12 +59,14 @@ class SymbioteResponse(BaseModel):
 class CreateSessionRequest(BaseModel):
     symbiote_id: str
     goal: str | None = None
+    external_key: str | None = None
 
 
 class SessionResponse(BaseModel):
     id: str
     symbiote_id: str
     goal: str | None = None
+    external_key: str | None = None
     status: str
     summary: str | None = None
 
@@ -220,11 +222,19 @@ def create_session(
     body: CreateSessionRequest,
     sessions: Annotated[SessionManager, Depends(get_session_manager)],
 ) -> SessionResponse:
-    sess = sessions.start(symbiote_id=body.symbiote_id, goal=body.goal)
+    if body.external_key:
+        sess = sessions.get_or_create_by_external_key(
+            symbiote_id=body.symbiote_id,
+            external_key=body.external_key,
+            goal=body.goal,
+        )
+    else:
+        sess = sessions.start(symbiote_id=body.symbiote_id, goal=body.goal)
     return SessionResponse(
         id=sess.id,
         symbiote_id=sess.symbiote_id,
         goal=sess.goal,
+        external_key=sess.external_key,
         status=sess.status,
     )
 
@@ -241,6 +251,25 @@ def get_session(
         id=sess.id,
         symbiote_id=sess.symbiote_id,
         goal=sess.goal,
+        external_key=sess.external_key,
+        status=sess.status,
+        summary=sess.summary,
+    )
+
+
+@app.get("/sessions/by-key/{external_key}", response_model=SessionResponse)
+def get_session_by_key(
+    external_key: str,
+    sessions: Annotated[SessionManager, Depends(get_session_manager)],
+) -> SessionResponse:
+    sess = sessions.find_by_external_key(external_key)
+    if sess is None:
+        raise HTTPException(status_code=404, detail="Session not found") from None
+    return SessionResponse(
+        id=sess.id,
+        symbiote_id=sess.symbiote_id,
+        goal=sess.goal,
+        external_key=sess.external_key,
         status=sess.status,
         summary=sess.summary,
     )
@@ -281,6 +310,7 @@ def close_session(
         id=sess.id,
         symbiote_id=sess.symbiote_id,
         goal=sess.goal,
+        external_key=sess.external_key,
         status=sess.status,
         summary=sess.summary,
     )

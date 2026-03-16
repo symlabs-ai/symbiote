@@ -23,22 +23,26 @@ class SessionManager:
         symbiote_id: str,
         goal: str | None = None,
         workspace_id: str | None = None,
+        external_key: str | None = None,
     ) -> Session:
         """Create a new active session and persist it."""
         session = Session(
             symbiote_id=symbiote_id,
             goal=goal,
             workspace_id=workspace_id,
+            external_key=external_key,
             status="active",
         )
         self._storage.execute(
-            "INSERT INTO sessions (id, symbiote_id, goal, workspace_id, status, started_at, ended_at, summary) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO sessions "
+            "(id, symbiote_id, goal, workspace_id, external_key, status, started_at, ended_at, summary) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 session.id,
                 session.symbiote_id,
                 session.goal,
                 session.workspace_id,
+                session.external_key,
                 session.status,
                 session.started_at.isoformat(),
                 None,
@@ -46,6 +50,45 @@ class SessionManager:
             ),
         )
         return session
+
+    def get_or_create_by_external_key(
+        self,
+        symbiote_id: str,
+        external_key: str,
+        goal: str | None = None,
+    ) -> Session:
+        """Find an active session by external_key, or create one."""
+        row = self._storage.fetch_one(
+            "SELECT * FROM sessions WHERE external_key = ? AND symbiote_id = ? "
+            "ORDER BY started_at DESC LIMIT 1",
+            (external_key, symbiote_id),
+        )
+        if row is not None:
+            session = self._row_to_session(row)
+            if session.status == "closed":
+                self._storage.execute(
+                    "UPDATE sessions SET status = 'active', ended_at = NULL WHERE id = ?",
+                    (session.id,),
+                )
+                session = session.model_copy(
+                    update={"status": "active", "ended_at": None}
+                )
+            return session
+        return self.start(
+            symbiote_id=symbiote_id,
+            goal=goal,
+            external_key=external_key,
+        )
+
+    def find_by_external_key(self, external_key: str) -> Session | None:
+        """Find the most recent session with the given external_key."""
+        row = self._storage.fetch_one(
+            "SELECT * FROM sessions WHERE external_key = ? ORDER BY started_at DESC LIMIT 1",
+            (external_key,),
+        )
+        if row is None:
+            return None
+        return self._row_to_session(row)
 
     def resume(self, session_id: str) -> Session | None:
         """Fetch a session by id. Reopen it if closed. Return None if not found."""
@@ -182,6 +225,7 @@ class SessionManager:
             symbiote_id=row["symbiote_id"],
             goal=row.get("goal"),
             workspace_id=row.get("workspace_id"),
+            external_key=row.get("external_key"),
             status=row["status"],
             started_at=datetime.fromisoformat(row["started_at"]),
             ended_at=ended_at,

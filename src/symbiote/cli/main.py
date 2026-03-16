@@ -141,15 +141,39 @@ def list_symbiotes() -> None:
 def session_start(
     symbiote_id: str = typer.Argument(help="Symbiote ID"),
     goal: str | None = typer.Option(None, "--goal", help="Session goal"),
+    external_key: str | None = typer.Option(None, "--external-key", help="External key for session lookup"),
 ) -> None:
     """Start a new session for a symbiote."""
     kernel = _make_kernel()
     try:
-        session = kernel.start_session(symbiote_id=symbiote_id, goal=goal)
+        session = kernel.start_session(
+            symbiote_id=symbiote_id, goal=goal, external_key=external_key
+        )
         console.print(f"Started session: [cyan]{session.id}[/cyan]")
+        if session.external_key:
+            console.print(f"External key: [dim]{session.external_key}[/dim]")
     except SymbioteError as exc:
         err_console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=1) from None
+    finally:
+        kernel.shutdown()
+
+
+@session_app.command("find")
+def session_find(
+    external_key: str = typer.Argument(help="External key to search"),
+) -> None:
+    """Find a session by external key."""
+    kernel = _make_kernel()
+    try:
+        session = kernel._sessions.find_by_external_key(external_key)
+        if session is None:
+            console.print("No session found for that key.")
+            return
+        console.print(f"Session: [cyan]{session.id}[/cyan]")
+        console.print(f"Symbiote: {session.symbiote_id}")
+        console.print(f"Status: {session.status}")
+        console.print(f"External key: [dim]{session.external_key}[/dim]")
     finally:
         kernel.shutdown()
 

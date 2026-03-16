@@ -108,13 +108,38 @@ class SymbioteKernel:
     def get_symbiote(self, symbiote_id: str) -> Symbiote | None:
         return self._identity.get(symbiote_id)
 
-    def start_session(self, symbiote_id: str, goal: str | None = None) -> Session:
-        return self._sessions.start(symbiote_id=symbiote_id, goal=goal)
+    def start_session(
+        self,
+        symbiote_id: str,
+        goal: str | None = None,
+        external_key: str | None = None,
+    ) -> Session:
+        return self._sessions.start(
+            symbiote_id=symbiote_id, goal=goal, external_key=external_key
+        )
+
+    def get_or_create_session(
+        self,
+        symbiote_id: str,
+        external_key: str,
+        goal: str | None = None,
+    ) -> Session:
+        """Find or create a session by external key (e.g. user_id:url_key)."""
+        return self._sessions.get_or_create_by_external_key(
+            symbiote_id=symbiote_id,
+            external_key=external_key,
+            goal=goal,
+        )
 
     def get_session(self, session_id: str) -> Session | None:
         return self._sessions.resume(session_id)
 
-    def message(self, session_id: str, content: str) -> str:
+    def message(
+        self,
+        session_id: str,
+        content: str,
+        extra_context: dict | None = None,
+    ) -> str:
         """Add user message, run chat capability, add assistant message, return response."""
         # Look up symbiote_id from the session
         row = self._storage.fetch_one(
@@ -128,7 +153,9 @@ class SymbioteKernel:
         self._sessions.add_message(session_id, "user", content)
 
         # Chat via capabilities
-        response = self._capabilities.chat(symbiote_id, session_id, content)
+        response = self._capabilities.chat(
+            symbiote_id, session_id, content, extra_context=extra_context
+        )
 
         # Normalize response to string for message storage
         if isinstance(response, dict):

@@ -22,11 +22,14 @@ CREATE TABLE IF NOT EXISTS sessions (
     symbiote_id  TEXT REFERENCES symbiotes(id),
     goal         TEXT,
     workspace_id TEXT,
+    external_key TEXT,
     status       TEXT DEFAULT 'active',
     started_at   TEXT,
     ended_at     TEXT,
     summary      TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_sessions_external_key ON sessions(external_key);
 
 CREATE TABLE IF NOT EXISTS messages (
     id          TEXT PRIMARY KEY,
