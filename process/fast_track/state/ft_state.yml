@@ -8,7 +8,7 @@ orchestrator: ft_manager
 stakeholder_mode: interactive    # interactive | autonomous
 mdd_mode: hyper                  # normal | hyper
 tdd_interaction_mode: phase_end  # phase_end | per_task
-mvp_status: null                 # null | demonstravel | entregue
+mvp_status: demonstravel         # null | demonstravel | entregue
                                  # demonstravel só após smoke-cycle-XX.md gerado com PASSOU
 mvp_delivered: false
 maintenance_mode: false      # true após ft.handoff.01.specs concluído; /feature é o fluxo após isso
