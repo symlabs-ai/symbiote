@@ -42,3 +42,10 @@ class DuplicateEntityError(SymbioteError):
         self.entity_type = entity_type
         self.entity_id = entity_id
         super().__init__(f"{entity_type} {entity_id!r} already exists")
+
+
+class LLMError(SymbioteError):
+    """Raised when an LLM operation fails."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)

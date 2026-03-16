@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 
 class StoragePort(Protocol):
@@ -17,6 +17,7 @@ class StoragePort(Protocol):
     def close(self) -> None: ...
 
 
+@runtime_checkable
 class LLMPort(Protocol):
     """Structural interface for LLM adapters."""
 
