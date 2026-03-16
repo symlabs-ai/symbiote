@@ -15,3 +15,9 @@ class StoragePort(Protocol):
     def fetch_all(self, sql: str, params: tuple | None = None) -> list[dict]: ...
 
     def close(self) -> None: ...
+
+
+class LLMPort(Protocol):
+    """Structural interface for LLM adapters."""
+
+    def complete(self, messages: list[dict], config: dict | None = None) -> str: ...
