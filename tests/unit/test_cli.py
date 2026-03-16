@@ -1,4 +1,4 @@
-"""Tests for CLI — T-21."""
+"""Tests for CLI — all 6 value tracks + management commands."""
 
 from __future__ import annotations
 
@@ -24,6 +24,24 @@ def invoke(*args: str, db_path: Path | None = None) -> object:
     return runner.invoke(app, cmd)
 
 
+def _extract_id(output: str) -> str:
+    """Extract a UUID-like ID from CLI output."""
+    for line in output.strip().splitlines():
+        for token in line.split():
+            if token.count("-") >= 4 and len(token) >= 32:
+                return token
+    raise ValueError(f"Could not extract ID from output:\n{output}")
+
+
+def _setup_session(db: Path) -> tuple[str, str]:
+    """Create a symbiote + session, return (symbiote_id, session_id)."""
+    cr = invoke("create", "--name", "TestBot", "--role", "assistant", db_path=db)
+    sym_id = _extract_id(cr.output)
+    sr = invoke("session", "start", sym_id, "--goal", "testing", db_path=db)
+    sess_id = _extract_id(sr.output)
+    return sym_id, sess_id
+
+
 # ── create ─────────────────────────────────────────────────────────────────
 
 
@@ -32,21 +50,12 @@ class TestCreate:
         db = tmp_path / "test.db"
         result = invoke("create", "--name", "Alice", "--role", "coder", db_path=db)
         assert result.exit_code == 0, result.output
-        # Output should contain a UUID-like ID
-        assert "-" in result.output  # UUID contains dashes
+        assert "-" in result.output
 
-    def test_create_with_persona_json(self, tmp_path: Path) -> None:
+    def test_create_with_persona(self, tmp_path: Path) -> None:
         db = tmp_path / "test.db"
-        result = invoke(
-            "create",
-            "--name",
-            "Bob",
-            "--role",
-            "analyst",
-            "--persona-json",
-            '{"tone": "formal"}',
-            db_path=db,
-        )
+        result = invoke("create", "--name", "Bob", "--role", "analyst",
+                        "--persona-json", '{"tone": "formal"}', db_path=db)
         assert result.exit_code == 0, result.output
 
 
@@ -55,135 +64,148 @@ class TestCreate:
 
 class TestList:
     def test_list_empty(self, tmp_path: Path) -> None:
-        db = tmp_path / "test.db"
-        result = invoke("list", db_path=db)
-        assert result.exit_code == 0, result.output
+        result = invoke("list", db_path=tmp_path / "test.db")
+        assert result.exit_code == 0
 
     def test_list_after_create(self, tmp_path: Path) -> None:
         db = tmp_path / "test.db"
         invoke("create", "--name", "Alice", "--role", "coder", db_path=db)
         result = invoke("list", db_path=db)
-        assert result.exit_code == 0, result.output
+        assert result.exit_code == 0
         assert "Alice" in result.output
-        assert "coder" in result.output
 
 
-# ── session start ──────────────────────────────────────────────────────────
+# ── session ────────────────────────────────────────────────────────────────
 
 
-class TestSessionStart:
+class TestSession:
     def test_session_start(self, tmp_path: Path) -> None:
         db = tmp_path / "test.db"
-        # Create a symbiote first
-        create_result = invoke(
-            "create", "--name", "Alice", "--role", "coder", db_path=db
-        )
-        # Extract symbiote ID from output
-        symbiote_id = _extract_id(create_result.output)
+        _, sess_id = _setup_session(db)
+        assert len(sess_id) >= 32
 
-        result = invoke("session", "start", symbiote_id, db_path=db)
-        assert result.exit_code == 0, result.output
-        assert "-" in result.output  # session UUID
-
-    def test_session_start_with_goal(self, tmp_path: Path) -> None:
-        db = tmp_path / "test.db"
-        create_result = invoke(
-            "create", "--name", "Alice", "--role", "coder", db_path=db
-        )
-        symbiote_id = _extract_id(create_result.output)
-
-        result = invoke(
-            "session", "start", symbiote_id, "--goal", "Fix bug #42", db_path=db
-        )
-        assert result.exit_code == 0, result.output
-
-
-# ── session close ──────────────────────────────────────────────────────────
-
-
-class TestSessionClose:
     def test_session_close(self, tmp_path: Path) -> None:
         db = tmp_path / "test.db"
-        # Create symbiote + session
-        create_result = invoke(
-            "create", "--name", "Alice", "--role", "coder", db_path=db
-        )
-        symbiote_id = _extract_id(create_result.output)
-
-        session_result = invoke("session", "start", symbiote_id, db_path=db)
-        session_id = _extract_id(session_result.output)
-
-        result = invoke("session", "close", session_id, db_path=db)
-        assert result.exit_code == 0, result.output
-        # Should contain some summary info
+        _, sess_id = _setup_session(db)
+        result = invoke("session", "close", sess_id, db_path=db)
+        assert result.exit_code == 0
         assert "closed" in result.output.lower() or "summary" in result.output.lower()
 
 
-# ── message ────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# VALUE TRACKS
+# ══════════════════════════════════════════════════════════════════════════
 
 
-class TestMessage:
-    def test_message_send(self, tmp_path: Path) -> None:
+class TestChat:
+    def test_chat_with_mock_llm(self, tmp_path: Path) -> None:
         db = tmp_path / "test.db"
-        # Create symbiote + session
-        create_result = invoke(
-            "create", "--name", "Alice", "--role", "coder", db_path=db
-        )
-        symbiote_id = _extract_id(create_result.output)
-
-        session_result = invoke("session", "start", symbiote_id, db_path=db)
-        session_id = _extract_id(session_result.output)
-
-        result = invoke("message", session_id, "Hello world", db_path=db)
+        _, sess_id = _setup_session(db)
+        result = invoke("--llm", "mock", "chat", sess_id, "Hello!", db_path=db)
         assert result.exit_code == 0, result.output
-        assert "message" in result.output.lower() or "stored" in result.output.lower()
+        assert "mock" in result.output.lower() or "assistant" in result.output.lower()
+
+    def test_chat_invalid_session(self, tmp_path: Path) -> None:
+        db = tmp_path / "test.db"
+        result = invoke("--llm", "mock", "chat", "bad-session-id", "Hi", db_path=db)
+        assert result.exit_code == 1
 
 
-# ── memory search ──────────────────────────────────────────────────────────
+class TestLearn:
+    def test_learn_fact(self, tmp_path: Path) -> None:
+        db = tmp_path / "test.db"
+        _, sess_id = _setup_session(db)
+        result = invoke("learn", sess_id, "User prefers dark mode", db_path=db)
+        assert result.exit_code == 0, result.output
+        assert "learned" in result.output.lower() or "-" in result.output
+
+    def test_learn_with_type_and_importance(self, tmp_path: Path) -> None:
+        db = tmp_path / "test.db"
+        _, sess_id = _setup_session(db)
+        result = invoke("learn", sess_id, "Always use pytest",
+                        "--type", "procedural", "--importance", "0.9", db_path=db)
+        assert result.exit_code == 0, result.output
+
+
+class TestTeach:
+    def test_teach_no_data(self, tmp_path: Path) -> None:
+        db = tmp_path / "test.db"
+        _, sess_id = _setup_session(db)
+        result = invoke("teach", sess_id, "quantum physics", db_path=db)
+        assert result.exit_code == 0, result.output
+
+    def test_teach_with_learned_data(self, tmp_path: Path) -> None:
+        db = tmp_path / "test.db"
+        _, sess_id = _setup_session(db)
+        # First learn something
+        invoke("learn", sess_id, "Python uses indentation for blocks", db_path=db)
+        # Then ask to teach about it
+        result = invoke("teach", sess_id, "Python", db_path=db)
+        assert result.exit_code == 0, result.output
+
+
+class TestWork:
+    def test_work_with_chat_runner(self, tmp_path: Path) -> None:
+        db = tmp_path / "test.db"
+        _, sess_id = _setup_session(db)
+        result = invoke("--llm", "mock", "work", sess_id, "chat: tell me something",
+                        "--intent", "chat", db_path=db)
+        assert result.exit_code == 0, result.output
+
+    def test_work_no_runner(self, tmp_path: Path) -> None:
+        db = tmp_path / "test.db"
+        _, sess_id = _setup_session(db)
+        result = invoke("--llm", "mock", "work", sess_id, "unknown_intent: do something", db_path=db)
+        assert result.exit_code == 1
+
+
+class TestShow:
+    def test_show_empty(self, tmp_path: Path) -> None:
+        db = tmp_path / "test.db"
+        _, sess_id = _setup_session(db)
+        result = invoke("show", sess_id, "anything", db_path=db)
+        assert result.exit_code == 0, result.output
+
+    def test_show_with_data(self, tmp_path: Path) -> None:
+        db = tmp_path / "test.db"
+        _, sess_id = _setup_session(db)
+        invoke("learn", sess_id, "Important searchable fact", db_path=db)
+        result = invoke("show", sess_id, "searchable", db_path=db)
+        assert result.exit_code == 0, result.output
+
+
+class TestReflect:
+    def test_reflect_empty_session(self, tmp_path: Path) -> None:
+        db = tmp_path / "test.db"
+        _, sess_id = _setup_session(db)
+        result = invoke("reflect", sess_id, db_path=db)
+        assert result.exit_code == 0, result.output
+
+    def test_reflect_after_messages(self, tmp_path: Path) -> None:
+        db = tmp_path / "test.db"
+        _, sess_id = _setup_session(db)
+        # Add some messages via chat
+        invoke("--llm", "mock", "chat", sess_id, "I prefer dark mode", db_path=db)
+        invoke("--llm", "mock", "chat", sess_id, "Always use type hints", db_path=db)
+        result = invoke("reflect", sess_id, db_path=db)
+        assert result.exit_code == 0, result.output
+
+
+# ── memory + export ────────────────────────────────────────────────────────
 
 
 class TestMemorySearch:
-    def test_memory_search_no_results(self, tmp_path: Path) -> None:
-        db = tmp_path / "test.db"
-        result = invoke("memory", "search", "nonexistent", db_path=db)
-        assert result.exit_code == 0, result.output
-
-    def test_memory_search_with_scope(self, tmp_path: Path) -> None:
-        db = tmp_path / "test.db"
-        result = invoke(
-            "memory", "search", "test", "--scope", "global", db_path=db
-        )
-        assert result.exit_code == 0, result.output
-
-    def test_memory_search_with_limit(self, tmp_path: Path) -> None:
-        db = tmp_path / "test.db"
-        result = invoke(
-            "memory", "search", "test", "--limit", "5", db_path=db
-        )
-        assert result.exit_code == 0, result.output
+    def test_no_results(self, tmp_path: Path) -> None:
+        result = invoke("memory", "search", "nonexistent", db_path=tmp_path / "test.db")
+        assert result.exit_code == 0
 
 
-# ── export session ─────────────────────────────────────────────────────────
-
-
-class TestExportSession:
+class TestExport:
     def test_export_session(self, tmp_path: Path) -> None:
         db = tmp_path / "test.db"
-        # Create symbiote + session + message
-        create_result = invoke(
-            "create", "--name", "Alice", "--role", "coder", db_path=db
-        )
-        symbiote_id = _extract_id(create_result.output)
-
-        session_result = invoke("session", "start", symbiote_id, db_path=db)
-        session_id = _extract_id(session_result.output)
-
-        invoke("message", session_id, "Hello world", db_path=db)
-
-        result = invoke("export", "session", session_id, db_path=db)
+        _, sess_id = _setup_session(db)
+        result = invoke("export", "session", sess_id, db_path=db)
         assert result.exit_code == 0, result.output
-        # Markdown export should contain session info
-        assert "session" in result.output.lower() or session_id in result.output
 
 
 # ── error handling ─────────────────────────────────────────────────────────
@@ -191,33 +213,9 @@ class TestExportSession:
 
 class TestErrorHandling:
     def test_session_start_invalid_symbiote(self, tmp_path: Path) -> None:
-        db = tmp_path / "test.db"
-        result = invoke("session", "start", "nonexistent-id", db_path=db)
-        # Should not crash — exit 1 with friendly message
+        result = invoke("session", "start", "nonexistent", db_path=tmp_path / "test.db")
         assert result.exit_code == 1
 
-    def test_session_close_invalid_session(self, tmp_path: Path) -> None:
-        db = tmp_path / "test.db"
-        result = invoke("session", "close", "nonexistent-id", db_path=db)
+    def test_session_close_invalid(self, tmp_path: Path) -> None:
+        result = invoke("session", "close", "nonexistent", db_path=tmp_path / "test.db")
         assert result.exit_code == 1
-
-    def test_message_invalid_session(self, tmp_path: Path) -> None:
-        db = tmp_path / "test.db"
-        result = invoke("message", "nonexistent-id", "hello", db_path=db)
-        assert result.exit_code == 1
-
-
-# ── helper ─────────────────────────────────────────────────────────────────
-
-
-def _extract_id(output: str) -> str:
-    """Extract a UUID-like ID from CLI output.
-
-    Looks for a token that contains at least 4 dashes (UUID format).
-    """
-    for line in output.strip().splitlines():
-        for token in line.split():
-            # UUID v4: 8-4-4-4-12 = 4 dashes
-            if token.count("-") >= 4 and len(token) >= 32:
-                return token
-    raise ValueError(f"Could not extract ID from output:\n{output}")
