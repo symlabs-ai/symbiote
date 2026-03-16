@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from symbiote.adapters.storage.base import StoragePort
 from symbiote.core.exceptions import EntityNotFoundError, ValidationError
 from symbiote.core.models import Artifact
+from symbiote.core.ports import StoragePort
 
 
 class ArtifactManager:

@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from symbiote.adapters.storage.base import StoragePort
 from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.models import Decision, Message, Session, _utcnow
+from symbiote.core.ports import StoragePort
 
 
 class SessionManager:

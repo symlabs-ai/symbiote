@@ -6,9 +6,9 @@ import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from symbiote.adapters.storage.base import StoragePort
 from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.models import Symbiote
+from symbiote.core.ports import StoragePort
 
 
 def _utcnow() -> datetime:

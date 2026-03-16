@@ -1,17 +1,5 @@
-"""Storage port — abstract interface for persistence adapters."""
+"""Backwards-compatible re-export — canonical location is core.ports."""
 
-from __future__ import annotations
+from symbiote.core.ports import StoragePort
 
-from typing import Any, Protocol
-
-
-class StoragePort(Protocol):
-    """Structural interface every storage adapter must satisfy."""
-
-    def execute(self, sql: str, params: tuple | None = None) -> Any: ...
-
-    def fetch_one(self, sql: str, params: tuple | None = None) -> dict | None: ...
-
-    def fetch_all(self, sql: str, params: tuple | None = None) -> list[dict]: ...
-
-    def close(self) -> None: ...
+__all__ = ["StoragePort"]
