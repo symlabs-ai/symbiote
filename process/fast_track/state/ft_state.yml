@@ -26,7 +26,7 @@ artifact_viewer: typora
 
 current_phase: ft_tdd        # ft_mdd | ft_plan | ft_tdd | ft_delivery | ft_e2e | ft_feedback
 current_cycle: cycle-01      # ex.: cycle-01
-current_sprint: sprint-05
+current_sprint: sprint-06
 sprint_status: completed
 cycle_sprint_scope: [sprint-01, sprint-02, sprint-03, sprint-04, sprint-05, sprint-06, sprint-07, sprint-08]
 backlog_sprints: []
@@ -36,7 +36,7 @@ planned_sprints:
   - {id: sprint-03, goal: "Memória e knowledge", tasks: [T-08, T-09, T-10], status: completed}
   - {id: sprint-04, goal: "Context assembly e environment", tasks: [T-11, T-12, T-13], status: completed}
   - {id: sprint-05, goal: "Runners, process engine, tools", tasks: [T-14, T-15, T-16, T-17], status: completed}
-  - {id: sprint-06, goal: "Capacidades e reflexão", tasks: [T-18, T-19], status: planned}
+  - {id: sprint-06, goal: "Capacidades e reflexão", tasks: [T-18, T-19], status: completed}
   - {id: sprint-07, goal: "CLI, HTTP, export", tasks: [T-20, T-21, T-22], status: planned}
   - {id: sprint-08, goal: "Kernel integrador + LLM adapter", tasks: [T-23, T-24], status: planned}
 sprint_review_gate: ask_fast_track
@@ -46,6 +46,7 @@ sprint_review_log:
   sprint-03: {status: PASS, file: "project/docs/sprint-review-sprint-03.md"}
   sprint-04: {status: PASS, file: "project/docs/sprint-review-sprint-04.md"}
   sprint-05: {status: PASS, file: "project/docs/sprint-review-sprint-05.md"}
+  sprint-06: {status: PASS, file: "project/docs/sprint-review-sprint-06.md"}
 
 last_completed_step: ft.delivery.03.commit
 next_step: ft.tdd.01.selecao
@@ -95,6 +96,8 @@ gate_log:
   T-15: {gate.delivery: PASS}
   T-16: {gate.delivery: PASS}
   T-17: {gate.delivery: PASS}
+  T-18: {gate.delivery: PASS}
+  T-19: {gate.delivery: PASS}
 
 # Métricas simplificadas
 metricas:

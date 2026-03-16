@@ -8,8 +8,7 @@ from pydantic import BaseModel, Field
 
 from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.identity import IdentityManager
-from symbiote.knowledge.service import KnowledgeService
-from symbiote.memory.store import MemoryStore
+from symbiote.core.ports import KnowledgePort, MemoryPort
 from symbiote.memory.working import WorkingMemory
 
 # ── Models ────────────────────────────────────────────────────────────────────
@@ -49,8 +48,8 @@ class ContextAssembler:
     def __init__(
         self,
         identity: IdentityManager,
-        memory: MemoryStore,
-        knowledge: KnowledgeService,
+        memory: MemoryPort,
+        knowledge: KnowledgePort,
         context_budget: int = 4000,
     ) -> None:
         self._identity = identity
