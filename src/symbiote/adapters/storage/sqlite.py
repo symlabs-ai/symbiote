@@ -137,11 +137,13 @@ CREATE TABLE IF NOT EXISTS persona_audit (
 class SQLiteAdapter:
     """Thin wrapper around stdlib ``sqlite3`` with WAL + foreign keys."""
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, *, check_same_thread: bool = True) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        self._conn = sqlite3.connect(str(self._db_path))
+        self._conn = sqlite3.connect(
+            str(self._db_path), check_same_thread=check_same_thread
+        )
         self._conn.row_factory = sqlite3.Row
 
         # Enable WAL mode and foreign key enforcement.
