@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
@@ -10,6 +11,9 @@ from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.identity import IdentityManager
 from symbiote.core.ports import KnowledgePort, MemoryPort
 from symbiote.memory.working import WorkingMemory
+
+if TYPE_CHECKING:
+    from symbiote.environment.tools import ToolGateway
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
@@ -21,6 +25,7 @@ class AssembledContext(BaseModel):
     working_memory_snapshot: dict | None = None
     relevant_memories: list[dict] = Field(default_factory=list)
     relevant_knowledge: list[dict] = Field(default_factory=list)
+    available_tools: list[dict] = Field(default_factory=list)
     user_input: str
     total_tokens_estimate: int = 0
 
@@ -51,11 +56,13 @@ class ContextAssembler:
         memory: MemoryPort,
         knowledge: KnowledgePort,
         context_budget: int = 4000,
+        tool_gateway: ToolGateway | None = None,
     ) -> None:
         self._identity = identity
         self._memory = memory
         self._knowledge = knowledge
         self._budget = context_budget
+        self._tool_gateway = tool_gateway
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -107,12 +114,25 @@ class ContextAssembler:
             for k in raw_knowledge
         ]
 
-        # 5. Trim to fit budget
+        # 5. Tool descriptors
+        tool_dicts: list[dict] = []
+        if self._tool_gateway is not None:
+            tool_dicts = [
+                {
+                    "tool_id": d.tool_id,
+                    "name": d.name,
+                    "description": d.description,
+                    "parameters": d.parameters,
+                }
+                for d in self._tool_gateway.get_descriptors()
+            ]
+
+        # 6. Trim to fit budget
         persona, wm_snapshot, memories_dicts, knowledge_dicts = self._trim_to_budget(
             persona, wm_snapshot, memories_dicts, knowledge_dicts, user_input
         )
 
-        # 6. Compute total token estimate
+        # 7. Compute total token estimate
         total = self._total_tokens(
             persona, wm_snapshot, memories_dicts, knowledge_dicts, user_input
         )
@@ -124,6 +144,7 @@ class ContextAssembler:
             working_memory_snapshot=wm_snapshot,
             relevant_memories=memories_dicts,
             relevant_knowledge=knowledge_dicts,
+            available_tools=tool_dicts,
             user_input=user_input,
             total_tokens_estimate=total,
         )

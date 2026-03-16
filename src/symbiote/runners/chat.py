@@ -3,14 +3,30 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 from symbiote.core.context import AssembledContext
 from symbiote.core.models import Message
 from symbiote.core.ports import LLMPort
+from symbiote.environment.descriptors import ToolCallResult
+from symbiote.environment.parser import parse_tool_calls
 from symbiote.memory.working import WorkingMemory
 from symbiote.runners.base import RunResult
 
+if TYPE_CHECKING:
+    from symbiote.environment.tools import ToolGateway
+
 _HANDLED_INTENTS = frozenset({"chat", "ask", "question", "talk"})
+
+_TOOL_INSTRUCTIONS = """\
+To use a tool, include a fenced code block with the language tag `tool_call` containing a JSON object:
+
+```tool_call
+{"tool": "<tool_id>", "params": {<parameters>}}
+```
+
+You may include multiple tool_call blocks in a single response. \
+Tool results will be provided back to you."""
 
 
 class ChatRunner:
@@ -22,9 +38,11 @@ class ChatRunner:
         self,
         llm: LLMPort,
         working_memory: WorkingMemory | None = None,
+        tool_gateway: ToolGateway | None = None,
     ) -> None:
         self._llm = llm
         self._working_memory = working_memory
+        self._tool_gateway = tool_gateway
 
     def can_handle(self, intent: str) -> bool:
         return intent in _HANDLED_INTENTS
@@ -36,16 +54,34 @@ class ChatRunner:
         except Exception as exc:
             return RunResult(success=False, error=str(exc), runner_type=self.runner_type)
 
+        # Parse and execute tool calls
+        clean_text, tool_calls = parse_tool_calls(response)
+        tool_results: list[ToolCallResult] = []
+
+        if tool_calls and self._tool_gateway is not None:
+            tool_results = self._tool_gateway.execute_tool_calls(
+                symbiote_id=context.symbiote_id,
+                session_id=context.session_id,
+                calls=tool_calls,
+            )
+
         if self._working_memory is not None:
             self._working_memory.update_message(
                 Message(
                     session_id=context.session_id,
                     role="assistant",
-                    content=response,
+                    content=clean_text,
                 )
             )
 
-        return RunResult(success=True, output=response, runner_type=self.runner_type)
+        output = clean_text
+        if tool_results:
+            output = {
+                "text": clean_text,
+                "tool_results": [r.model_dump() for r in tool_results],
+            }
+
+        return RunResult(success=True, output=output, runner_type=self.runner_type)
 
     # ── internal ─────────────────────────────────────────────────────────
 
@@ -72,6 +108,20 @@ class ChatRunner:
         if context.persona:
             parts.append("## Persona")
             parts.append(json.dumps(context.persona, indent=2, default=str))
+
+        # Available tools
+        if context.available_tools:
+            parts.append("## Available Tools")
+            parts.append(_TOOL_INSTRUCTIONS)
+            for tool in context.available_tools:
+                tool_id = tool.get("tool_id", "")
+                name = tool.get("name", "")
+                desc = tool.get("description", "")
+                params = tool.get("parameters", {})
+                parts.append(f"### {tool_id} — {name}")
+                parts.append(desc)
+                if params:
+                    parts.append(f"Parameters: ```json\n{json.dumps(params, indent=2)}\n```")
 
         # Relevant memories
         if context.relevant_memories:

@@ -30,10 +30,12 @@ app = typer.Typer(name="symbiote", help="Symbiote — Kernel for persistent cogn
 session_app = typer.Typer(help="Session management commands")
 memory_app = typer.Typer(help="Memory management commands")
 export_app = typer.Typer(help="Export commands")
+tools_app = typer.Typer(help="Tool management commands")
 
 app.add_typer(session_app, name="session")
 app.add_typer(memory_app, name="memory")
 app.add_typer(export_app, name="export")
+app.add_typer(tools_app, name="tools")
 
 # ── shared state ───────────────────────────────────────────────────────────
 
@@ -192,7 +194,13 @@ def chat(
     kernel = _make_kernel(with_llm=True)
     try:
         response = kernel.message(session_id=session_id, content=message)
-        console.print(Panel(response, title="Assistant", border_style="green"))
+        if isinstance(response, dict):
+            console.print(Panel(response.get("text", ""), title="Assistant", border_style="green"))
+            for tr in response.get("tool_results", []):
+                status = "[green]OK[/green]" if tr.get("success") else "[red]FAIL[/red]"
+                console.print(f"  Tool {tr['tool_id']}: {status} → {tr.get('output') or tr.get('error')}")
+        else:
+            console.print(Panel(response, title="Assistant", border_style="green"))
     except SymbioteError as exc:
         err_console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=1) from None
@@ -383,6 +391,152 @@ def export_session(
     except SymbioteError as exc:
         err_console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=1) from None
+    finally:
+        kernel.shutdown()
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TOOLS — tool management commands
+# ══════════════════════════════════════════════════════════════════════════
+
+
+@tools_app.command("add")
+def tools_add(
+    symbiote_id: str = typer.Argument(help="Symbiote ID"),
+    tool_id: str = typer.Option(..., "--id", help="Tool identifier (e.g. yn_publish)"),
+    name: str = typer.Option(..., "--name", help="Human-readable tool name"),
+    description: str = typer.Option(..., "--desc", help="What the tool does"),
+    method: str = typer.Option("GET", "--method", help="HTTP method"),
+    url: str = typer.Option(..., "--url", help="URL template (e.g. http://host/api/{id})"),
+    params_json: str | None = typer.Option(None, "--params-json", help="JSON Schema for parameters"),
+) -> None:
+    """Register an HTTP tool for a symbiote."""
+    from symbiote.environment.descriptors import HttpToolConfig, ToolDescriptor
+
+    kernel = _make_kernel()
+    try:
+        params = json.loads(params_json) if params_json else {}
+        descriptor = ToolDescriptor(
+            tool_id=tool_id,
+            name=name,
+            description=description,
+            parameters=params,
+            handler_type="http",
+        )
+        http_config = HttpToolConfig(method=method, url_template=url)
+        kernel.tool_gateway.register_http_tool(descriptor, http_config)
+
+        # Also add to environment config so PolicyGate authorizes it
+        kernel.environment.configure(
+            symbiote_id=symbiote_id,
+            tools=kernel.environment.list_tools(symbiote_id) + [tool_id],
+        )
+        console.print(f"Registered tool [cyan]{tool_id}[/cyan] for symbiote {symbiote_id[:8]}")
+    except Exception as exc:
+        err_console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(code=1) from None
+    finally:
+        kernel.shutdown()
+
+
+@tools_app.command("list")
+def tools_list(
+    symbiote_id: str = typer.Argument(help="Symbiote ID"),
+) -> None:
+    """List tools available to a symbiote."""
+    kernel = _make_kernel()
+    try:
+        authorized = kernel.environment.list_tools(symbiote_id)
+        all_descriptors = kernel.tool_gateway.get_descriptors()
+
+        table = Table(title=f"Tools for {symbiote_id[:8]}")
+        table.add_column("ID", style="cyan")
+        table.add_column("Name")
+        table.add_column("Type")
+        table.add_column("Authorized", justify="center")
+        table.add_column("Description", max_width=50)
+
+        for d in all_descriptors:
+            auth = "[green]yes[/green]" if d.tool_id in authorized else "[red]no[/red]"
+            table.add_row(d.tool_id, d.name, d.handler_type, auth, d.description[:50])
+
+        console.print(table)
+    finally:
+        kernel.shutdown()
+
+
+@tools_app.command("remove")
+def tools_remove(
+    symbiote_id: str = typer.Argument(help="Symbiote ID"),
+    tool_id: str = typer.Argument(help="Tool ID to remove"),
+) -> None:
+    """Remove a tool from a symbiote's authorized list."""
+    kernel = _make_kernel()
+    try:
+        current = kernel.environment.list_tools(symbiote_id)
+        updated = [t for t in current if t != tool_id]
+        kernel.environment.configure(symbiote_id=symbiote_id, tools=updated)
+        kernel.tool_gateway.unregister_tool(tool_id)
+        console.print(f"Removed tool [cyan]{tool_id}[/cyan]")
+    finally:
+        kernel.shutdown()
+
+
+@tools_app.command("exec")
+def tools_exec(
+    symbiote_id: str = typer.Argument(help="Symbiote ID"),
+    tool_id: str = typer.Argument(help="Tool ID to execute"),
+    params_json: str = typer.Option("{}", "--params", help="Tool params as JSON"),
+) -> None:
+    """Manually execute a tool (for testing)."""
+    kernel = _make_kernel()
+    try:
+        params = json.loads(params_json)
+        result = kernel.tool_gateway.execute(
+            symbiote_id=symbiote_id,
+            session_id=None,
+            tool_id=tool_id,
+            params=params,
+        )
+        if result.success:
+            console.print(Panel(str(result.output), title=f"Tool: {tool_id}", border_style="green"))
+        else:
+            err_console.print(f"[red]Failed:[/red] {result.error}")
+            raise typer.Exit(code=1) from None
+    except json.JSONDecodeError as exc:
+        err_console.print(f"[red]Invalid JSON:[/red] {exc}")
+        raise typer.Exit(code=1) from None
+    finally:
+        kernel.shutdown()
+
+
+@tools_app.command("audit")
+def tools_audit(
+    symbiote_id: str = typer.Argument(help="Symbiote ID"),
+    limit: int = typer.Option(20, "--limit", help="Max entries to show"),
+) -> None:
+    """Show tool execution audit log."""
+    kernel = _make_kernel()
+    try:
+        log = kernel._policy_gate.get_audit_log(symbiote_id, limit=limit)
+        if not log:
+            console.print("No audit entries found.")
+            return
+        table = Table(title=f"Audit Log — {symbiote_id[:8]}")
+        table.add_column("Time", style="dim")
+        table.add_column("Tool", style="cyan")
+        table.add_column("Action")
+        table.add_column("Result")
+        table.add_column("Session", max_width=12)
+        for entry in log:
+            table.add_row(
+                entry.get("created_at", "")[:19],
+                entry["tool_id"],
+                entry["action"],
+                entry["result"],
+                (entry.get("session_id") or "")[:12],
+            )
+        console.print(table)
     finally:
         kernel.shutdown()
 

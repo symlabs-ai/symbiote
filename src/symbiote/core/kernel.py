@@ -44,25 +44,28 @@ class SymbioteKernel:
         self._workspace = WorkspaceManager(self._storage)
         self._environment = EnvironmentManager(self._storage)
 
-        # Context assembler
+        # Policies and tools
+        self._policy_gate = PolicyGate(self._environment, self._storage)
+        self._tool_gateway = ToolGateway(self._policy_gate)
+
+        # Context assembler (with tool gateway)
         self._context_assembler = ContextAssembler(
             identity=self._identity,
             memory=self._memory,
             knowledge=self._knowledge,
             context_budget=config.context_budget,
+            tool_gateway=self._tool_gateway,
         )
 
         # Runners
         self._runner_registry = RunnerRegistry()
         if llm is not None:
-            self._runner_registry.register(ChatRunner(llm))
+            self._runner_registry.register(
+                ChatRunner(llm, tool_gateway=self._tool_gateway)
+            )
 
         process_engine = ProcessEngine(self._storage)
         self._runner_registry.register(ProcessRunner(process_engine))
-
-        # Policies and tools
-        self._policy_gate = PolicyGate(self._environment, self._storage)
-        self._tool_gateway = ToolGateway(self._policy_gate)
 
         # Reflection
         self._reflection = ReflectionEngine(self._memory, self._storage)
@@ -86,6 +89,14 @@ class SymbioteKernel:
     @property
     def capabilities(self) -> CapabilitySurface:
         return self._capabilities
+
+    @property
+    def tool_gateway(self) -> ToolGateway:
+        return self._tool_gateway
+
+    @property
+    def environment(self) -> EnvironmentManager:
+        return self._environment
 
     # ── Public API — thin delegation ──────────────────────────────────────
 
@@ -119,8 +130,14 @@ class SymbioteKernel:
         # Chat via capabilities
         response = self._capabilities.chat(symbiote_id, session_id, content)
 
+        # Normalize response to string for message storage
+        if isinstance(response, dict):
+            text = response.get("text", str(response))
+        else:
+            text = response
+
         # Add assistant message
-        self._sessions.add_message(session_id, "assistant", response)
+        self._sessions.add_message(session_id, "assistant", text)
 
         return response
 
