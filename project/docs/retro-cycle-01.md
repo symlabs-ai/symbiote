@@ -30,7 +30,29 @@
 | Cobertura | ~96% |
 | Sprints | 8 |
 | Expert Gates | 8 PASS (3 com BLOCK inicial corrigido) |
-| Commits | 10 |
+| Commits | 12 |
+
+## Consumo de Tokens
+
+| Tipo | Tokens | Preço/MTok | Custo USD |
+|------|--------|-----------|-----------|
+| Input | 922 | $5.00 | $0.00 |
+| Output | 155.934 | $25.00 | $3.90 |
+| Cache write | 1.006.436 | $6.25 | $6.29 |
+| Cache read | 150.660.713 | $0.50 | $75.33 |
+| | | **Total USD** | **$85.52** |
+| | | **Total BRL** (×5.3) | **R$ 453,26** |
+
+> Modelo: Claude Opus 4.6 (1M context). Sessões: 3. API calls: 680.
+
+### Custo por entrega
+
+| Métrica | Valor |
+|---------|-------|
+| Por User Story (14) | R$ 32,38 |
+| Por task (24) | R$ 18,89 |
+| Por teste (393) | R$ 1,15 |
+| Por sprint (8) | R$ 56,66 |
 
 ## Foco do próximo ciclo
 
