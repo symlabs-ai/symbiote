@@ -1,0 +1,91 @@
+# Fast Track — Estado do Processo
+# Estado do processo Fast Track
+
+process_variant: fast_track
+version: "0.5.0"
+
+orchestrator: ft_manager
+stakeholder_mode: interactive    # interactive | autonomous
+mdd_mode: hyper                  # normal | hyper
+tdd_interaction_mode: phase_end  # phase_end | per_task
+mvp_status: null                 # null | demonstravel | entregue
+                                 # demonstravel só após smoke-cycle-XX.md gerado com PASSOU
+mvp_delivered: false
+maintenance_mode: false      # true após ft.handoff.01.specs concluído; /feature é o fluxo após isso
+
+# Quality & Strategy
+min_coverage: 85             # cobertura mínima de testes (%) nos arquivos alterados
+desired_coverage: 90         # cobertura desejável (%)
+commit_strategy: per_task    # per_task | squash_cycle (> 5 tasks, ft_manager decide)
+interface_type: mixed        # cli_only | api | ui | mixed — definido no ft.plan.02.tech_stack
+
+# Viewer para apresentar artefatos markdown ao stakeholder
+# auto: detecta automaticamente (typora > code > xdg-open > open)
+# ou path explícito: "typora", "code", "/usr/bin/gedit", etc.
+artifact_viewer: typora
+
+current_phase: ft_tdd        # ft_mdd | ft_plan | ft_tdd | ft_delivery | ft_e2e | ft_feedback
+current_cycle: cycle-01      # ex.: cycle-01
+current_sprint: sprint-02
+sprint_status: completed
+cycle_sprint_scope: [sprint-01, sprint-02, sprint-03, sprint-04, sprint-05, sprint-06, sprint-07, sprint-08]
+backlog_sprints: []
+planned_sprints:
+  - {id: sprint-01, goal: "Fundação: config, SQLite, models, identity", tasks: [T-01, T-02, T-03, T-04], status: completed}
+  - {id: sprint-02, goal: "Sessões e workspace", tasks: [T-05, T-06, T-07], status: completed}
+  - {id: sprint-03, goal: "Memória e knowledge", tasks: [T-08, T-09, T-10], status: planned}
+  - {id: sprint-04, goal: "Context assembly e environment", tasks: [T-11, T-12, T-13], status: planned}
+  - {id: sprint-05, goal: "Runners, process engine, tools", tasks: [T-14, T-15, T-16, T-17], status: planned}
+  - {id: sprint-06, goal: "Capacidades e reflexão", tasks: [T-18, T-19], status: planned}
+  - {id: sprint-07, goal: "CLI, HTTP, export", tasks: [T-20, T-21, T-22], status: planned}
+  - {id: sprint-08, goal: "Kernel integrador + LLM adapter", tasks: [T-23, T-24], status: planned}
+sprint_review_gate: ask_fast_track
+sprint_review_log:
+  sprint-01: {status: PASS, file: "project/docs/sprint-review-sprint-01.md"}
+  sprint-02: {status: PASS, file: "project/docs/sprint-review-sprint-02.md"}
+
+last_completed_step: ft.delivery.03.commit
+next_step: ft.tdd.01.selecao
+
+completed_steps:
+  - ft.mdd.01.hipotese
+  - ft.mdd.02.prd
+  - ft.mdd.03.validacao
+  - ft.plan.01.task_list
+  - ft.plan.02.tech_stack
+  - ft.plan.03.diagrams
+  - ft.tdd.01.selecao
+  - ft.tdd.02.red
+  - ft.tdd.03.green
+  - ft.delivery.01.self_review
+  - ft.delivery.02.refactor
+  - ft.delivery.03.commit
+
+blocked: false
+blocked_reason: null
+
+# Paralelização (opt-in) — só populados quando parallel_mode: true
+parallel_mode: false              # opt-in: habilita execução paralela de tasks em VTs independentes
+parallel_max_agents: 3            # máximo de forge_coder simultâneos (slots de worktree)
+parallel_tasks: []                # [{task_id, worktree, branch, status, agent_id}]
+parallel_merge_queue: []          # task_ids prontos para merge (ordem de conclusão)
+parallel_merge_status: idle       # idle | merging | conflict | done
+
+# Gate enforcement — registro de gates executados por task
+# Populado pelo ft_manager após cada chamada ao ft_gatekeeper
+# Formato: {task_id: {gate_id: result, ...}, ...}
+gate_log:
+  T-01: {gate.delivery: PASS}
+  T-02: {gate.delivery: PASS}
+  T-03: {gate.delivery: PASS}
+  T-04: {gate.delivery: PASS}
+  T-05: {gate.delivery: PASS}
+  T-06: {gate.delivery: PASS}
+  T-07: {gate.delivery: PASS}
+
+# Métricas simplificadas
+metricas:
+  tokens_consumidos: 0
+  horas_consumidas: 0
+  data_inicio: "2026-03-16"
+  ciclos_completos: 0
