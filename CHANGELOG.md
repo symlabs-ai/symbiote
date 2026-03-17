@@ -3,7 +3,7 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
-## [0.2.1] — 2026-03-17
+## [0.1.7] — 2026-03-17
 
 ### Added — Security & Quality (nanobot report)
 
@@ -18,13 +18,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - [B-14] HTTP tool handler uses custom redirect handler that re-validates each redirect URL
 - [B-15] HTTP responses (string, dict, list) all wrapped with untrusted content banner
 
+## [0.1.6] — 2026-03-17
+
 ### Fixed
 
 - `ForgeLLMAdapter` — use `response.content` instead of `response.message` (forge-llm 0.7.8 API change)
 - `ForgeLLMAdapter` — auto-resolve `{PROVIDER}_API_KEY` and `{PROVIDER}_BASE_URL` from env vars when not passed explicitly
 - E2E tests default provider changed from `anthropic` to `symgateway`
 
-## [0.2.0] — 2026-03-17
+## [0.1.5] — 2026-03-17
 
 ### Added — Nanobot-inspired Architecture
 
@@ -52,6 +54,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - `ToolGateway.execute_tool_calls()` appends retry hint to error messages (B-8)
 - `SymbioteKernel` now creates `MessageRepository`, `SubagentManager`, registers spawn tool (B-3, B-11)
 - HTTP API: added `GET /health` endpoint (B-1)
+
+## [0.1.4] — 2026-03-16
+
+### Added
+
+- symbiote-ui reusable chat Web Component
+- Deployment architectures section to QUICKSTART (embedded vs HTTP)
 
 ## [MVP] — 2026-03-16
 

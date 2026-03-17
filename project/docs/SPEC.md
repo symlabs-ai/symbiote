@@ -1,6 +1,6 @@
 # SPEC.md — Symbiote
 
-> Versão: 0.2.0
+> Versão: 0.1.7
 > MVP entregue em: 2026-03-16
 > Última atualização: 2026-03-17
 > Status: maintenance
