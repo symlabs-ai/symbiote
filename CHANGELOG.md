@@ -17,7 +17,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - [B-18] WorkingMemory trim — aligns to user turn boundaries, prevents orphaned assistant messages (`memory/working.py`)
 - [B-14] HTTP tool handler uses custom redirect handler that re-validates each redirect URL
 - [B-15] HTTP responses (string, dict, list) all wrapped with untrusted content banner
-- ForgeLLMAdapter auto-resolves `{PROVIDER}_API_KEY` and `{PROVIDER}_BASE_URL` from env vars
+
+### Fixed
+
+- `ForgeLLMAdapter` — use `response.content` instead of `response.message` (forge-llm 0.7.8 API change)
+- `ForgeLLMAdapter` — auto-resolve `{PROVIDER}_API_KEY` and `{PROVIDER}_BASE_URL` from env vars when not passed explicitly
+- E2E tests default provider changed from `anthropic` to `symgateway`
 
 ## [0.2.0] — 2026-03-17
 
