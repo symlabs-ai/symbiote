@@ -7,6 +7,11 @@
 | # | Descrição | Origem | Prioridade | Status |
 |---|-----------|--------|------------|--------|
 | 7 | MCP Integration via forge-llm (McpToolProvider → ToolGateway → PolicyGate) | dev | baixa | pending |
+| 19 | API Key Auth Middleware — Bearer token auth com gestão de keys por tenant | dev | critica | pending |
+| 20 | Chat Endpoint — POST /sessions/{id}/chat que executa kernel.message() com LLM + tools | dev | critica | pending |
+| 21 | Multi-tenant Isolation — dados isolados por API key/tenant no mesmo DB | dev | alta | pending |
+| 22 | Python SDK — symbiote-sdk package com SymbioteClient thin HTTP client | dev | alta | pending |
+| 23 | Deploy Hosted — porta, domínio, nginx, CI para Symbiote como serviço | dev | alta | pending |
 
 ## Implementadas
 
