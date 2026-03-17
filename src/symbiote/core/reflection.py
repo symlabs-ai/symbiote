@@ -7,7 +7,7 @@ import re
 from pydantic import BaseModel, Field
 
 from symbiote.core.models import MemoryEntry
-from symbiote.core.ports import MemoryPort, StoragePort
+from symbiote.core.ports import MemoryPort, MessagePort
 
 
 class ReflectionResult(BaseModel):
@@ -64,9 +64,9 @@ _NOISE_RE = re.compile(
 class ReflectionEngine:
     """Extracts durable knowledge from session messages and persists it."""
 
-    def __init__(self, memory_store: MemoryPort, storage: StoragePort) -> None:
+    def __init__(self, memory_store: MemoryPort, messages: MessagePort) -> None:
         self._memory_store = memory_store
-        self._storage = storage
+        self._messages = messages
 
     # ── public API ─────────────────────────────────────────────────────
 
@@ -183,11 +183,5 @@ class ReflectionEngine:
     # ── private helpers ────────────────────────────────────────────────
 
     def _fetch_messages(self, session_id: str, limit: int) -> list[dict]:
-        """Fetch last N messages for a session from storage."""
-        rows = self._storage.fetch_all(
-            "SELECT role, content FROM messages "
-            "WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
-            (session_id, limit),
-        )
-        # Reverse to chronological order
-        return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+        """Fetch last N messages for a session via MessagePort."""
+        return self._messages.get_messages(session_id, limit)

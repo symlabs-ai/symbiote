@@ -219,3 +219,55 @@ class TestErrorHandling:
     def test_session_close_invalid(self, tmp_path: Path) -> None:
         result = invoke("session", "close", "nonexistent", db_path=tmp_path / "test.db")
         assert result.exit_code == 1
+
+
+# ── Interactive Chat (B-2) ────────────────────────────────────────────────
+
+
+class TestInteractiveChat:
+    def test_interactive_nonexistent_symbiote(self, tmp_path: Path) -> None:
+        db = tmp_path / "test.db"
+        # Create DB by invoking any command first
+        invoke("list", db_path=db)
+        result = invoke("--llm", "mock", "interactive", "nonexistent", db_path=db)
+        assert result.exit_code == 1
+        assert "not found" in result.output.lower()
+
+    def test_interactive_with_quit(self, tmp_path: Path) -> None:
+        db = tmp_path / "test.db"
+        cr = invoke("create", "--name", "ChatBot", "--role", "assistant", db_path=db)
+        sym_id = _extract_id(cr.output)
+
+        # Simulate /quit as input
+        result = runner.invoke(
+            app,
+            ["--db-path", str(db), "--llm", "mock", "interactive", sym_id],
+            input="/quit\n",
+        )
+        assert result.exit_code == 0
+        assert "interactive" in result.output.lower() or "session" in result.output.lower()
+
+    def test_interactive_with_message_then_quit(self, tmp_path: Path) -> None:
+        db = tmp_path / "test.db"
+        cr = invoke("create", "--name", "TestBot", "--role", "assistant", db_path=db)
+        sym_id = _extract_id(cr.output)
+
+        result = runner.invoke(
+            app,
+            ["--db-path", str(db), "--llm", "mock", "interactive", sym_id],
+            input="Hello!\n/quit\n",
+        )
+        assert result.exit_code == 0
+        # Should contain the mock LLM response
+        assert "mock" in result.output.lower() or "session" in result.output.lower()
+
+    def test_interactive_by_name(self, tmp_path: Path) -> None:
+        db = tmp_path / "test.db"
+        invoke("create", "--name", "NameBot", "--role", "assistant", db_path=db)
+
+        result = runner.invoke(
+            app,
+            ["--db-path", str(db), "--llm", "mock", "interactive", "NameBot"],
+            input="/quit\n",
+        )
+        assert result.exit_code == 0

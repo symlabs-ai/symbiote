@@ -146,12 +146,18 @@ class ToolGateway:
                 params=call.params,
                 workspace_id=workspace_id,
             )
+            error_with_hint = result.error
+            if not result.success and result.error:
+                error_with_hint = (
+                    f"{result.error}\n"
+                    "[Hint: Analyze the error above and try a different approach.]"
+                )
             results.append(
                 ToolCallResult(
                     tool_id=call.tool_id,
                     success=result.success,
                     output=result.output,
-                    error=result.error,
+                    error=error_with_hint,
                 )
             )
         return results

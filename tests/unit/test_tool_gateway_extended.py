@@ -185,6 +185,66 @@ class TestExecuteToolCalls:
         assert results[1].success is True
         assert results[1].output == 20
 
+    def test_error_hint_injected_on_failure(
+        self, gw: ToolGateway, env_manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        """B-8: Tool error hints — failed tool calls get a retry hint."""
+        def _raise(p):
+            raise ValueError("bad input")
+
+        gw.register_tool("boom", _raise)
+        env_manager.configure(symbiote_id=symbiote_id, tools=["boom"])
+
+        calls = [ToolCall(tool_id="boom", params={})]
+        results = gw.execute_tool_calls(
+            symbiote_id=symbiote_id, session_id="sess-1", calls=calls
+        )
+        assert len(results) == 1
+        assert results[0].success is False
+        assert "bad input" in results[0].error
+        assert "[Hint: Analyze the error" in results[0].error
+
+    def test_success_has_no_hint(
+        self, gw: ToolGateway, env_manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        """B-8: Successful tool calls must NOT have any hint."""
+        gw.register_tool("ok_tool", lambda p: "fine")
+        env_manager.configure(symbiote_id=symbiote_id, tools=["ok_tool"])
+
+        calls = [ToolCall(tool_id="ok_tool", params={})]
+        results = gw.execute_tool_calls(
+            symbiote_id=symbiote_id, session_id="sess-1", calls=calls
+        )
+        assert results[0].success is True
+        assert results[0].error is None
+
+    def test_unregistered_tool_gets_hint(
+        self, gw: ToolGateway, env_manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        """B-8: Unregistered tool errors also get hints."""
+        env_manager.configure(symbiote_id=symbiote_id, tools=["nope"])
+        calls = [ToolCall(tool_id="nope", params={})]
+        results = gw.execute_tool_calls(
+            symbiote_id=symbiote_id, session_id=None, calls=calls
+        )
+        assert results[0].success is False
+        assert "[Hint:" in results[0].error
+
+    def test_policy_blocked_gets_hint(
+        self, gw: ToolGateway, env_manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        """B-8: Policy-blocked tool calls also get hints."""
+        gw.register_tool("secret", lambda p: "classified")
+        env_manager.configure(symbiote_id=symbiote_id, tools=["other"])  # NOT "secret"
+
+        calls = [ToolCall(tool_id="secret", params={})]
+        results = gw.execute_tool_calls(
+            symbiote_id=symbiote_id, session_id="sess-1", calls=calls
+        )
+        assert results[0].success is False
+        assert "blocked" in results[0].error.lower()
+        assert "[Hint:" in results[0].error
+
     def test_unregistered_tool_in_list(
         self, gw: ToolGateway, env_manager: EnvironmentManager, symbiote_id: str
     ) -> None:

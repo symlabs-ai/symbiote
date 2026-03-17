@@ -70,6 +70,15 @@ def extract_id(output: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+class TestHTTPHealth:
+    """B-1: Health check endpoint for Docker container."""
+
+    def test_health_returns_ok(self, http_client: TestClient) -> None:
+        resp = http_client.get("/health")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+
+
 class TestHTTPCreateSymbiote:
     """US-01 AC-01: create symbiote via API."""
 

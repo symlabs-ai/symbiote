@@ -232,6 +232,73 @@ def chat(
         kernel.shutdown()
 
 
+# ── interactive chat (B-2) ────────────────────────────────────────────────
+
+
+@app.command("interactive")
+def interactive_chat(
+    symbiote_id: str = typer.Argument(help="Symbiote ID (or name)"),
+    goal: str | None = typer.Option(None, "--goal", help="Session goal"),
+) -> None:
+    """Interactive chat mode — continuous input/output loop with a symbiote."""
+    kernel = _make_kernel(with_llm=True)
+    try:
+        # Resolve by name if not a UUID
+        sym = kernel.get_symbiote(symbiote_id) or kernel.find_symbiote_by_name(symbiote_id)
+        if sym is None:
+            err_console.print(f"[red]Error:[/red] Symbiote '{symbiote_id}' not found")
+            raise typer.Exit(code=1)
+
+        session = kernel.start_session(symbiote_id=sym.id, goal=goal)
+        console.print(Panel(
+            f"Symbiote: [cyan]{sym.name}[/cyan] ({sym.role})\n"
+            f"Session: [dim]{session.id[:8]}[/dim]\n"
+            f"Type [bold]/quit[/bold] to exit, [bold]/reflect[/bold] to reflect.",
+            title="Interactive Chat",
+            border_style="blue",
+        ))
+
+        while True:
+            try:
+                user_input = console.input("[bold green]> [/bold green]")
+            except (EOFError, KeyboardInterrupt):
+                console.print("\n[dim]Closing session...[/dim]")
+                break
+
+            stripped = user_input.strip()
+            if not stripped:
+                continue
+            if stripped in ("/quit", "/exit", "/q"):
+                break
+            if stripped == "/reflect":
+                result = kernel.capabilities.reflect(sym.id, session.id)
+                console.print(Panel(
+                    f"Messages: {result.get('message_count', 0)}\n"
+                    f"Summary: {(result.get('summary') or 'No summary')[:200]}",
+                    title="Reflection",
+                ))
+                continue
+
+            response = kernel.message(session_id=session.id, content=stripped)
+            if isinstance(response, dict):
+                text = response.get("text", "")
+                if text:
+                    console.print(Markdown(text))
+                for tr in response.get("tool_results", []):
+                    status = "[green]OK[/green]" if tr.get("success") else "[red]FAIL[/red]"
+                    console.print(f"  Tool {tr['tool_id']}: {status}")
+            else:
+                console.print(Markdown(str(response)))
+
+        kernel.close_session(session.id)
+        console.print("[dim]Session closed.[/dim]")
+    except SymbioteError as exc:
+        err_console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(code=1) from None
+    finally:
+        kernel.shutdown()
+
+
 # ── learn (Value Track: learn) ────────────────────────────────────────────
 
 

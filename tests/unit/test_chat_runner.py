@@ -146,7 +146,8 @@ class TestRun:
         # Last message should be user input
         user_msg = messages[-1]
         assert user_msg["role"] == "user"
-        assert user_msg["content"] == "What is Python?"
+        assert "What is Python?" in user_msg["content"]
+        assert "[Runtime Context" in user_msg["content"]
 
     def test_includes_conversation_history(self) -> None:
         llm = FakeLLM()
@@ -168,7 +169,7 @@ class TestRun:
         assert messages[2]["role"] == "assistant"
         assert messages[2]["content"] == "Hello!"
         assert messages[-1]["role"] == "user"
-        assert messages[-1]["content"] == "Follow up question"
+        assert "Follow up question" in messages[-1]["content"]
 
     def test_system_message_includes_memories(self) -> None:
         llm = FakeLLM()

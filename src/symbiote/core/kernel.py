@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from symbiote.adapters.export.markdown import ExportService
+from symbiote.adapters.storage.message_repository import MessageRepository
 from symbiote.adapters.storage.sqlite import SQLiteAdapter
 from symbiote.config.models import KernelConfig
 from symbiote.core.capabilities import CapabilitySurface
@@ -22,6 +23,7 @@ from symbiote.process.engine import ProcessEngine
 from symbiote.runners.base import RunnerRegistry
 from symbiote.runners.chat import ChatRunner
 from symbiote.runners.process import ProcessRunner
+from symbiote.runners.subagent import SubagentManager
 from symbiote.workspace.manager import WorkspaceManager
 
 
@@ -68,7 +70,12 @@ class SymbioteKernel:
         self._runner_registry.register(ProcessRunner(process_engine))
 
         # Reflection
-        self._reflection = ReflectionEngine(self._memory, self._storage)
+        self._message_repo = MessageRepository(self._storage)
+        self._reflection = ReflectionEngine(self._memory, self._message_repo)
+
+        # Subagent spawning
+        self._subagent = SubagentManager(self)
+        self._subagent.register()
 
         # Export
         self._export = ExportService(self._storage)
@@ -107,6 +114,16 @@ class SymbioteKernel:
 
     def get_symbiote(self, symbiote_id: str) -> Symbiote | None:
         return self._identity.get(symbiote_id)
+
+    def find_symbiote_by_name(self, name: str) -> Symbiote | None:
+        """Find an active Symbiota by name."""
+        row = self._storage.fetch_one(
+            "SELECT id FROM symbiotes WHERE name = ? AND status = 'active'",
+            (name,),
+        )
+        if row is None:
+            return None
+        return self._identity.get(row["id"])
 
     def start_session(
         self,

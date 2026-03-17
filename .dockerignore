@@ -1,0 +1,13 @@
+.git
+.pytest_cache
+__pycache__
+*.pyc
+.context/
+.env
+.env.local
+*.db
+tests/
+process/
+project/
+.ruff_cache
+.mypy_cache

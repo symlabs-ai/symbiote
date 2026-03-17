@@ -25,6 +25,12 @@ from symbiote.memory.store import MemoryStore
 app = FastAPI(title="Symbiote API", version="0.2.0")
 
 
+@app.get("/health")
+async def health() -> dict:
+    """Health check endpoint for Docker/load balancers."""
+    return {"status": "ok"}
+
+
 @app.exception_handler(EntityNotFoundError)
 async def entity_not_found_handler(request: Request, exc: EntityNotFoundError) -> JSONResponse:
     return JSONResponse(status_code=404, content={"detail": str(exc)})

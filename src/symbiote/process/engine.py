@@ -86,13 +86,16 @@ DEFAULT_DEFINITIONS: list[ProcessDefinition] = [
 class ProcessEngine:
     """Manages process definitions and orchestrates process instances."""
 
-    def __init__(self, storage: StoragePort) -> None:
+    def __init__(self, storage: StoragePort, *, cache_ttl: float = 5.0) -> None:
         self._storage = storage
         self._definitions: dict[str, ProcessDefinition] = {}
         # In-memory cache of active instances for fast advance/get
         self._instances: dict[str, ProcessInstance] = {}
         # Map instance_id -> definition name for step tracking
         self._instance_step_index: dict[str, int] = {}
+        # Cache timestamps for invalidation
+        self._cache_timestamps: dict[str, datetime] = {}
+        self._cache_ttl = cache_ttl  # seconds before cache entry is stale
 
         # Register default definitions
         for defn in DEFAULT_DEFINITIONS:
@@ -126,7 +129,7 @@ class ProcessEngine:
             current_step=first_step,
         )
 
-        self._instances[instance.id] = instance
+        self._cache_instance(instance)
         self._instance_step_index[instance.id] = 0
 
         self._persist_instance(instance)
@@ -134,7 +137,7 @@ class ProcessEngine:
 
     def advance(self, instance_id: str) -> ProcessInstance:
         """Move to next step; complete if no more steps. Raises EntityNotFoundError."""
-        instance = self._instances.get(instance_id)
+        instance = self.get_instance(instance_id)
         if instance is None:
             raise EntityNotFoundError("ProcessInstance", instance_id)
 
@@ -168,13 +171,13 @@ class ProcessEngine:
             instance.current_step = None
 
         instance.updated_at = _utcnow()
-        self._instances[instance_id] = instance
+        self._cache_instance(instance)
         self._update_instance(instance)
         return instance
 
     def get_instance(self, instance_id: str) -> ProcessInstance | None:
-        """Fetch instance by ID (in-memory cache, falls back to storage)."""
-        if instance_id in self._instances:
+        """Fetch instance by ID (cache with TTL, falls back to storage)."""
+        if instance_id in self._instances and not self._is_cache_stale(instance_id):
             return self._instances[instance_id]
 
         row = self._storage.fetch_one(
@@ -184,7 +187,38 @@ class ProcessEngine:
         if row is None:
             return None
 
-        return self._row_to_instance(row)
+        instance = self._row_to_instance(row)
+        self._cache_instance(instance)
+        return instance
+
+    def invalidate_cache(self, instance_id: str | None = None) -> None:
+        """Invalidate cached instance(s).
+
+        If instance_id is None, clears the entire cache.
+        """
+        if instance_id is None:
+            self._instances.clear()
+            self._instance_step_index.clear()
+            self._cache_timestamps.clear()
+        else:
+            self._instances.pop(instance_id, None)
+            self._instance_step_index.pop(instance_id, None)
+            self._cache_timestamps.pop(instance_id, None)
+
+    # ── Cache helpers ─────────────────────────────────────────────────────
+
+    def _cache_instance(self, instance: ProcessInstance) -> None:
+        """Store instance in cache with current timestamp."""
+        self._instances[instance.id] = instance
+        self._cache_timestamps[instance.id] = _utcnow()
+
+    def _is_cache_stale(self, instance_id: str) -> bool:
+        """Check if a cached instance has exceeded its TTL."""
+        cached_at = self._cache_timestamps.get(instance_id)
+        if cached_at is None:
+            return True
+        elapsed = (_utcnow() - cached_at).total_seconds()
+        return elapsed > self._cache_ttl
 
     # ── Persistence helpers ──────────────────────────────────────────────
 

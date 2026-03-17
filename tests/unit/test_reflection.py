@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 
+from symbiote.adapters.storage.message_repository import MessageRepository
 from symbiote.adapters.storage.sqlite import SQLiteAdapter
 from symbiote.core.identity import IdentityManager
 from symbiote.core.models import MemoryEntry
@@ -48,7 +49,7 @@ def store(adapter: SQLiteAdapter) -> MemoryStore:
 
 @pytest.fixture()
 def engine(store: MemoryStore, adapter: SQLiteAdapter) -> ReflectionEngine:
-    return ReflectionEngine(memory_store=store, storage=adapter)
+    return ReflectionEngine(memory_store=store, messages=MessageRepository(adapter))
 
 
 def _insert_message(

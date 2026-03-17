@@ -265,3 +265,121 @@ class TestProcessRunner:
         assert isinstance(result, RunResult)
         assert result.success is True
         assert result.runner_type == "process"
+
+
+# ── Cache Invalidation (B-6) ────────────────────────────────────────────────
+
+
+class TestCacheInvalidation:
+    def _make_engine(self) -> ProcessEngine:
+        engine = ProcessEngine(FakeStorage())
+        engine.register_process(
+            ProcessDefinition(
+                name="flow",
+                steps=[ProcessStep(name="s1"), ProcessStep(name="s2")],
+            )
+        )
+        return engine
+
+    def test_invalidate_single_clears_from_cache(self):
+        engine = self._make_engine()
+        inst = engine.start("sess-1", "flow")
+        assert inst.id in engine._instances
+
+        engine.invalidate_cache(inst.id)
+        assert inst.id not in engine._instances
+        assert inst.id not in engine._instance_step_index
+        assert inst.id not in engine._cache_timestamps
+
+    def test_invalidate_all_clears_cache(self):
+        engine = self._make_engine()
+        engine.start("sess-1", "flow")
+        engine.start("sess-2", "flow")
+        assert len(engine._instances) == 2
+
+        engine.invalidate_cache()
+        assert len(engine._instances) == 0
+        assert len(engine._instance_step_index) == 0
+        assert len(engine._cache_timestamps) == 0
+
+    def test_cache_repopulated_after_invalidation(self):
+        """After invalidation, get_instance re-fetches from storage."""
+        import tempfile
+        from pathlib import Path
+        from uuid import uuid4
+
+        from symbiote.adapters.storage.sqlite import SQLiteAdapter
+        from symbiote.core.identity import IdentityManager
+        from symbiote.core.session import SessionManager
+
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "cache_test.db"
+            adapter = SQLiteAdapter(db_path=db)
+            adapter.init_schema()
+
+            # Create symbiote and session for FK
+            sym = IdentityManager(storage=adapter).create(name="B", role="a")
+            sess = SessionManager(adapter).start(symbiote_id=sym.id)
+
+            engine = ProcessEngine(adapter)
+            engine.register_process(
+                ProcessDefinition(
+                    name="flow",
+                    steps=[ProcessStep(name="s1"), ProcessStep(name="s2")],
+                )
+            )
+            inst = engine.start(sess.id, "flow")
+            engine.advance(inst.id)
+
+            engine.invalidate_cache(inst.id)
+
+            refetched = engine.get_instance(inst.id)
+            assert refetched is not None
+            assert refetched.current_step == "s2"
+
+            adapter.close()
+
+    def test_stale_cache_triggers_refetch(self):
+        """Instances with expired TTL trigger DB re-fetch."""
+        import tempfile
+        from pathlib import Path
+
+        from symbiote.adapters.storage.sqlite import SQLiteAdapter
+        from symbiote.core.identity import IdentityManager
+        from symbiote.core.session import SessionManager
+
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "ttl_test.db"
+            adapter = SQLiteAdapter(db_path=db)
+            adapter.init_schema()
+
+            sym = IdentityManager(storage=adapter).create(name="B", role="a")
+            sess = SessionManager(adapter).start(symbiote_id=sym.id)
+
+            engine = ProcessEngine(adapter, cache_ttl=0.0)
+            engine.register_process(
+                ProcessDefinition(
+                    name="flow",
+                    steps=[ProcessStep(name="s1")],
+                )
+            )
+            inst = engine.start(sess.id, "flow")
+
+            # TTL=0 → always stale → refetch from DB
+            refetched = engine.get_instance(inst.id)
+            assert refetched is not None
+            assert refetched.id == inst.id
+
+            adapter.close()
+
+    def test_advance_refreshes_cache(self):
+        engine = self._make_engine()
+        inst = engine.start("sess-1", "flow")
+        assert inst.current_step == "s1"
+
+        advanced = engine.advance(inst.id)
+        assert advanced.current_step == "s2"
+
+        # Cache should have the updated instance
+        cached = engine.get_instance(inst.id)
+        assert cached.current_step == "s2"

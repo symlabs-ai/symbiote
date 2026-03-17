@@ -10,11 +10,13 @@ from symbiote.core.models import Message
 from symbiote.core.ports import LLMPort
 from symbiote.environment.descriptors import ToolCallResult
 from symbiote.environment.parser import parse_tool_calls
+from symbiote.environment.runtime_context import inject_runtime_context
 from symbiote.memory.working import WorkingMemory
 from symbiote.runners.base import RunResult
 
 if TYPE_CHECKING:
     from symbiote.environment.tools import ToolGateway
+    from symbiote.memory.consolidator import MemoryConsolidator
 
 _HANDLED_INTENTS = frozenset({"chat", "ask", "question", "talk"})
 
@@ -39,10 +41,12 @@ class ChatRunner:
         llm: LLMPort,
         working_memory: WorkingMemory | None = None,
         tool_gateway: ToolGateway | None = None,
+        consolidator: MemoryConsolidator | None = None,
     ) -> None:
         self._llm = llm
         self._working_memory = working_memory
         self._tool_gateway = tool_gateway
+        self._consolidator = consolidator
 
     def can_handle(self, intent: str) -> bool:
         return intent in _HANDLED_INTENTS
@@ -74,6 +78,12 @@ class ChatRunner:
                 )
             )
 
+            # Consolidate if working memory exceeds token threshold
+            if self._consolidator is not None:
+                self._consolidator.consolidate_if_needed(
+                    self._working_memory, context.symbiote_id
+                )
+
         output = clean_text
         if tool_results:
             output = {
@@ -96,8 +106,12 @@ class ChatRunner:
             for msg in self._working_memory.recent_messages:
                 messages.append({"role": msg.role, "content": msg.content})
 
-        # 3. Current user input
-        messages.append({"role": "user", "content": context.user_input})
+        # 3. Current user input (with ephemeral runtime context for the LLM)
+        user_content = inject_runtime_context(
+            context.user_input,
+            session_id=context.session_id,
+        )
+        messages.append({"role": "user", "content": user_content})
 
         return messages
 

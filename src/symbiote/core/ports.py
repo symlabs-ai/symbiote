@@ -40,6 +40,16 @@ class MemoryPort(Protocol):
     def deactivate(self, memory_id: str) -> None: ...
 
 
+class MessagePort(Protocol):
+    """Structural interface for message retrieval (isolates SQL from consumers)."""
+
+    def get_messages(
+        self, session_id: str, limit: int = 50
+    ) -> list[dict]:
+        """Return messages for a session as dicts with 'role' and 'content', chronological order."""
+        ...
+
+
 class KnowledgePort(Protocol):
     """Structural interface for knowledge operations."""
 
