@@ -121,7 +121,6 @@ See [QUICKSTART.md](QUICKSTART.md) for the full guide.
 ## Documentation
 
 - **[QUICKSTART.md](QUICKSTART.md)** — Full usage guide (Python, CLI, HTTP API, embedded)
-- **[Integration Guide: YouNews Clark](docs/integration-younews-clark.md)** — Step-by-step guide for building an AI assistant with Symbiote
 
 ## License
 
