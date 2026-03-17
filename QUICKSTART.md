@@ -10,6 +10,70 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
+## Deployment Architectures
+
+Symbiote supports two deployment models. Choose based on your needs:
+
+### Embedded Library (recommended for single-product use)
+
+The Symbiote kernel runs inside your application process. No extra services, ports, or infrastructure. Your app imports the kernel directly and calls it as Python functions.
+
+```
+Your App (FastAPI, Django, Flask...)
+├── Your routes and business logic
+├── SymbioteKernel (in-process)
+│   └── SQLite: data/symbiote.db
+└── LLM adapter (Anthropic, OpenAI, etc.)
+```
+
+**When to use:** Your product has one or a few Symbiotas dedicated to it. Simplest setup — zero network overhead, no extra deployment.
+
+```python
+# In your app's startup
+from symbiote.core.kernel import SymbioteKernel
+from symbiote.config.models import KernelConfig
+
+kernel = SymbioteKernel(
+    config=KernelConfig(db_path="data/symbiote.db"),
+    llm=your_llm_adapter,
+)
+app.state.kernel = kernel
+
+# In your routes — direct Python call, no HTTP
+response = kernel.message(session.id, user_message, extra_context={...})
+```
+
+### HTTP API Service (for multi-product / shared infrastructure)
+
+Symbiote runs as a standalone service with its own port. Multiple products communicate via REST API.
+
+```
+Product A ──→ POST /sessions/{id}/messages ──→ ┌──────────────┐
+Product B ──→ GET  /symbiotes/{id}/tools   ──→ │  Symbiote    │
+Product C ──→ POST /symbiotes              ──→ │  HTTP API    │
+                                               │  port 8011   │
+                                               │  SQLite/DB   │
+                                               └──────────────┘
+```
+
+**When to use:** Multiple products share Symbiotas, or you need to scale/deploy the kernel independently from your app.
+
+```bash
+uvicorn symbiote.api.http:app --host 0.0.0.0 --port 8011
+```
+
+```python
+# In your app — HTTP calls
+import httpx
+resp = httpx.post("http://symbiote:8011/sessions", json={...})
+```
+
+### Migration path
+
+Start embedded. If you later need shared infrastructure, switch to HTTP — the API surface is identical to the Python library, so the change is mechanical (Python calls become HTTP calls).
+
+---
+
 ## Uso via Python (biblioteca)
 
 ```python
