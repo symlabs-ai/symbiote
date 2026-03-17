@@ -86,7 +86,7 @@ class TestForgeLLMAdapter:
     @patch("symbiote.adapters.llm.forge.ChatAgent")
     def test_complete_delegates_to_forge_llm(self, mock_agent_cls: MagicMock) -> None:
         mock_response = MagicMock()
-        mock_response.message = "LLM says hi"
+        mock_response.content = "LLM says hi"
         mock_agent = mock_agent_cls.return_value
         mock_agent.chat.return_value = mock_response
 
