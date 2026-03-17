@@ -49,12 +49,21 @@ class ForgeLLMAdapter:
             raise LLMError(str(exc)) from exc
 
     def complete(self, messages: list[dict], config: dict | None = None) -> str:
-        """Send messages to the LLM and return the text response."""
+        """Send messages to the LLM and return the text response.
+
+        Args:
+            messages: Chat messages as dicts with 'role' and 'content'.
+            config: Optional generation settings (temperature, max_tokens, etc.)
+                    from GenerationSettings.to_config_dict().
+        """
         try:
             chat_messages = [
                 ChatMessage(role=m["role"], content=m["content"]) for m in messages
             ]
-            response = self._agent.chat(messages=chat_messages)
+            kwargs: dict = {"messages": chat_messages}
+            if config:
+                kwargs["config"] = config
+            response = self._agent.chat(**kwargs)
             return response.content
         except LLMError:
             raise

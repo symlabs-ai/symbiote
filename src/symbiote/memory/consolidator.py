@@ -1,8 +1,14 @@
-"""MemoryConsolidator — summarize old messages via LLM when tokens exceed threshold."""
+"""MemoryConsolidator — summarize old messages via LLM when tokens exceed threshold.
+
+Consolidation runs in a background thread to avoid blocking the chat response.
+Working memory is trimmed immediately; LLM summarization happens asynchronously.
+"""
 
 from __future__ import annotations
 
 import json
+import logging
+import threading
 from typing import TYPE_CHECKING
 
 from symbiote.core.models import MemoryEntry
@@ -10,6 +16,8 @@ from symbiote.core.ports import LLMPort, MemoryPort
 
 if TYPE_CHECKING:
     from symbiote.memory.working import WorkingMemory
+
+_log = logging.getLogger(__name__)
 
 _CONSOLIDATION_PROMPT = """\
 Summarize the following conversation messages into a concise set of key facts, \
@@ -37,11 +45,14 @@ class MemoryConsolidator:
         *,
         token_threshold: int = 2000,
         keep_recent: int = 6,
+        async_mode: bool = True,
     ) -> None:
         self._llm = llm
         self._memory = memory_store
         self._token_threshold = token_threshold
         self._keep_recent = keep_recent
+        self._async_mode = async_mode
+        self._last_thread: threading.Thread | None = None
 
     def consolidate_if_needed(
         self,
@@ -50,7 +61,10 @@ class MemoryConsolidator:
     ) -> int:
         """Check token estimate and consolidate if over threshold.
 
-        Returns the number of facts persisted (0 if no consolidation needed).
+        Trims working memory immediately (non-blocking), then runs
+        LLM summarization in a background thread.
+
+        Returns 0 if no consolidation needed, -1 if background task started.
         """
         tokens = self._estimate_tokens(working_memory)
         if tokens <= self._token_threshold:
@@ -61,18 +75,75 @@ class MemoryConsolidator:
             return 0
 
         # Split: old messages to consolidate, recent to keep
-        to_consolidate = msgs[: -self._keep_recent]
+        to_consolidate = list(msgs[: -self._keep_recent])
         to_keep = msgs[-self._keep_recent :]
 
-        # Summarize via LLM
-        facts = self._summarize(to_consolidate)
+        # Trim working memory immediately (non-blocking)
+        working_memory.recent_messages = list(to_keep)
 
-        # Persist as memory entries
+        session_id = working_memory.session_id
+
+        if self._async_mode:
+            # Run LLM summarization in background thread
+            thread = threading.Thread(
+                target=self._background_consolidate,
+                args=(to_consolidate, symbiote_id, session_id),
+                daemon=True,
+                name=f"consolidator-{session_id[:8]}",
+            )
+            thread.start()
+            self._last_thread = thread
+            return -1  # background task started
+
+        # Sync mode: summarize and persist in current thread
+        facts = self._summarize(to_consolidate)
+        return self._persist_facts(facts, symbiote_id, session_id)
+
+    def consolidate_sync(
+        self,
+        working_memory: WorkingMemory,
+        symbiote_id: str,
+    ) -> int:
+        """Synchronous consolidation (for testing or when blocking is acceptable).
+
+        Returns the number of facts persisted.
+        """
+        tokens = self._estimate_tokens(working_memory)
+        if tokens <= self._token_threshold:
+            return 0
+
+        msgs = working_memory.recent_messages
+        if len(msgs) <= self._keep_recent:
+            return 0
+
+        to_consolidate = list(msgs[: -self._keep_recent])
+        to_keep = msgs[-self._keep_recent :]
+
+        facts = self._summarize(to_consolidate)
+        persisted = self._persist_facts(facts, symbiote_id, working_memory.session_id)
+
+        working_memory.recent_messages = list(to_keep)
+        return persisted
+
+    def _background_consolidate(
+        self, messages: list, symbiote_id: str, session_id: str
+    ) -> None:
+        """Run in background thread: summarize and persist."""
+        try:
+            facts = self._summarize(messages)
+            self._persist_facts(facts, symbiote_id, session_id)
+        except Exception as exc:
+            _log.warning("Background consolidation failed: %s", exc)
+
+    def _persist_facts(
+        self, facts: list[dict], symbiote_id: str, session_id: str
+    ) -> int:
+        """Persist extracted facts as memory entries."""
         persisted = 0
         for fact in facts:
             entry = MemoryEntry(
                 symbiote_id=symbiote_id,
-                session_id=working_memory.session_id,
+                session_id=session_id,
                 type=fact.get("type", "factual"),
                 scope="session",
                 content=fact.get("content", ""),
@@ -81,10 +152,6 @@ class MemoryConsolidator:
             )
             self._memory.store(entry)
             persisted += 1
-
-        # Trim working memory
-        working_memory.recent_messages = list(to_keep)
-
         return persisted
 
     def _estimate_tokens(self, working_memory: WorkingMemory) -> int:

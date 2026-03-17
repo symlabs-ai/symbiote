@@ -132,7 +132,8 @@ class TestHttpTools:
         mock_response.__enter__ = lambda s: s
         mock_response.__exit__ = lambda s, *a: None
 
-        with patch("urllib.request.urlopen", return_value=mock_response):
+        with patch("symbiote.security.network.validate_url", return_value="http://localhost:12345/items/42"), \
+             patch("urllib.request.OpenerDirector.open", return_value=mock_response):
             result = gw.execute(
                 symbiote_id=symbiote_id,
                 session_id=None,
@@ -140,7 +141,9 @@ class TestHttpTools:
                 params={"id": "42"},
             )
         assert result.success is True
-        assert result.output == {"title": "News"}
+        # Response is wrapped with untrusted content banner (B-15)
+        assert result.output["data"] == {"title": "News"}
+        assert "_warning" in result.output
 
 
 # ── Unregister ────────────────────────────────────────────────────────────

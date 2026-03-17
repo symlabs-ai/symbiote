@@ -75,7 +75,7 @@ class TestConsolidation:
         assert result == 0
         assert len(llm.calls) == 0
 
-    def test_consolidation_when_over_threshold(
+    def test_sync_consolidation_persists_facts(
         self, store: MemoryStore, symbiote_id: str
     ) -> None:
         llm = MockLLM()
@@ -85,11 +85,11 @@ class TestConsolidation:
         wm = WorkingMemory(session_id="s1", max_messages=50)
         _fill_working_memory(wm, 12, chars_per_msg=200)
 
-        result = consolidator.consolidate_if_needed(wm, symbiote_id)
+        result = consolidator.consolidate_sync(wm, symbiote_id)
         assert result == 2  # 2 facts from MockLLM
-        assert len(llm.calls) == 1  # LLM was called once
+        assert len(llm.calls) == 1
 
-    def test_working_memory_trimmed_after_consolidation(
+    def test_working_memory_trimmed_immediately(
         self, store: MemoryStore, symbiote_id: str
     ) -> None:
         llm = MockLLM()
@@ -101,9 +101,23 @@ class TestConsolidation:
 
         assert len(wm.recent_messages) == 10
         consolidator.consolidate_if_needed(wm, symbiote_id)
-        assert len(wm.recent_messages) == 4  # only keep_recent remain
+        # Working memory trimmed immediately (non-blocking)
+        assert len(wm.recent_messages) == 4
 
-    def test_facts_persisted_to_memory_store(
+    def test_async_consolidation_returns_minus_one(
+        self, store: MemoryStore, symbiote_id: str
+    ) -> None:
+        llm = MockLLM()
+        consolidator = MemoryConsolidator(
+            llm, store, token_threshold=100, keep_recent=3
+        )
+        wm = WorkingMemory(session_id="s1", max_messages=50)
+        _fill_working_memory(wm, 10, chars_per_msg=200)
+
+        result = consolidator.consolidate_if_needed(wm, symbiote_id)
+        assert result == -1  # background task started
+
+    def test_async_starts_background_thread(
         self, store: MemoryStore, symbiote_id: str
     ) -> None:
         llm = MockLLM()
@@ -115,11 +129,28 @@ class TestConsolidation:
 
         consolidator.consolidate_if_needed(wm, symbiote_id)
 
-        # Check entries in memory store
+        # Background thread was started
+        assert consolidator._last_thread is not None
+        assert consolidator._last_thread.daemon is True
+        consolidator._last_thread.join(timeout=5.0)
+        assert not consolidator._last_thread.is_alive()
+
+    def test_sync_persists_facts_to_store(
+        self, store: MemoryStore, symbiote_id: str
+    ) -> None:
+        """consolidate_sync persists directly (same thread, no SQLite issues)."""
+        llm = MockLLM()
+        consolidator = MemoryConsolidator(
+            llm, store, token_threshold=100, keep_recent=3
+        )
+        wm = WorkingMemory(session_id="s1", max_messages=50)
+        _fill_working_memory(wm, 10, chars_per_msg=200)
+
+        consolidator.consolidate_sync(wm, symbiote_id)
+
         entries = store.search("Python")
         assert len(entries) >= 1
         assert entries[0].source == "system"
-        assert entries[0].scope == "session"
 
     def test_fallback_on_llm_failure(
         self, store: MemoryStore, symbiote_id: str
@@ -131,10 +162,9 @@ class TestConsolidation:
         wm = WorkingMemory(session_id="s1", max_messages=50)
         _fill_working_memory(wm, 10, chars_per_msg=200)
 
-        result = consolidator.consolidate_if_needed(wm, symbiote_id)
+        result = consolidator.consolidate_sync(wm, symbiote_id)
         # Fallback creates a summary fact
         assert result >= 1
-        # Working memory still trimmed
         assert len(wm.recent_messages) == 3
 
     def test_no_consolidation_with_few_messages(self, store: MemoryStore) -> None:

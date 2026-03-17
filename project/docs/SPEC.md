@@ -57,6 +57,16 @@ Symbiote é um kernel Python para construir entidades cognitivas persistentes. M
 | LLM E2E Integration Tests — 5 testes skipáveis para LLM real | B-5 | ✅ Entregue | backlog-sprint |
 | Docker Container — multi-stage Dockerfile com health check | B-1 | ✅ Entregue | backlog-sprint |
 
+### Pós-MVP (Sprint Security — 2026-03-17)
+
+| Feature | Backlog | Status | Sprint |
+|---------|---------|--------|--------|
+| SSRF Protection — validação de IP em HTTP tools + redirect guard | B-14 | ✅ Entregue | security-sprint |
+| Untrusted Content Banner — banner anti-prompt-injection em respostas HTTP | B-15 | ✅ Entregue | security-sprint |
+| Tool Call Pair Consistency — trim de WorkingMemory alinhado a turn boundaries | B-18 | ✅ Entregue | security-sprint |
+| GenerationSettings — temperature/max_tokens/reasoning_effort pass-through | B-17 | ✅ Entregue | security-sprint |
+| Async Memory Consolidation — trim imediato + LLM summarization em background | B-16 | ✅ Entregue | security-sprint |
+
 ### O que está fora do escopo
 
 - Multi-tenant completo

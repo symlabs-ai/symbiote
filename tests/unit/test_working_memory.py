@@ -60,13 +60,49 @@ class TestUpdateMessage:
 
     def test_trims_to_max_messages(self) -> None:
         wm = WorkingMemory(SESSION_ID, max_messages=3)
-        msgs = [_msg(content=f"m{i}") for i in range(5)]
+        # All user messages — trim is straightforward
+        msgs = [_msg(role="user", content=f"m{i}") for i in range(5)]
         for m in msgs:
             wm.update_message(m)
         assert len(wm.recent_messages) == 3
-        # Keeps the last 3 (FIFO — oldest dropped)
         assert wm.recent_messages[0].content == "m2"
         assert wm.recent_messages[2].content == "m4"
+
+    def test_trim_aligns_to_user_turn(self) -> None:
+        """B-18: Trimming should not orphan assistant messages."""
+        wm = WorkingMemory(SESSION_ID, max_messages=4)
+        # user, assistant, user, assistant, user, assistant
+        for i in range(3):
+            wm.update_message(_msg(role="user", content=f"u{i}"))
+            wm.update_message(_msg(role="assistant", content=f"a{i}"))
+        # 6 messages, max 4 → raw trim gives [assistant, user, assistant, user? no]
+        # raw: [-4:] = a1, u2, a2 — wait, 6 msgs, [-4:] = u1, a1, u2, a2
+        # Actually with 6 msgs and max 4: [-4:] = [u1, a1, u2, a2] which starts with user ✓
+        # Let me use max_messages=3 to force mid-turn cut
+        wm2 = WorkingMemory(SESSION_ID, max_messages=3)
+        wm2.update_message(_msg(role="user", content="u0"))
+        wm2.update_message(_msg(role="assistant", content="a0"))
+        wm2.update_message(_msg(role="user", content="u1"))
+        wm2.update_message(_msg(role="assistant", content="a1"))
+        # 4 msgs, max 3: [-3:] = [a0, u1, a1] → starts with assistant → align drops a0
+        assert wm2.recent_messages[0].role == "user"
+        assert wm2.recent_messages[0].content == "u1"
+
+    def test_trim_preserves_all_user_messages(self) -> None:
+        """B-18: All-user messages trim normally."""
+        wm = WorkingMemory(SESSION_ID, max_messages=2)
+        for i in range(5):
+            wm.update_message(_msg(role="user", content=f"u{i}"))
+        assert len(wm.recent_messages) == 2
+        assert wm.recent_messages[0].content == "u3"
+
+    def test_trim_all_assistant_returns_asis(self) -> None:
+        """B-18: Edge case — all assistant messages returned as-is."""
+        wm = WorkingMemory(SESSION_ID, max_messages=2)
+        for i in range(5):
+            wm.update_message(_msg(role="assistant", content=f"a{i}"))
+        # No user message found — return as-is
+        assert len(wm.recent_messages) == 2
 
 
 # ── update_goal / update_plan ────────────────────────────────────────────────

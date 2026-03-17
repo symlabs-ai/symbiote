@@ -27,6 +27,7 @@ class AssembledContext(BaseModel):
     relevant_knowledge: list[dict] = Field(default_factory=list)
     available_tools: list[dict] = Field(default_factory=list)
     extra_context: dict | None = None
+    generation_settings: dict | None = None  # from GenerationSettings.to_config_dict()
     user_input: str
     total_tokens_estimate: int = 0
 

@@ -3,6 +3,22 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [0.2.1] — 2026-03-17
+
+### Added — Security & Quality (nanobot report)
+
+- [B-14] SSRF Protection — validate URLs against private/internal IP ranges before HTTP requests, redirect validation (`security/network.py`)
+- [B-15] Untrusted Content Banner — wrap external HTTP responses with `[External content]` banner to mitigate prompt injection (`environment/tools.py`)
+- [B-17] GenerationSettings — configurable temperature/max_tokens/top_p/reasoning_effort with pass-through to LLM (`core/generation.py`)
+
+### Changed
+
+- [B-16] Memory Consolidation — async mode with background thread, sync fallback for SQLite, `_persist_facts()` extracted (`memory/consolidator.py`)
+- [B-18] WorkingMemory trim — aligns to user turn boundaries, prevents orphaned assistant messages (`memory/working.py`)
+- [B-14] HTTP tool handler uses custom redirect handler that re-validates each redirect URL
+- [B-15] HTTP responses (string, dict, list) all wrapped with untrusted content banner
+- ForgeLLMAdapter auto-resolves `{PROVIDER}_API_KEY` and `{PROVIDER}_BASE_URL` from env vars
+
 ## [0.2.0] — 2026-03-17
 
 ### Added — Nanobot-inspired Architecture

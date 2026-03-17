@@ -25,10 +25,34 @@ class WorkingMemory:
     # ── mutations ─────────────────────────────────────────────────────
 
     def update_message(self, message: Message) -> None:
-        """Append a message, trimming oldest when exceeding max_messages."""
+        """Append a message, trimming oldest when exceeding max_messages.
+
+        Trimming preserves conversation turn boundaries: never starts
+        the retained window with an assistant or system message (which
+        would orphan tool results or context).
+        """
         self.recent_messages.append(message)
         if len(self.recent_messages) > self._max_messages:
-            self.recent_messages = self.recent_messages[-self._max_messages:]
+            trimmed = self.recent_messages[-self._max_messages:]
+            trimmed = self._align_to_turn_boundary(trimmed)
+            self.recent_messages = trimmed
+
+    @staticmethod
+    def _align_to_turn_boundary(messages: list[Message]) -> list[Message]:
+        """Ensure message list starts at a user turn boundary.
+
+        Drops leading assistant/system messages that would be orphaned
+        (their preceding user message was trimmed).
+        """
+        start = 0
+        for i, msg in enumerate(messages):
+            if msg.role == "user":
+                start = i
+                break
+        else:
+            # No user message found — return as-is
+            return messages
+        return messages[start:]
 
     def update_goal(self, goal: str) -> None:
         self.current_goal = goal

@@ -54,7 +54,7 @@ class ChatRunner:
     def run(self, context: AssembledContext) -> RunResult:
         messages = self._build_messages(context)
         try:
-            response = self._llm.complete(messages)
+            response = self._llm.complete(messages, config=context.generation_settings)
         except Exception as exc:
             return RunResult(success=False, error=str(exc), runner_type=self.runner_type)
 
