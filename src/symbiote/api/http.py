@@ -6,7 +6,9 @@ import os
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse
+
+# ── FastAPI app ───────────────────────────────────────────────────────────
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from starlette.requests import Request
 
@@ -25,9 +27,7 @@ from symbiote.environment.policies import PolicyGate
 from symbiote.environment.tools import ToolGateway
 from symbiote.memory.store import MemoryStore
 
-# ── FastAPI app ───────────────────────────────────────────────────────────
-
-app = FastAPI(title="Symbiote API", version="0.1.7")
+app = FastAPI(title="Symbiote API", version="0.2.0")
 
 
 @app.get("/health")
@@ -623,3 +623,51 @@ def revoke_api_key(
     if not _key_manager.revoke_key(key_id):
         raise HTTPException(status_code=404, detail="API key not found")
     return {"revoked": key_id}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# DASHBOARD — Admin UI (B-23)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+@app.get("/api/dashboard", response_model=dict)
+def dashboard_data(
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+) -> dict:
+    """Aggregate data for the admin dashboard (no auth — read-only summary)."""
+    symbiotes = adapter.fetch_all(
+        "SELECT id, name, role, status, created_at FROM symbiotes ORDER BY created_at DESC"
+    )
+    sessions = adapter.fetch_all(
+        "SELECT s.id, s.symbiote_id, s.status, s.goal, s.started_at, sym.name as symbiote_name "
+        "FROM sessions s JOIN symbiotes sym ON s.symbiote_id = sym.id "
+        "ORDER BY s.started_at DESC LIMIT 20"
+    )
+    tenant_counts = adapter.fetch_all(
+        "SELECT tenant_id, COUNT(*) as key_count FROM api_keys "
+        "WHERE is_active = 1 GROUP BY tenant_id ORDER BY key_count DESC"
+    )
+    stats = {
+        "symbiotes": adapter.fetch_one("SELECT COUNT(*) as c FROM symbiotes")["c"],
+        "sessions": adapter.fetch_one("SELECT COUNT(*) as c FROM sessions")["c"],
+        "sessions_active": adapter.fetch_one(
+            "SELECT COUNT(*) as c FROM sessions WHERE status = 'active'"
+        )["c"],
+        "memories": adapter.fetch_one("SELECT COUNT(*) as c FROM memory_entries WHERE is_active = 1")["c"],
+        "api_keys": adapter.fetch_one("SELECT COUNT(*) as c FROM api_keys WHERE is_active = 1")["c"],
+    }
+    return {
+        "symbiotes": [dict(r) for r in symbiotes],
+        "sessions": [dict(r) for r in sessions],
+        "tenants": [dict(r) for r in tenant_counts],
+        "stats": stats,
+    }
+
+
+@app.get("/", response_class=HTMLResponse)
+def dashboard_page() -> HTMLResponse:
+    """Serve the admin dashboard UI."""
+    import importlib.resources
+
+    html_path = importlib.resources.files("symbiote.api") / "dashboard.html"
+    return HTMLResponse(content=html_path.read_text(encoding="utf-8"))

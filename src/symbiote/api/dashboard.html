@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Symbiote Console</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600&display=swap');
+
+:root {
+  --bg: #0a0a0f;
+  --bg-card: #111118;
+  --bg-hover: #1a1a24;
+  --border: #1e1e2e;
+  --border-bright: #2a2a3e;
+  --text: #c8c8d4;
+  --text-dim: #5a5a72;
+  --text-bright: #e8e8f0;
+  --accent: #00e5a0;
+  --accent-dim: #00e5a020;
+  --amber: #f0b429;
+  --red: #f05365;
+  --blue: #5c7cfa;
+  --purple: #b197fc;
+  --mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --sans: 'Space Grotesk', system-ui, sans-serif;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  min-height: 100vh;
+}
+
+/* ── Scanline overlay ── */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.03) 2px,
+    rgba(0,0,0,0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── Header ── */
+header {
+  border-bottom: 1px solid var(--border);
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-card);
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo-mark {
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--accent);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.logo h1 {
+  font-family: var(--sans);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-bright);
+  letter-spacing: -0.3px;
+}
+
+.logo span {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 400;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+.status-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  animation: pulse 2s infinite;
+}
+
+.status-dot.online { background: var(--accent); }
+.status-dot.offline { background: var(--red); animation: none; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ── Stats bar ── */
+.stats-bar {
+  display: flex;
+  gap: 1px;
+  background: var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.stat {
+  flex: 1;
+  background: var(--bg-card);
+  padding: 14px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stat-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--text-dim);
+}
+
+.stat-value {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-bright);
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-value .unit {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 400;
+  margin-left: 2px;
+}
+
+/* ── Main grid ── */
+main {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--border);
+  min-height: calc(100vh - 120px);
+}
+
+/* ── Section ── */
+section {
+  background: var(--bg);
+  padding: 0;
+  overflow: hidden;
+}
+
+.section-header {
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-card);
+}
+
+.section-title {
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+}
+
+.section-count {
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--accent-dim);
+  padding: 1px 8px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+/* ── Table ── */
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th {
+  text-align: left;
+  padding: 8px 20px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+  position: sticky;
+  top: 0;
+}
+
+td {
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+tr:hover td {
+  background: var(--bg-hover);
+}
+
+.table-scroll {
+  max-height: calc(50vh - 90px);
+  overflow-y: auto;
+}
+
+.table-scroll::-webkit-scrollbar { width: 4px; }
+.table-scroll::-webkit-scrollbar-track { background: var(--bg); }
+.table-scroll::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 2px; }
+
+/* ── Badges ── */
+.badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+}
+
+.badge-active { background: #00e5a015; color: var(--accent); border: 1px solid #00e5a030; }
+.badge-closed { background: #5a5a7215; color: var(--text-dim); border: 1px solid var(--border); }
+.badge-role { background: #5c7cfa15; color: var(--blue); border: 1px solid #5c7cfa30; }
+
+/* ── Tenant cards ── */
+.tenant-list {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tenant-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.tenant-name {
+  font-size: 12px;
+  color: var(--text-bright);
+}
+
+.tenant-keys {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--amber);
+  font-variant-numeric: tabular-nums;
+}
+
+.tenant-keys .label {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+/* ── Timestamp ── */
+.ts {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+/* ── Empty state ── */
+.empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+/* ── Loading ── */
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 60px;
+  color: var(--text-dim);
+  gap: 8px;
+}
+
+.loading::before {
+  content: '';
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-bright);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Footer ── */
+footer {
+  border-top: 1px solid var(--border);
+  padding: 10px 24px;
+  font-size: 10px;
+  color: var(--text-dim);
+  background: var(--bg-card);
+  display: flex;
+  justify-content: space-between;
+}
+
+footer a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+/* ── Responsive ── */
+@media (max-width: 900px) {
+  main { grid-template-columns: 1fr; }
+  .stats-bar { flex-wrap: wrap; }
+  .stat { min-width: 50%; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-mark">S</div>
+    <h1>Symbiote<span>console</span></h1>
+  </div>
+  <div class="status-pill">
+    <div class="status-dot" id="status-dot"></div>
+    <span id="status-text">connecting...</span>
+  </div>
+</header>
+
+<div class="stats-bar">
+  <div class="stat">
+    <div class="stat-label">Symbiotes</div>
+    <div class="stat-value" id="stat-symbiotes">-</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Sessions</div>
+    <div class="stat-value" id="stat-sessions">-</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Active</div>
+    <div class="stat-value" id="stat-active">-</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Memories</div>
+    <div class="stat-value" id="stat-memories">-</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">API Keys</div>
+    <div class="stat-value" id="stat-keys">-</div>
+  </div>
+</div>
+
+<main>
+  <section>
+    <div class="section-header">
+      <div class="section-title">Symbiotes</div>
+      <div class="section-count" id="sym-count">0</div>
+    </div>
+    <div class="table-scroll" id="sym-table">
+      <div class="loading">Loading</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-header">
+      <div class="section-title">Recent Sessions</div>
+      <div class="section-count" id="sess-count">0</div>
+    </div>
+    <div class="table-scroll" id="sess-table">
+      <div class="loading">Loading</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-header">
+      <div class="section-title">Tenants</div>
+      <div class="section-count" id="tenant-count">0</div>
+    </div>
+    <div id="tenant-list">
+      <div class="loading">Loading</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-header">
+      <div class="section-title">Quick Reference</div>
+    </div>
+    <div style="padding: 16px 20px; font-size: 12px; line-height: 2;">
+      <div style="color: var(--text-dim); margin-bottom: 8px;">Endpoints</div>
+      <div><span style="color: var(--accent);">POST</span> <span style="color: var(--text-bright);">/symbiotes</span></div>
+      <div><span style="color: var(--accent);">POST</span> <span style="color: var(--text-bright);">/sessions</span></div>
+      <div><span style="color: var(--blue);">POST</span> <span style="color: var(--text-bright);">/sessions/{id}/chat</span></div>
+      <div><span style="color: var(--amber);">GET</span>&nbsp; <span style="color: var(--text-bright);">/sessions/{id}</span></div>
+      <div><span style="color: var(--amber);">GET</span>&nbsp; <span style="color: var(--text-bright);">/memory/search?query=</span></div>
+      <div><span style="color: var(--amber);">GET</span>&nbsp; <span style="color: var(--text-bright);">/health</span></div>
+      <div><span style="color: var(--amber);">GET</span>&nbsp; <span style="color: var(--text-bright);">/docs</span> <span style="color: var(--text-dim);">(OpenAPI)</span></div>
+      <div style="color: var(--text-dim); margin-top: 12px; margin-bottom: 8px;">SDK</div>
+      <div style="color: var(--purple);">pip install symbiote</div>
+      <pre style="color: var(--text-dim); margin-top: 8px; font-size: 11px; line-height: 1.6;">from symbiote.sdk import SymbioteClient
+client = SymbioteClient(
+  "<span style="color: var(--text);">https://symbiote.symlabs.ai</span>",
+  api_key="<span style="color: var(--amber);">sk-symbiote_...</span>"
+)</pre>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span>Symbiote Kernel v0.2.0 &mdash; <a href="/docs">API Docs</a></span>
+  <span id="last-refresh">-</span>
+</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function fmtDate(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function badge(text, cls) {
+  return `<span class="badge badge-${cls}">${text}</span>`;
+}
+
+async function loadDashboard() {
+  try {
+    // Health check
+    const health = await fetch('/health').then(r => r.json());
+    $('status-dot').className = 'status-dot online';
+    $('status-text').textContent = 'online';
+
+    // Dashboard data
+    const data = await fetch('/api/dashboard').then(r => r.json());
+
+    // Stats
+    $('stat-symbiotes').textContent = data.stats.symbiotes;
+    $('stat-sessions').textContent = data.stats.sessions;
+    $('stat-active').textContent = data.stats.sessions_active;
+    $('stat-memories').textContent = data.stats.memories;
+    $('stat-keys').textContent = data.stats.api_keys;
+
+    // Symbiotes table
+    $('sym-count').textContent = data.symbiotes.length;
+    if (data.symbiotes.length === 0) {
+      $('sym-table').innerHTML = '<div class="empty">No symbiotes registered</div>';
+    } else {
+      $('sym-table').innerHTML = `<table>
+        <thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Created</th></tr></thead>
+        <tbody>${data.symbiotes.map(s => `<tr>
+          <td style="color: var(--text-bright)">${s.name}</td>
+          <td>${badge(s.role, 'role')}</td>
+          <td>${badge(s.status, s.status === 'active' ? 'active' : 'closed')}</td>
+          <td class="ts">${fmtDate(s.created_at)}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+    }
+
+    // Sessions table
+    $('sess-count').textContent = data.sessions.length;
+    if (data.sessions.length === 0) {
+      $('sess-table').innerHTML = '<div class="empty">No sessions</div>';
+    } else {
+      $('sess-table').innerHTML = `<table>
+        <thead><tr><th>ID</th><th>Symbiote</th><th>Status</th><th>Goal</th></tr></thead>
+        <tbody>${data.sessions.map(s => `<tr>
+          <td style="color: var(--text-dim); font-size: 11px">${s.id.slice(0,8)}</td>
+          <td style="color: var(--text-bright)">${s.symbiote_name || '-'}</td>
+          <td>${badge(s.status, s.status === 'active' ? 'active' : 'closed')}</td>
+          <td style="color: var(--text-dim); max-width: 180px">${s.goal || '-'}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+    }
+
+    // Tenants
+    $('tenant-count').textContent = data.tenants.length;
+    if (data.tenants.length === 0) {
+      $('tenant-list').innerHTML = '<div class="empty">No API keys issued</div>';
+    } else {
+      $('tenant-list').innerHTML = `<div class="tenant-list">${data.tenants.map(t => `
+        <div class="tenant-card">
+          <div class="tenant-name">${t.tenant_id}</div>
+          <div class="tenant-keys">${t.key_count}<span class="label">keys</span></div>
+        </div>
+      `).join('')}</div>`;
+    }
+
+    $('last-refresh').textContent = 'refreshed ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    $('status-dot').className = 'status-dot offline';
+    $('status-text').textContent = 'error';
+    console.error('Dashboard load failed:', e);
+  }
+}
+
+// Initial load + auto-refresh every 30s
+loadDashboard();
+setInterval(loadDashboard, 30000);
+</script>
+</body>
+</html>
