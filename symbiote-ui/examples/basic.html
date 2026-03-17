@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Symbiote Chat — Basic Example</title>
+  <style>
+    /* Host app theme (dark) */
+    :root {
+      --primary: #3B82F6;
+      --primary-hover: #2563eb;
+      --bg: #18181b;
+      --bg-secondary: #27272a;
+      --border: #3f3f46;
+      --text: #e4e4e7;
+      --text-muted: #a1a1aa;
+      --text-primary: #fff;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+    p { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem; }
+    code { background: var(--bg-secondary); padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <h1>Symbiote Chat — Basic Example</h1>
+  <p>Click the FAB button in the bottom-right corner to open the chat panel.</p>
+  <p>This example uses a <code>MockAdapter</code> that echoes messages back with a delay.</p>
+
+  <!-- The component: one tag, fully configured via attributes -->
+  <symbiote-chat
+    name="Echo Bot"
+    placeholder="Type something..."
+    greeting="Hi! I'm Echo Bot."
+    greeting-sub="I'll repeat what you say and show tool badge examples."
+    session-key="example-basic"
+    fab-label="Chat"
+  ></symbiote-chat>
+
+  <script src="../dist/symbiote-chat.js"></script>
+  <script>
+    const chat = document.querySelector('symbiote-chat');
+
+    // Mock adapter — simulates a backend
+    chat.adapter = {
+      _history: [],
+
+      async sendMessage(message, context) {
+        // Simulate network delay
+        await new Promise(r => setTimeout(r, 800));
+
+        const response = `You said: **${message}**\n\nI received ${context.length || 0} chars of context.`;
+
+        // Simulate tool results on certain keywords
+        let tool_results = null;
+        if (message.toLowerCase().includes('tool')) {
+          tool_results = [
+            { tool_id: 'search_items', success: true, output: [{id: '1', title: 'Example Item'}] },
+            { tool_id: 'list_journals', success: true, output: ['Journal A', 'Journal B'] },
+          ];
+        }
+        if (message.toLowerCase().includes('error')) {
+          tool_results = [
+            { tool_id: 'delete_item', success: false, error: 'Permission denied' },
+          ];
+        }
+
+        // Store in history
+        this._history.push({ role: 'user', content: message });
+        this._history.push({ role: 'assistant', content: response });
+
+        return {
+          response,
+          suggestions: ['Tell me more', 'Show tools', 'Simulate error'],
+          tool_results,
+        };
+      },
+
+      async loadHistory(sessionKey) {
+        return { messages: [...this._history] };
+      },
+
+      async clearHistory(sessionKey) {
+        this._history = [];
+      },
+    };
+
+    // Initial suggestions
+    chat.initialSuggestions = [
+      { label: 'Say hello', message: 'Hello!' },
+      { label: 'Show tools', message: 'Show me a tool example' },
+      { label: 'Trigger error', message: 'Show an error badge' },
+    ];
+
+    // Context provider
+    chat.contextProvider = () => {
+      return `Page title: ${document.title}\nURL: ${window.location.href}`;
+    };
+
+    // Listen to events
+    chat.addEventListener('symbiote-message-sent', e => {
+      console.log('[event] message sent:', e.detail.message);
+    });
+    chat.addEventListener('symbiote-message-received', e => {
+      console.log('[event] message received:', e.detail);
+    });
+  </script>
+</body>
+</html>
