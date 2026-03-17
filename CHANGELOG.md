@@ -3,6 +3,24 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [0.1.8] — 2026-03-17
+
+### Added — Hosted Service (API + SDK)
+
+- [B-19] API Key Authentication — Bearer token auth with SHA-256 hashed keys, tenant isolation, admin/user roles (`api/auth.py`, `api/middleware.py`)
+- [B-20] Chat Endpoint — `POST /sessions/{id}/chat` calls `kernel.message()` with LLM + tools via HTTP API (`api/http.py`)
+- [B-21] Multi-tenant Isolation — `owner_id` set on symbiote creation, tenant check on chat and get endpoints
+- [B-22] Python SDK — `SymbioteClient` thin HTTP client with httpx, context manager, full API coverage (`sdk/client.py`)
+- Admin endpoints: `POST/GET/DELETE /admin/api-keys` for key lifecycle management
+- Dev mode: `SYMBIOTE_DEV_MODE=1` env var for local development without auth
+
+### Changed
+
+- All mutation endpoints now require `Authorization: Bearer sk-symbiote_...` header
+- Symbiote creation via API sets `owner_id` from authenticated tenant
+- `GET /symbiotes/{id}` enforces tenant ownership check
+- `POST /sessions/{id}/chat` verifies session belongs to authenticated tenant
+
 ## [0.1.7] — 2026-03-17
 
 ### Added — Security & Quality (nanobot report)

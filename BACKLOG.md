@@ -7,16 +7,16 @@
 | # | Descrição | Origem | Prioridade | Status |
 |---|-----------|--------|------------|--------|
 | 7 | MCP Integration via forge-llm (McpToolProvider → ToolGateway → PolicyGate) | dev | baixa | pending |
-| 19 | API Key Auth Middleware — Bearer token auth com gestão de keys por tenant | dev | critica | pending |
-| 20 | Chat Endpoint — POST /sessions/{id}/chat que executa kernel.message() com LLM + tools | dev | critica | pending |
-| 21 | Multi-tenant Isolation — dados isolados por API key/tenant no mesmo DB | dev | alta | pending |
-| 22 | Python SDK — symbiote-sdk package com SymbioteClient thin HTTP client | dev | alta | pending |
 | 23 | Deploy Hosted — porta, domínio, nginx, CI para Symbiote como serviço | dev | alta | pending |
 
 ## Implementadas
 
 | # | Descrição | Implementada em | Versão |
 |---|-----------|-----------------|--------|
+| 19 | API Key Auth — Bearer token, SHA-256, tenant isolation, admin/user roles | 2026-03-17 | 0.1.8 |
+| 20 | Chat Endpoint — POST /sessions/{id}/chat com kernel.message() | 2026-03-17 | 0.1.8 |
+| 21 | Multi-tenant Isolation — owner_id enforcement em endpoints | 2026-03-17 | 0.1.8 |
+| 22 | Python SDK — SymbioteClient thin HTTP client com httpx | 2026-03-17 | 0.1.8 |
 | 14 | SSRF Protection — validação de IP + redirect guard em HTTP tools | 2026-03-17 | 0.1.7 |
 | 15 | Untrusted Content Banner — anti-prompt-injection em respostas HTTP | 2026-03-17 | 0.1.7 |
 | 18 | Tool Call Pair Consistency — trim alinhado a turn boundaries | 2026-03-17 | 0.1.7 |

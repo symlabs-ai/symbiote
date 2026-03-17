@@ -1,6 +1,6 @@
 # SPEC.md — Symbiote
 
-> Versão: 0.1.7
+> Versão: 0.1.8
 > MVP entregue em: 2026-03-16
 > Última atualização: 2026-03-17
 > Status: maintenance
@@ -66,6 +66,15 @@ Symbiote é um kernel Python para construir entidades cognitivas persistentes. M
 | Tool Call Pair Consistency — trim de WorkingMemory alinhado a turn boundaries | B-18 | ✅ Entregue | security-sprint |
 | GenerationSettings — temperature/max_tokens/reasoning_effort pass-through | B-17 | ✅ Entregue | security-sprint |
 | Async Memory Consolidation — trim imediato + LLM summarization em background | B-16 | ✅ Entregue | security-sprint |
+
+### Pós-MVP (Sprint Hosted Service — 2026-03-17)
+
+| Feature | Backlog | Status | Sprint |
+|---------|---------|--------|--------|
+| API Key Auth — Bearer token com SHA-256, tenant isolation, admin/user roles | B-19 | ✅ Entregue | hosted-sprint |
+| Chat Endpoint — POST /sessions/{id}/chat com kernel.message() via HTTP | B-20 | ✅ Entregue | hosted-sprint |
+| Multi-tenant Isolation — owner_id enforcement, tenant scoping em endpoints | B-21 | ✅ Entregue | hosted-sprint |
+| Python SDK — SymbioteClient thin HTTP client com httpx | B-22 | ✅ Entregue | hosted-sprint |
 
 ### O que está fora do escopo
 

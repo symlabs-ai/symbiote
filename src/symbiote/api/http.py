@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -10,9 +11,13 @@ from pydantic import BaseModel
 from starlette.requests import Request
 
 from symbiote.adapters.storage.sqlite import SQLiteAdapter
+from symbiote.api.auth import APIKey, APIKeyManager
+from symbiote.api.middleware import require_admin, require_auth, set_key_manager
 from symbiote.config.models import KernelConfig
 from symbiote.core.exceptions import EntityNotFoundError, SymbioteError, ValidationError
 from symbiote.core.identity import IdentityManager
+from symbiote.core.kernel import SymbioteKernel
+from symbiote.core.ports import LLMPort
 from symbiote.core.session import SessionManager
 from symbiote.environment.descriptors import HttpToolConfig, ToolDescriptor
 from symbiote.environment.manager import EnvironmentManager
@@ -22,7 +27,7 @@ from symbiote.memory.store import MemoryStore
 
 # ── FastAPI app ───────────────────────────────────────────────────────────
 
-app = FastAPI(title="Symbiote API", version="0.2.0")
+app = FastAPI(title="Symbiote API", version="0.1.7")
 
 
 @app.get("/health")
@@ -121,6 +126,17 @@ class ToolDescriptorResponse(BaseModel):
     handler_type: str
 
 
+class ChatRequest(BaseModel):
+    content: str
+    extra_context: dict | None = None
+    generation_settings: dict | None = None
+
+
+class ChatResponse(BaseModel):
+    response: str | dict
+    session_id: str
+
+
 class ToolExecRequest(BaseModel):
     params: dict[str, Any] = {}
 
@@ -136,6 +152,18 @@ class ToolExecResponse(BaseModel):
 
 _adapter: SQLiteAdapter | None = None
 _tool_gateway: ToolGateway | None = None
+_kernel: SymbioteKernel | None = None
+_key_manager: APIKeyManager | None = None
+
+
+def _resolve_llm() -> LLMPort | None:
+    """Resolve LLM adapter from env."""
+    provider = os.environ.get("SYMBIOTE_LLM_PROVIDER")
+    if not provider or provider == "mock":
+        return None
+    from symbiote.adapters.llm.forge import ForgeLLMAdapter
+
+    return ForgeLLMAdapter(provider=provider)
 
 
 def get_adapter() -> SQLiteAdapter:
@@ -145,7 +173,31 @@ def get_adapter() -> SQLiteAdapter:
         config = KernelConfig()
         _adapter = SQLiteAdapter(db_path=config.db_path)
         _adapter.init_schema()
+
+        # Init API key schema
+        global _key_manager
+        _key_manager = APIKeyManager(_adapter)
+        _key_manager.init_schema()
+        set_key_manager(_key_manager)
+
     return _adapter
+
+
+def get_kernel() -> SymbioteKernel:
+    """Return the singleton SymbioteKernel with LLM."""
+    global _kernel
+    if _kernel is None:
+        config = KernelConfig()
+        llm = _resolve_llm()
+        _kernel = SymbioteKernel(config=config, llm=llm)
+
+        # Init API key schema on the kernel's storage
+        global _key_manager
+        _key_manager = APIKeyManager(_kernel._storage)
+        _key_manager.init_schema()
+        set_key_manager(_key_manager)
+
+    return _kernel
 
 
 def get_identity_manager(
@@ -189,12 +241,14 @@ def get_tool_gateway(
 @app.post("/symbiotes", status_code=201, response_model=SymbioteResponse)
 def create_symbiote(
     body: CreateSymbioteRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
     identity: Annotated[IdentityManager, Depends(get_identity_manager)],
 ) -> SymbioteResponse:
     sym = identity.create(
         name=body.name,
         role=body.role,
         persona=body.persona_json,
+        owner_id=auth.tenant_id,
     )
     return SymbioteResponse(
         id=sym.id,
@@ -207,11 +261,14 @@ def create_symbiote(
 @app.get("/symbiotes/{symbiote_id}", response_model=SymbioteResponse)
 def get_symbiote(
     symbiote_id: str,
+    auth: Annotated[APIKey, Depends(require_auth)],
     identity: Annotated[IdentityManager, Depends(get_identity_manager)],
 ) -> SymbioteResponse:
     sym = identity.get(symbiote_id)
     if sym is None:
         raise HTTPException(status_code=404, detail="Symbiote not found")
+    if sym.owner_id and sym.owner_id != auth.tenant_id:
+        raise HTTPException(status_code=403, detail="Access denied")
     return SymbioteResponse(
         id=sym.id,
         name=sym.name,
@@ -456,3 +513,113 @@ def exec_tool(
         output=result.output,
         error=result.error,
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# CHAT — LLM-powered conversation endpoint (B-20)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+@app.post("/sessions/{session_id}/chat", response_model=ChatResponse)
+def chat(
+    session_id: str,
+    body: ChatRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
+) -> ChatResponse:
+    """Send a message and get an LLM response with tool execution.
+
+    This is the main endpoint for conversational interaction with a Symbiota.
+    The kernel assembles context, calls the LLM, executes any tool calls,
+    and returns the response. Tenant isolation is enforced via session ownership.
+    """
+    # Tenant isolation: verify session belongs to a symbiote owned by this tenant
+    row = kernel._storage.fetch_one(
+        "SELECT s.symbiote_id, sym.owner_id FROM sessions s "
+        "JOIN symbiotes sym ON s.symbiote_id = sym.id "
+        "WHERE s.id = ?",
+        (session_id,),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if row["owner_id"] and row["owner_id"] != auth.tenant_id:
+        raise HTTPException(status_code=403, detail="Session belongs to another tenant")
+
+    response = kernel.message(
+        session_id=session_id,
+        content=body.content,
+        extra_context=body.extra_context,
+    )
+    return ChatResponse(response=response, session_id=session_id)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# API KEY MANAGEMENT (B-19)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class CreateAPIKeyRequest(BaseModel):
+    tenant_id: str
+    name: str
+    role: str = "user"
+
+
+class APIKeyResponse(BaseModel):
+    id: str
+    tenant_id: str
+    name: str
+    key_prefix: str
+    role: str
+    raw_key: str | None = None  # Only returned on create
+
+
+@app.post("/admin/api-keys", status_code=201, response_model=APIKeyResponse)
+def create_api_key(
+    body: CreateAPIKeyRequest,
+    auth: Annotated[APIKey, Depends(require_admin)],
+) -> APIKeyResponse:
+    """Create a new API key (admin only)."""
+    if _key_manager is None:
+        raise HTTPException(status_code=500, detail="Key manager not initialized")
+    api_key, raw_key = _key_manager.create_key(
+        tenant_id=body.tenant_id, name=body.name, role=body.role
+    )
+    return APIKeyResponse(
+        id=api_key.id,
+        tenant_id=api_key.tenant_id,
+        name=api_key.name,
+        key_prefix=api_key.key_prefix,
+        role=api_key.role,
+        raw_key=raw_key,
+    )
+
+
+@app.get("/admin/api-keys/{tenant_id}", response_model=list[APIKeyResponse])
+def list_api_keys(
+    tenant_id: str,
+    auth: Annotated[APIKey, Depends(require_admin)],
+) -> list[APIKeyResponse]:
+    """List API keys for a tenant (admin only)."""
+    if _key_manager is None:
+        raise HTTPException(status_code=500, detail="Key manager not initialized")
+    keys = _key_manager.list_keys(tenant_id)
+    return [
+        APIKeyResponse(
+            id=k.id, tenant_id=k.tenant_id, name=k.name,
+            key_prefix=k.key_prefix, role=k.role,
+        )
+        for k in keys
+    ]
+
+
+@app.delete("/admin/api-keys/{key_id}", status_code=200)
+def revoke_api_key(
+    key_id: str,
+    auth: Annotated[APIKey, Depends(require_admin)],
+) -> dict:
+    """Revoke an API key (admin only)."""
+    if _key_manager is None:
+        raise HTTPException(status_code=500, detail="Key manager not initialized")
+    if not _key_manager.revoke_key(key_id):
+        raise HTTPException(status_code=404, detail="API key not found")
+    return {"revoked": key_id}
