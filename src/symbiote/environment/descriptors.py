@@ -16,6 +16,17 @@ class ToolDescriptor(BaseModel):
     parameters: dict = Field(default_factory=dict)  # JSON Schema
     handler_type: Literal["builtin", "http", "custom"] = "custom"
 
+    def to_openai_schema(self) -> dict:
+        """Convert to OpenAI function calling format."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.tool_id,
+                "description": self.description,
+                "parameters": self.parameters or {"type": "object", "properties": {}},
+            },
+        }
+
 
 class HttpToolConfig(BaseModel):
     """Declarative HTTP tool definition."""
@@ -41,3 +52,34 @@ class ToolCallResult(BaseModel):
     success: bool
     output: Any = None
     error: str | None = None
+
+
+# ── Native function calling models ──────────────────────────────────────────
+
+
+class NativeToolCall(BaseModel):
+    """A tool call returned by the LLM via native function calling.
+
+    Maps to ToolCall for execution but carries the provider's call_id
+    so the host can correlate results back to the provider if needed.
+    """
+
+    call_id: str | None = None  # provider-assigned ID (e.g. OpenAI tool_call.id)
+    tool_id: str
+    params: dict[str, Any] = Field(default_factory=dict)
+
+    def to_tool_call(self) -> ToolCall:
+        """Convert to a ToolCall for gateway execution."""
+        return ToolCall(tool_id=self.tool_id, params=self.params)
+
+
+class LLMResponse(BaseModel):
+    """Structured response from an LLM that may contain native tool calls.
+
+    When an LLM adapter supports native function calling, it returns this
+    instead of a plain str.  ChatRunner detects the type and uses native
+    tool_calls directly, skipping text-based parsing.
+    """
+
+    content: str = ""
+    tool_calls: list[NativeToolCall] = Field(default_factory=list)

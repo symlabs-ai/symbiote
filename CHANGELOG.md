@@ -3,6 +3,23 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [0.2.0] — 2026-03-17
+
+### Added — Native Function Calling
+
+- `LLMResponse` model — structured return type for LLM adapters with optional `tool_calls` field
+- `NativeToolCall` model — represents a provider-native tool call with `call_id`, `tool_id`, `params`
+- `ToolDescriptor.to_openai_schema()` — converts tool descriptors to OpenAI function calling format
+- `LLMPort.complete()` now accepts optional `tools` parameter for native tool definitions
+- `ChatRunner(native_tools=True)` — opt-in flag to use native function calling instead of text-based parsing
+- When `native_tools=True`, tool definitions are passed to the LLM via the `tools` parameter and text-based `tool_call` instructions are omitted from the system prompt
+- Full backward compatibility: adapters returning `str` continue to work via text-based parsing
+
+### Changed
+
+- `LLMPort.complete()` signature expanded: `tools: list[dict] | None = None` parameter added
+- `ChatRunner` detects `LLMResponse` vs `str` return type automatically
+
 ## [0.1.8] — 2026-03-17
 
 ### Added — Hosted Service (API + SDK)

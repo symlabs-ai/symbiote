@@ -48,13 +48,15 @@ class ForgeLLMAdapter:
         except Exception as exc:
             raise LLMError(str(exc)) from exc
 
-    def complete(self, messages: list[dict], config: dict | None = None) -> str:
+    def complete(self, messages: list[dict], config: dict | None = None, tools: list[dict] | None = None) -> str:
         """Send messages to the LLM and return the text response.
 
         Args:
             messages: Chat messages as dicts with 'role' and 'content'.
             config: Optional generation settings (temperature, max_tokens, etc.)
                     from GenerationSettings.to_config_dict().
+            tools: Optional native tool definitions (not used by ForgeLLM adapter,
+                   hosts should implement their own adapter for native function calling).
         """
         try:
             chat_messages = [

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from symbiote.environment.descriptors import (
     HttpToolConfig,
+    LLMResponse,
+    NativeToolCall,
     ToolCall,
     ToolCallResult,
     ToolDescriptor,
@@ -80,3 +82,83 @@ class TestToolCallResult:
         r = ToolCallResult(tool_id="pub", success=False, error="not found")
         assert r.success is False
         assert r.output is None
+
+
+# ── Native function calling models ──────────────────────────────────────────
+
+
+class TestNativeToolCall:
+    def test_create_minimal(self) -> None:
+        tc = NativeToolCall(tool_id="search", params={"q": "test"})
+        assert tc.tool_id == "search"
+        assert tc.call_id is None
+        assert tc.params == {"q": "test"}
+
+    def test_create_with_call_id(self) -> None:
+        tc = NativeToolCall(
+            call_id="call_abc123",
+            tool_id="publish",
+            params={"id": "42"},
+        )
+        assert tc.call_id == "call_abc123"
+        assert tc.tool_id == "publish"
+
+    def test_to_tool_call(self) -> None:
+        tc = NativeToolCall(
+            call_id="call_xyz",
+            tool_id="search",
+            params={"q": "news"},
+        )
+        converted = tc.to_tool_call()
+        assert isinstance(converted, ToolCall)
+        assert converted.tool_id == "search"
+        assert converted.params == {"q": "news"}
+
+
+class TestLLMResponse:
+    def test_create_text_only(self) -> None:
+        r = LLMResponse(content="Hello!")
+        assert r.content == "Hello!"
+        assert r.tool_calls == []
+
+    def test_create_with_tool_calls(self) -> None:
+        r = LLMResponse(
+            content="I'll search for that.",
+            tool_calls=[
+                NativeToolCall(call_id="c1", tool_id="search", params={"q": "test"}),
+            ],
+        )
+        assert r.content == "I'll search for that."
+        assert len(r.tool_calls) == 1
+        assert r.tool_calls[0].tool_id == "search"
+
+    def test_empty_content_default(self) -> None:
+        r = LLMResponse(
+            tool_calls=[NativeToolCall(tool_id="list", params={})]
+        )
+        assert r.content == ""
+        assert len(r.tool_calls) == 1
+
+
+class TestToolDescriptorOpenAISchema:
+    def test_to_openai_schema(self) -> None:
+        d = ToolDescriptor(
+            tool_id="search",
+            name="Search",
+            description="Search items",
+            parameters={
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+                "required": ["q"],
+            },
+        )
+        schema = d.to_openai_schema()
+        assert schema["type"] == "function"
+        assert schema["function"]["name"] == "search"
+        assert schema["function"]["description"] == "Search items"
+        assert schema["function"]["parameters"]["required"] == ["q"]
+
+    def test_to_openai_schema_empty_params(self) -> None:
+        d = ToolDescriptor(tool_id="list", name="List", description="List all")
+        schema = d.to_openai_schema()
+        assert schema["function"]["parameters"] == {"type": "object", "properties": {}}

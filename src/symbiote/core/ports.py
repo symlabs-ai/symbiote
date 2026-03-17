@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from symbiote.environment.descriptors import LLMResponse
 
 
 class StoragePort(Protocol):
@@ -19,9 +22,21 @@ class StoragePort(Protocol):
 
 @runtime_checkable
 class LLMPort(Protocol):
-    """Structural interface for LLM adapters."""
+    """Structural interface for LLM adapters.
 
-    def complete(self, messages: list[dict], config: dict | None = None) -> str: ...
+    Adapters may return either:
+    - ``str`` — plain text (backward compatible, text-based tool parsing applies)
+    - ``LLMResponse`` — structured response with optional native tool_calls
+
+    Hosts that don't use native function calling can keep returning ``str``.
+    """
+
+    def complete(
+        self,
+        messages: list[dict],
+        config: dict | None = None,
+        tools: list[dict] | None = None,
+    ) -> str | LLMResponse: ...
 
 
 class MemoryPort(Protocol):

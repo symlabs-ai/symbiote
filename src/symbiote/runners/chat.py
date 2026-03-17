@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from symbiote.core.context import AssembledContext
 from symbiote.core.models import Message
 from symbiote.core.ports import LLMPort
-from symbiote.environment.descriptors import ToolCallResult
+from symbiote.environment.descriptors import LLMResponse, ToolCallResult
 from symbiote.environment.parser import parse_tool_calls
 from symbiote.environment.runtime_context import inject_runtime_context
 from symbiote.memory.working import WorkingMemory
@@ -42,26 +42,48 @@ class ChatRunner:
         working_memory: WorkingMemory | None = None,
         tool_gateway: ToolGateway | None = None,
         consolidator: MemoryConsolidator | None = None,
+        *,
+        native_tools: bool = False,
     ) -> None:
         self._llm = llm
         self._working_memory = working_memory
         self._tool_gateway = tool_gateway
         self._consolidator = consolidator
+        self._native_tools = native_tools
 
     def can_handle(self, intent: str) -> bool:
         return intent in _HANDLED_INTENTS
 
     def run(self, context: AssembledContext) -> RunResult:
         messages = self._build_messages(context)
+
+        # Build native tool definitions if enabled
+        native_tool_defs: list[dict] | None = None
+        if self._native_tools and context.available_tools:
+            from symbiote.environment.descriptors import ToolDescriptor
+
+            native_tool_defs = [
+                ToolDescriptor(**t).to_openai_schema() for t in context.available_tools
+            ]
+
         try:
-            response = self._llm.complete(messages, config=context.generation_settings)
+            kwargs: dict = {"config": context.generation_settings}
+            if native_tool_defs is not None:
+                kwargs["tools"] = native_tool_defs
+            response = self._llm.complete(messages, **kwargs)
         except Exception as exc:
             return RunResult(success=False, error=str(exc), runner_type=self.runner_type)
 
-        # Parse and execute tool calls
-        clean_text, tool_calls = parse_tool_calls(response)
-        tool_results: list[ToolCallResult] = []
+        # Determine if response is native (LLMResponse) or text-based (str)
+        if isinstance(response, LLMResponse):
+            clean_text = response.content
+            tool_calls = [tc.to_tool_call() for tc in response.tool_calls]
+        else:
+            # Backward compatible: plain str — parse text-based tool calls
+            clean_text, tool_calls = parse_tool_calls(response)
 
+        # Execute tool calls
+        tool_results: list[ToolCallResult] = []
         if tool_calls and self._tool_gateway is not None:
             tool_results = self._tool_gateway.execute_tool_calls(
                 symbiote_id=context.symbiote_id,
@@ -123,8 +145,8 @@ class ChatRunner:
             parts.append("## Persona")
             parts.append(json.dumps(context.persona, indent=2, default=str))
 
-        # Available tools
-        if context.available_tools:
+        # Available tools (text-based instructions only when NOT using native tools)
+        if context.available_tools and not self._native_tools:
             parts.append("## Available Tools")
             parts.append(_TOOL_INSTRUCTIONS)
             for tool in context.available_tools:

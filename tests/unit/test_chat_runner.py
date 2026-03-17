@@ -21,7 +21,7 @@ class FakeLLM:
         self.last_messages: list[dict] | None = None
         self.last_config: dict | None = None
 
-    def complete(self, messages: list[dict], config: dict | None = None) -> str:
+    def complete(self, messages: list[dict], config: dict | None = None, tools: list[dict] | None = None) -> str:
         self.last_messages = messages
         self.last_config = config
         return self.response
@@ -30,7 +30,7 @@ class FakeLLM:
 class ErrorLLM:
     """LLM that always raises."""
 
-    def complete(self, messages: list[dict], config: dict | None = None) -> str:
+    def complete(self, messages: list[dict], config: dict | None = None, tools: list[dict] | None = None) -> str:
         raise RuntimeError("LLM connection failed")
 
 
