@@ -217,6 +217,95 @@ curl -X POST http://localhost:8000/sessions/<SESSION_ID>/close
 curl "http://localhost:8000/memory/search?query=type+hints&limit=5"
 ```
 
+## Chat UI (symbiote-ui)
+
+O diretório `symbiote-ui/` contém um Web Component reutilizável que adiciona um painel de chat a qualquer aplicação web. Funciona com qualquer framework (React, Vue, plain HTML) sem dependências externas.
+
+### Build
+
+```bash
+cd symbiote-ui
+./build.sh
+# → dist/symbiote-chat.js (~68KB)
+```
+
+### Integração
+
+Copie `dist/symbiote-chat.js` para os arquivos estáticos do seu app e adicione:
+
+```html
+<script src="/static/symbiote-chat.js"></script>
+
+<symbiote-chat
+  name="Atlas"
+  avatar="/img/avatar.png"
+  placeholder="Pergunte algo..."
+  greeting="Oi! Sou o Atlas."
+  greeting-sub="Como posso ajudar?"
+  session-key="/current-page"
+></symbiote-chat>
+
+<script>
+  const chat = document.querySelector('symbiote-chat');
+
+  // Conectar ao backend (adapter pattern — 3 métodos)
+  chat.adapter = {
+    async sendMessage(message, context) {
+      const resp = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, context }),
+      });
+      return resp.json();
+      // Retorno esperado: { response: string, suggestions?: string[], tool_results?: ToolResult[] }
+    },
+    async loadHistory(sessionKey) {
+      const resp = await fetch(`/api/history?key=${encodeURIComponent(sessionKey)}`);
+      return resp.json();
+      // Retorno esperado: { messages: [{role, content}] }
+    },
+    async clearHistory(sessionKey) {
+      await fetch(`/api/clear?key=${encodeURIComponent(sessionKey)}`, { method: 'POST' });
+    },
+  };
+
+  // Opcional: sugestões iniciais
+  chat.initialSuggestions = [
+    { label: 'O que posso fazer?', message: 'O que posso fazer?' },
+    { label: 'Resumir', message: 'Resuma o conteúdo' },
+  ];
+
+  // Opcional: contexto da página (chamado a cada envio)
+  chat.contextProvider = () => document.title;
+</script>
+```
+
+### Theming
+
+O componente herda CSS variables do host. Defina no `:root` ou no elemento:
+
+```css
+:root {
+  --symbiote-primary: #3B82F6;
+  --symbiote-bg: #18181b;
+  --symbiote-text: #e4e4e7;
+  --symbiote-border: #3f3f46;
+}
+```
+
+### Recursos
+
+- Shadow DOM (estilos isolados do host)
+- Markdown rendering (marked.js embutido)
+- Tool badges (verde/vermelho para resultados de tools)
+- Sugestões de follow-up clicáveis
+- Responsivo (mobile-friendly)
+- Eventos: `symbiote-open`, `symbiote-close`, `symbiote-message-sent`, `symbiote-message-received`
+
+Documentação completa: [`symbiote-ui/README.md`](symbiote-ui/README.md)
+
+---
+
 ## Configuração de LLM
 
 ```bash
