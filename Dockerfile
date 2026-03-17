@@ -1,12 +1,13 @@
 # Symbiote — Docker container for HTTP service mode
 #
 # Build:  docker build -t symbiote .
-# Run:    docker run -p 8000:8000 -v symbiote-data:/data symbiote
+# Run:    docker run -p 8008:8008 -v symbiote-data:/data symbiote
 #
 # Environment variables:
-#   SYMBIOTE_DB_PATH    — SQLite path (default: /data/symbiote.db)
+#   SYMBIOTE_DB_PATH      — SQLite path (default: /data/symbiote.db)
 #   SYMBIOTE_LLM_PROVIDER — LLM provider (default: mock)
-#   ANTHROPIC_API_KEY   — API key for Anthropic provider
+#   SYMGATEWAY_API_KEY    — API key for SymGateway provider
+#   SYMGATEWAY_BASE_URL   — SymGateway base URL
 
 FROM python:3.12-slim AS base
 
@@ -43,9 +44,9 @@ ENV SYMBIOTE_DB_PATH=/data/symbiote.db
 ENV SYMBIOTE_LLM_PROVIDER=mock
 ENV PYTHONPATH=/app/src
 
-EXPOSE 8000
+EXPOSE 8008
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8008/health')" || exit 1
 
-CMD ["uvicorn", "symbiote.api.http:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "symbiote.api.http:app", "--host", "127.0.0.1", "--port", "8008"]

@@ -1,0 +1,28 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: linux
+    steps:
+      - name: Pull latest code
+        run: |
+          cd ~/staging/repos/symbiote
+          git pull origin main
+
+      - name: Install dependencies
+        run: |
+          cd ~/staging/repos/symbiote
+          .venv/bin/pip install --quiet .
+
+      - name: Restart service
+        run: |
+          sudo systemctl restart symbiote-staging
+
+      - name: Health check
+        run: |
+          sleep 3
+          curl -sf http://localhost:8008/health > /dev/null && echo "Symbiote staging OK" || echo "WARNING: health check failed"
