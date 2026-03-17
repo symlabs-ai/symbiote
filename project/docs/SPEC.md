@@ -1,8 +1,8 @@
 # SPEC.md — Symbiote
 
-> Versão: 0.1.0
+> Versão: 0.2.0
 > MVP entregue em: 2026-03-16
-> Última atualização: 2026-03-16
+> Última atualização: 2026-03-17
 > Status: maintenance
 
 ---
@@ -40,6 +40,23 @@ Symbiote é um kernel Python para construir entidades cognitivas persistentes. M
 | Export Markdown auditável (sessões, memórias, decisões) | US-13 | ✅ Entregue | cycle-01 |
 | Biblioteca Python + CLI + API HTTP | US-14 | ✅ Entregue | cycle-01 |
 
+### Pós-MVP (Sprint Backlog — 2026-03-17)
+
+| Feature | Backlog | Status | Sprint |
+|---------|---------|--------|--------|
+| Tool Error Hints — retry hints automáticos em tool calls com erro | B-8 | ✅ Entregue | backlog-sprint |
+| Runtime Context Strip — metadata efêmera no prompt sem poluir histórico | B-9 | ✅ Entregue | backlog-sprint |
+| MessageRepository port — isolamento de SQL do ReflectionEngine | B-3 | ✅ Entregue | backlog-sprint |
+| Memory Consolidation — sumarização via LLM quando tokens excedem threshold | B-10 | ✅ Entregue | backlog-sprint |
+| Subagent Spawning — delegação entre Symbiotas com recursion guard | B-11 | ✅ Entregue | backlog-sprint |
+| MessageBus — fila async inbound/outbound para channels | B-12 | ✅ Entregue | backlog-sprint |
+| Progressive Skills — skills .md com carregamento lazy | B-13 | ✅ Entregue | backlog-sprint |
+| Semantic Recall — busca por keywords com scoring | B-4 | ✅ Entregue | backlog-sprint |
+| ProcessEngine Cache Invalidation — TTL-based com invalidate_cache() | B-6 | ✅ Entregue | backlog-sprint |
+| Interactive CLI Chat — REPL loop com /quit, /reflect | B-2 | ✅ Entregue | backlog-sprint |
+| LLM E2E Integration Tests — 5 testes skipáveis para LLM real | B-5 | ✅ Entregue | backlog-sprint |
+| Docker Container — multi-stage Dockerfile com health check | B-1 | ✅ Entregue | backlog-sprint |
+
 ### O que está fora do escopo
 
 - Multi-tenant completo
@@ -48,7 +65,6 @@ Symbiote é um kernel Python para construir entidades cognitivas persistentes. M
 - Interface visual rica (UI web)
 - Voz e multimodalidade avançada
 - Treinamento/fine-tuning do modelo
-- Orquestração distribuída de múltiplos simbiótas
 - Banco vetorial obrigatório
 - Colaboração multiusuário concorrente
 - Engine de agendamento complexo
@@ -135,28 +151,31 @@ Sessões, memórias e decisões exportáveis em Markdown legível.
 ## Arquitetura
 
 ```
-CLI / HTTP API / Python Library
+CLI / HTTP API / Python Library / MessageBus
         │
     SymbioteKernel (orchestrator)
         │
     CapabilitySurface (learn, teach, chat, work, show, reflect)
         │
-    ┌───┴───────────────────────────────┐
-    │  ContextAssembler  RunnerRegistry │  Cognitive Layer
-    │  ReflectionEngine  ProcessEngine  │
-    └───┬───────────────────────────────┘
-    ┌───┴───────────────────────────────┐
-    │  IdentityManager   SessionManager │
-    │  MemoryStore       KnowledgeService│  State Layer
-    │  WorkspaceManager  EnvironmentMgr │
-    └───┬───────────────────────────────┘
-    ┌───┴───────────────────────────────┐
-    │  SQLiteAdapter  ForgeLLMAdapter   │  Adapter Layer
-    │  ExportService  ToolGateway       │
-    └───┬───────────────────────────────┘
-    ┌───┴───────────────────────────────┐
-    │  SQLite DB  ·  Filesystem         │  Persistence
-    └───────────────────────────────────┘
+    ┌───┴───────────────────────────────────────┐
+    │  ContextAssembler    RunnerRegistry        │  Cognitive Layer
+    │  ReflectionEngine    ProcessEngine         │
+    │  MemoryConsolidator  SubagentManager       │
+    │  SkillsLoader        RuntimeContext        │
+    └───┬───────────────────────────────────────┘
+    ┌───┴───────────────────────────────────────┐
+    │  IdentityManager     SessionManager       │
+    │  MemoryStore         KnowledgeService      │  State Layer
+    │  WorkspaceManager    EnvironmentMgr        │
+    │  SemanticRecallProvider  MessageRepository │
+    └───┬───────────────────────────────────────┘
+    ┌───┴───────────────────────────────────────┐
+    │  SQLiteAdapter  ForgeLLMAdapter           │  Adapter Layer
+    │  ExportService  ToolGateway               │
+    └───┬───────────────────────────────────────┘
+    ┌───┴───────────────────────────────────────┐
+    │  SQLite DB  ·  Filesystem  ·  Docker      │  Persistence
+    └───────────────────────────────────────────┘
 ```
 
 > Diagramas: `project/docs/diagrams/` (class, components, database, architecture)
@@ -181,10 +200,12 @@ Ao finalizar uma feature (`/feature done`), SPEC.md é atualizado automaticament
 - Domain exceptions em `core/exceptions.py` — nunca usar `ValueError` ou `RuntimeError`
 - Testes em `tests/unit/` (com SQLiteAdapter real) e `tests/e2e/` (cenários ponta-a-ponta)
 - Smoke tests em `tests/smoke/` (shell scripts exercendo CLI real)
+- E2E LLM tests em `tests/e2e/` (skipáveis, `SYMBIOTE_E2E_LLM=1`)
 - datetime: sempre `fromisoformat()` explícito ao ler do DB
 - Tags/JSON: `json.dumps()` na escrita, `json.loads()` na leitura, coluna `*_json`
 - Commits no formato `feat(sprint-XX): descrição` ou `feat(T-XX): descrição`
 - Pre-commit hooks: ruff + trailing whitespace + end-of-file + check-yaml
+- Ports como Protocols: `MessagePort`, `MemoryPort`, `LLMPort`, `KnowledgePort`
 
 ---
 

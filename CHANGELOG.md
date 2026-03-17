@@ -3,6 +3,35 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [0.2.0] — 2026-03-17
+
+### Added — Nanobot-inspired Architecture
+
+- [B-8] Tool Error Hints — auto-inject retry hints on failed tool calls (`environment/tools.py`)
+- [B-9] Runtime Context Strip — ephemeral metadata in LLM prompts without polluting session history (`environment/runtime_context.py`)
+- [B-10] Memory Consolidation — LLM-based summarization of working memory when tokens exceed threshold (`memory/consolidator.py`)
+- [B-11] Subagent Spawning — inter-Symbiota task delegation with recursion guard and isolated sessions (`runners/subagent.py`)
+- [B-12] MessageBus — async inbound/outbound queues for channel decoupling (`bus/`)
+- [B-13] Progressive Skills — lazy-loaded .md skills with XML summary for system prompts (`skills/loader.py`)
+
+### Added — Original Backlog
+
+- [B-3] MessageRepository port — isolate SQL from ReflectionEngine via MessagePort protocol (`adapters/storage/message_repository.py`)
+- [B-4] Semantic Recall Provider — keyword-based memory scoring with tokenization and stop words (`memory/recall.py`)
+- [B-6] ProcessEngine Cache Invalidation — TTL-based cache with `invalidate_cache()` for multi-worker support (`process/engine.py`)
+- [B-2] Interactive CLI Chat — REPL loop with `/quit`, `/reflect` commands (`cli/main.py interactive`)
+- [B-5] LLM E2E Integration Tests — 5 skipable tests for real LLM validation (`tests/e2e/test_e2e_llm_integration.py`)
+- [B-1] Docker Container — multi-stage Dockerfile with health check endpoint, volume persistence
+
+### Changed
+
+- `ReflectionEngine` now depends on `MessagePort` instead of `StoragePort` (B-3)
+- `ChatRunner` now injects runtime context and supports optional `MemoryConsolidator` (B-9, B-10)
+- `ProcessEngine` constructor accepts `cache_ttl` parameter (B-6)
+- `ToolGateway.execute_tool_calls()` appends retry hint to error messages (B-8)
+- `SymbioteKernel` now creates `MessageRepository`, `SubagentManager`, registers spawn tool (B-3, B-11)
+- HTTP API: added `GET /health` endpoint (B-1)
+
 ## [MVP] — 2026-03-16
 
 ### Added
