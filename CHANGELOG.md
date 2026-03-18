@@ -3,6 +3,24 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [0.2.2] — 2026-03-18
+
+### Added — Internal Tools & Async Streaming (YouNews feedback)
+
+- `HttpToolConfig.allow_internal` — opt-in flag to bypass SSRF validation for tools that intentionally call loopback/private-network endpoints (e.g. same-host services); default `False` preserves existing protection
+- `kernel.message_async(session_id, content, on_token=...)` — async entry point for chat; eliminates manual `ContextVar`/`emit_event` workarounds in SSE integrations
+- `CapabilitySurface.chat_async()` — async variant of `chat()` that propagates `on_token` down to the runner
+- `on_token` callback in `ChatRunner.run()` and `run_async()`: called per-token when LLM exposes `stream()`, or once with full response as fallback
+
+## [0.2.1] — 2026-03-18
+
+### Added — Dynamic Auth Headers & Async Tool Handlers (YouNews feedback)
+
+- `HttpToolConfig.header_factory` — callable invoked per-request to supply dynamic headers (e.g. user-scoped auth tokens); eliminates `threading.local` workarounds in host integrations
+- `PolicyGate.execute_with_policy_async()` — async policy execution: awaits coroutine handlers, wraps sync handlers via `asyncio.to_thread`
+- `ToolGateway.execute_async()` / `execute_tool_calls_async()` — async execution path for tool calls
+- `ChatRunner.run_async()` — async runner variant that uses `execute_tool_calls_async()`, resolving single-worker event-loop deadlocks when tools call the same uvicorn process
+
 ## [0.2.0] — 2026-03-17
 
 ### Added — Native Function Calling
