@@ -169,10 +169,15 @@ class ChatRunner:
         try:
             if on_token is not None and hasattr(self._llm, "stream"):
                 chunks: list[str] = []
-                for token in self._llm.stream(messages, **kwargs):
-                    on_token(token)
-                    chunks.append(token)
-                response: str | LLMResponse = "".join(chunks)
+                response: str | LLMResponse = ""
+                for item in self._llm.stream(messages, **kwargs):
+                    if isinstance(item, LLMResponse):
+                        response = item
+                    else:
+                        on_token(item)
+                        chunks.append(item)
+                if not isinstance(response, LLMResponse):
+                    response = "".join(chunks)
             else:
                 response = self._llm.complete(messages, **kwargs)
                 if on_token is not None and isinstance(response, str):
