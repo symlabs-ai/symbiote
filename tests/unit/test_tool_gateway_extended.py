@@ -260,3 +260,134 @@ class TestExecuteToolCalls:
         )
         assert len(results) == 1
         assert results[0].success is False
+
+
+# ── header_factory (dynamic auth) ─────────────────────────────────────────
+
+
+class TestHeaderFactory:
+    """HTTP tools with dynamic per-request auth headers via header_factory."""
+
+    def test_header_factory_called_per_request(
+        self, gw: ToolGateway, env_manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        call_log: list[str] = []
+        tokens = iter(["token-A", "token-B"])
+
+        def factory() -> dict[str, str]:
+            tok = next(tokens)
+            call_log.append(tok)
+            return {"Authorization": f"Bearer {tok}"}
+
+        desc = ToolDescriptor(tool_id="dyn_get", name="DynGet", description="Dynamic auth")
+        config = HttpToolConfig(
+            method="GET",
+            url_template="http://localhost:12345/items/{id}",
+            header_factory=factory,
+        )
+        gw.register_http_tool(desc, config)
+        env_manager.configure(symbiote_id=symbiote_id, tools=["dyn_get"])
+
+        import io
+        import json as _json
+
+        def make_mock():
+            body = io.BytesIO(_json.dumps({"ok": True}).encode())
+            body.__enter__ = lambda s: s
+            body.__exit__ = lambda s, *a: None
+            return body
+
+        with patch("symbiote.security.network.validate_url", return_value=None), \
+             patch("urllib.request.OpenerDirector.open", side_effect=lambda *a, **kw: make_mock()):
+            gw.execute(symbiote_id=symbiote_id, session_id=None, tool_id="dyn_get", params={"id": "1"})
+            gw.execute(symbiote_id=symbiote_id, session_id=None, tool_id="dyn_get", params={"id": "2"})
+
+        assert call_log == ["token-A", "token-B"]
+
+    def test_static_headers_still_work_without_factory(
+        self, gw: ToolGateway, env_manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        desc = ToolDescriptor(tool_id="static_get", name="StaticGet", description="Static auth")
+        config = HttpToolConfig(
+            method="GET",
+            url_template="http://localhost:12345/items",
+            headers={"X-Key": "abc"},
+        )
+        gw.register_http_tool(desc, config)
+        env_manager.configure(symbiote_id=symbiote_id, tools=["static_get"])
+
+        import io
+        import json as _json
+
+        body = io.BytesIO(_json.dumps({"items": []}).encode())
+        body.__enter__ = lambda s: s
+        body.__exit__ = lambda s, *a: None
+
+        with patch("symbiote.security.network.validate_url", return_value=None), \
+             patch("urllib.request.OpenerDirector.open", return_value=body):
+            result = gw.execute(
+                symbiote_id=symbiote_id, session_id=None, tool_id="static_get", params={}
+            )
+        assert result.success is True
+
+
+# ── async tool handlers ────────────────────────────────────────────────────
+
+
+class TestAsyncToolHandlers:
+    """Tools with async coroutine handlers via execute_tool_calls_async."""
+
+    @pytest.mark.asyncio
+    async def test_async_handler_executes(
+        self, gw: ToolGateway, env_manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        async def async_echo(params: dict) -> str:
+            return f"async:{params.get('msg', '')}"
+
+        gw.register_tool("async_echo", async_echo)
+        env_manager.configure(symbiote_id=symbiote_id, tools=["async_echo"])
+
+        calls = [ToolCall(tool_id="async_echo", params={"msg": "hello"})]
+        results = await gw.execute_tool_calls_async(
+            symbiote_id=symbiote_id,
+            session_id="sess-1",
+            calls=calls,
+        )
+        assert len(results) == 1
+        assert results[0].success is True
+        assert results[0].output == "async:hello"
+
+    @pytest.mark.asyncio
+    async def test_sync_handler_works_via_async_path(
+        self, gw: ToolGateway, env_manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        gw.register_tool("sync_add", lambda p: p.get("a", 0) + p.get("b", 0))
+        env_manager.configure(symbiote_id=symbiote_id, tools=["sync_add"])
+
+        calls = [ToolCall(tool_id="sync_add", params={"a": 3, "b": 4})]
+        results = await gw.execute_tool_calls_async(
+            symbiote_id=symbiote_id,
+            session_id="sess-1",
+            calls=calls,
+        )
+        assert results[0].success is True
+        assert results[0].output == 7
+
+    @pytest.mark.asyncio
+    async def test_async_handler_error_is_captured(
+        self, gw: ToolGateway, env_manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        async def failing(params: dict) -> str:
+            raise ValueError("async failure")
+
+        gw.register_tool("async_fail", failing)
+        env_manager.configure(symbiote_id=symbiote_id, tools=["async_fail"])
+
+        calls = [ToolCall(tool_id="async_fail", params={})]
+        results = await gw.execute_tool_calls_async(
+            symbiote_id=symbiote_id,
+            session_id=None,
+            calls=calls,
+        )
+        assert results[0].success is False
+        assert "async failure" in results[0].error

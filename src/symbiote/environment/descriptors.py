@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ToolDescriptor(BaseModel):
@@ -31,9 +32,15 @@ class ToolDescriptor(BaseModel):
 class HttpToolConfig(BaseModel):
     """Declarative HTTP tool definition."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "GET"
     url_template: str  # e.g. "http://127.0.0.1:8000/api/items/{id}/publish"
     headers: dict[str, str] = Field(default_factory=dict)
+    header_factory: Callable[[], dict[str, str]] | None = None
+    """Optional callable invoked per-request to supply dynamic headers (e.g. auth tokens).
+    Its return value is merged on top of ``headers`` at call time, so it can
+    override static headers as well as add new ones."""
     timeout: float = 30.0
     body_template: dict | None = None  # JSON body template with {param} placeholders
 

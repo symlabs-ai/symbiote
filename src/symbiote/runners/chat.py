@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from symbiote.core.context import AssembledContext
@@ -54,7 +55,21 @@ class ChatRunner:
     def can_handle(self, intent: str) -> bool:
         return intent in _HANDLED_INTENTS
 
-    def run(self, context: AssembledContext) -> RunResult:
+    def run(
+        self,
+        context: AssembledContext,
+        on_token: Callable[[str], None] | None = None,
+    ) -> RunResult:
+        """Run the chat runner synchronously.
+
+        Args:
+            context: Assembled context for this turn.
+            on_token: Optional callback invoked with each text token as it is
+                generated.  If the LLM adapter exposes a ``stream()`` method,
+                tokens are emitted incrementally; otherwise the callback is
+                called once with the full response text so callers (e.g. SSE
+                endpoints) don't need to branch on LLM capabilities.
+        """
         messages = self._build_messages(context)
 
         # Build native tool definitions if enabled
@@ -66,11 +81,21 @@ class ChatRunner:
                 ToolDescriptor(**t).to_openai_schema() for t in context.available_tools
             ]
 
+        kwargs: dict = {"config": context.generation_settings}
+        if native_tool_defs is not None:
+            kwargs["tools"] = native_tool_defs
+
         try:
-            kwargs: dict = {"config": context.generation_settings}
-            if native_tool_defs is not None:
-                kwargs["tools"] = native_tool_defs
-            response = self._llm.complete(messages, **kwargs)
+            if on_token is not None and hasattr(self._llm, "stream"):
+                chunks: list[str] = []
+                for token in self._llm.stream(messages, **kwargs):
+                    on_token(token)
+                    chunks.append(token)
+                response: str | LLMResponse = "".join(chunks)
+            else:
+                response = self._llm.complete(messages, **kwargs)
+                if on_token is not None and isinstance(response, str):
+                    on_token(response)
         except Exception as exc:
             return RunResult(success=False, error=str(exc), runner_type=self.runner_type)
 
@@ -101,6 +126,82 @@ class ChatRunner:
             )
 
             # Consolidate if working memory exceeds token threshold
+            if self._consolidator is not None:
+                self._consolidator.consolidate_if_needed(
+                    self._working_memory, context.symbiote_id
+                )
+
+        output = clean_text
+        if tool_results:
+            output = {
+                "text": clean_text,
+                "tool_results": [r.model_dump() for r in tool_results],
+            }
+
+        return RunResult(success=True, output=output, runner_type=self.runner_type)
+
+    async def run_async(
+        self,
+        context: AssembledContext,
+        on_token: Callable[[str], None] | None = None,
+    ) -> RunResult:
+        """Async variant of run() — awaits coroutine tool handlers.
+
+        Use this instead of run() when tool handlers may be async coroutines
+        (e.g. handlers that call internal services on the same event loop to
+        avoid the deadlock that arises with blocking urllib calls inside a
+        single-worker uvicorn process).
+        """
+        messages = self._build_messages(context)
+
+        native_tool_defs: list[dict] | None = None
+        if self._native_tools and context.available_tools:
+            from symbiote.environment.descriptors import ToolDescriptor
+
+            native_tool_defs = [
+                ToolDescriptor(**t).to_openai_schema() for t in context.available_tools
+            ]
+
+        kwargs: dict = {"config": context.generation_settings}
+        if native_tool_defs is not None:
+            kwargs["tools"] = native_tool_defs
+
+        try:
+            if on_token is not None and hasattr(self._llm, "stream"):
+                chunks: list[str] = []
+                for token in self._llm.stream(messages, **kwargs):
+                    on_token(token)
+                    chunks.append(token)
+                response: str | LLMResponse = "".join(chunks)
+            else:
+                response = self._llm.complete(messages, **kwargs)
+                if on_token is not None and isinstance(response, str):
+                    on_token(response)
+        except Exception as exc:
+            return RunResult(success=False, error=str(exc), runner_type=self.runner_type)
+
+        if isinstance(response, LLMResponse):
+            clean_text = response.content
+            tool_calls = [tc.to_tool_call() for tc in response.tool_calls]
+        else:
+            clean_text, tool_calls = parse_tool_calls(response)
+
+        tool_results: list[ToolCallResult] = []
+        if tool_calls and self._tool_gateway is not None:
+            tool_results = await self._tool_gateway.execute_tool_calls_async(
+                symbiote_id=context.symbiote_id,
+                session_id=context.session_id,
+                calls=tool_calls,
+            )
+
+        if self._working_memory is not None:
+            self._working_memory.update_message(
+                Message(
+                    session_id=context.session_id,
+                    role="assistant",
+                    content=clean_text,
+                )
+            )
             if self._consolidator is not None:
                 self._consolidator.consolidate_if_needed(
                     self._working_memory, context.symbiote_id

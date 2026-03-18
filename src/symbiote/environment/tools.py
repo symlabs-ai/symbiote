@@ -96,6 +96,65 @@ class ToolGateway:
         self._http_configs[descriptor.tool_id] = http_config
         self._registry[descriptor.tool_id] = _make_http_handler(http_config)
 
+    async def execute_async(
+        self,
+        symbiote_id: str,
+        session_id: str | None,
+        tool_id: str,
+        params: dict,
+        workspace_id: str | None = None,
+    ) -> ToolResult:
+        """Async variant of execute() — awaits coroutine handlers via the policy gate."""
+        if tool_id not in self._registry:
+            from symbiote.environment.policies import ToolResult
+
+            return ToolResult(
+                success=False,
+                tool_id=tool_id,
+                error="Tool not registered",
+            )
+        return await self._gate.execute_with_policy_async(
+            symbiote_id=symbiote_id,
+            session_id=session_id,
+            tool_id=tool_id,
+            params=params,
+            action_fn=self._registry[tool_id],
+            workspace_id=workspace_id,
+        )
+
+    async def execute_tool_calls_async(
+        self,
+        symbiote_id: str,
+        session_id: str | None,
+        calls: list,
+        workspace_id: str | None = None,
+    ) -> list[ToolCallResult]:
+        """Async variant of execute_tool_calls() — supports coroutine tool handlers."""
+        results: list[ToolCallResult] = []
+        for call in calls:
+            result = await self.execute_async(
+                symbiote_id=symbiote_id,
+                session_id=session_id,
+                tool_id=call.tool_id,
+                params=call.params,
+                workspace_id=workspace_id,
+            )
+            error_with_hint = result.error
+            if not result.success and result.error:
+                error_with_hint = (
+                    f"{result.error}\n"
+                    "[Hint: Analyze the error above and try a different approach.]"
+                )
+            results.append(
+                ToolCallResult(
+                    tool_id=call.tool_id,
+                    success=result.success,
+                    output=result.output,
+                    error=error_with_hint,
+                )
+            )
+        return results
+
     def unregister_tool(self, tool_id: str) -> bool:
         """Remove a tool from the registry. Returns True if it existed."""
         existed = tool_id in self._registry
@@ -233,6 +292,8 @@ def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
             body_bytes = _json.dumps(params).encode("utf-8")
 
         headers = dict(config.headers)
+        if config.header_factory is not None:
+            headers.update(config.header_factory())
         if body_bytes is not None and "Content-Type" not in headers:
             headers["Content-Type"] = "application/json"
 

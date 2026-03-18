@@ -200,3 +200,91 @@ class TestRun:
     def test_runner_type_is_chat(self) -> None:
         runner = ChatRunner(llm=FakeLLM())
         assert runner.runner_type == "chat"
+
+
+# ── on_token streaming hook ──────────────────────────────────────────────
+
+
+class StreamingFakeLLM:
+    """LLM that exposes a stream() method returning tokens one-by-one."""
+
+    def __init__(self, tokens: list[str]) -> None:
+        self._tokens = tokens
+
+    def complete(self, messages, config=None, tools=None) -> str:
+        return "".join(self._tokens)
+
+    def stream(self, messages, config=None, tools=None):
+        yield from self._tokens
+
+
+class TestOnTokenHook:
+    def test_on_token_called_with_streaming_llm(self) -> None:
+        llm = StreamingFakeLLM(["Hello", " ", "world"])
+        runner = ChatRunner(llm=llm)
+        ctx = _make_context()
+
+        received: list[str] = []
+        result = runner.run(ctx, on_token=received.append)
+
+        assert received == ["Hello", " ", "world"]
+        assert result.output == "Hello world"
+
+    def test_on_token_called_once_with_non_streaming_llm(self) -> None:
+        llm = FakeLLM(response="Full response")
+        runner = ChatRunner(llm=llm)
+        ctx = _make_context()
+
+        received: list[str] = []
+        result = runner.run(ctx, on_token=received.append)
+
+        assert received == ["Full response"]
+        assert result.output == "Full response"
+
+    def test_no_on_token_works_normally(self) -> None:
+        llm = FakeLLM(response="Normal")
+        runner = ChatRunner(llm=llm)
+        ctx = _make_context()
+
+        result = runner.run(ctx)
+
+        assert result.output == "Normal"
+
+
+# ── run_async ────────────────────────────────────────────────────────────
+
+
+class TestRunAsync:
+    @pytest.mark.asyncio
+    async def test_run_async_returns_result(self) -> None:
+        llm = FakeLLM(response="Async response")
+        runner = ChatRunner(llm=llm)
+        ctx = _make_context(user_input="Hello async")
+
+        result = await runner.run_async(ctx)
+
+        assert result.success is True
+        assert result.output == "Async response"
+        assert result.runner_type == "chat"
+
+    @pytest.mark.asyncio
+    async def test_run_async_on_token_with_streaming_llm(self) -> None:
+        llm = StreamingFakeLLM(["token1", " ", "token2"])
+        runner = ChatRunner(llm=llm)
+        ctx = _make_context()
+
+        received: list[str] = []
+        result = await runner.run_async(ctx, on_token=received.append)
+
+        assert received == ["token1", " ", "token2"]
+        assert result.output == "token1 token2"
+
+    @pytest.mark.asyncio
+    async def test_run_async_llm_error_returns_failure(self) -> None:
+        runner = ChatRunner(llm=ErrorLLM())
+        ctx = _make_context()
+
+        result = await runner.run_async(ctx)
+
+        assert result.success is False
+        assert result.error == "LLM connection failed"

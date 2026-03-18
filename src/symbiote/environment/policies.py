@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -83,6 +85,62 @@ class PolicyGate:
 
         try:
             output = action_fn(params)
+            self._write_audit(
+                symbiote_id=symbiote_id,
+                session_id=session_id,
+                tool_id=tool_id,
+                action="execute",
+                params=params,
+                result="success",
+            )
+            return ToolResult(success=True, tool_id=tool_id, output=output)
+        except Exception as exc:
+            self._write_audit(
+                symbiote_id=symbiote_id,
+                session_id=session_id,
+                tool_id=tool_id,
+                action="execute",
+                params=params,
+                result=f"error:{type(exc).__name__}",
+            )
+            return ToolResult(
+                success=False,
+                tool_id=tool_id,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+    async def execute_with_policy_async(
+        self,
+        symbiote_id: str,
+        session_id: str | None,
+        tool_id: str,
+        params: dict,
+        action_fn: Callable,
+        workspace_id: str | None = None,
+    ) -> ToolResult:
+        """Async variant: check policy, execute (awaiting coroutines), and audit."""
+        policy = self.check(symbiote_id, tool_id, workspace_id)
+
+        if not policy.allowed:
+            self._write_audit(
+                symbiote_id=symbiote_id,
+                session_id=session_id,
+                tool_id=tool_id,
+                action="blocked",
+                params=params,
+                result="blocked",
+            )
+            return ToolResult(
+                success=False,
+                tool_id=tool_id,
+                error=f"Tool '{tool_id}' blocked: {policy.reason}",
+            )
+
+        try:
+            if inspect.iscoroutinefunction(action_fn):
+                output = await action_fn(params)
+            else:
+                output = await asyncio.to_thread(action_fn, params)
             self._write_audit(
                 symbiote_id=symbiote_id,
                 session_id=session_id,

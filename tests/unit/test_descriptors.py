@@ -162,3 +162,30 @@ class TestToolDescriptorOpenAISchema:
         d = ToolDescriptor(tool_id="list", name="List", description="List all")
         schema = d.to_openai_schema()
         assert schema["function"]["parameters"] == {"type": "object", "properties": {}}
+
+
+class TestHttpToolConfigHeaderFactory:
+    def test_header_factory_default_none(self) -> None:
+        c = HttpToolConfig(url_template="http://localhost/api")
+        assert c.header_factory is None
+
+    def test_header_factory_accepts_callable(self) -> None:
+        token_store = {"value": "tok-123"}
+        c = HttpToolConfig(
+            url_template="http://localhost/api",
+            header_factory=lambda: {"Authorization": f"Bearer {token_store['value']}"},
+        )
+        assert c.header_factory is not None
+        assert c.header_factory() == {"Authorization": "Bearer tok-123"}
+
+    def test_header_factory_overrides_static_headers(self) -> None:
+        """header_factory return value should take precedence over static headers."""
+        c = HttpToolConfig(
+            url_template="http://localhost/api",
+            headers={"Authorization": "Bearer static"},
+            header_factory=lambda: {"Authorization": "Bearer dynamic"},
+        )
+        merged = dict(c.headers)
+        if c.header_factory:
+            merged.update(c.header_factory())
+        assert merged["Authorization"] == "Bearer dynamic"
