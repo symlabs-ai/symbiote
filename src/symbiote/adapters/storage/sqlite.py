@@ -134,6 +134,26 @@ CREATE TABLE IF NOT EXISTS persona_audit (
     new_persona_json TEXT NOT NULL,
     changed_at       TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS discovered_tools (
+    id             TEXT PRIMARY KEY,
+    symbiote_id    TEXT REFERENCES symbiotes(id),
+    tool_id        TEXT NOT NULL,
+    name           TEXT NOT NULL,
+    description    TEXT NOT NULL DEFAULT '',
+    handler_type   TEXT NOT NULL DEFAULT 'http',
+    method         TEXT,
+    url_template   TEXT,
+    parameters_json TEXT DEFAULT '{}',
+    status         TEXT NOT NULL DEFAULT 'pending',
+    source_path    TEXT,
+    discovered_at  TEXT NOT NULL,
+    approved_at    TEXT,
+    UNIQUE(symbiote_id, tool_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_discovered_tools_symbiote
+    ON discovered_tools(symbiote_id, status);
 """
 
 

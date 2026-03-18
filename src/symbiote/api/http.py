@@ -21,6 +21,9 @@ from symbiote.core.identity import IdentityManager
 from symbiote.core.kernel import SymbioteKernel
 from symbiote.core.ports import LLMPort
 from symbiote.core.session import SessionManager
+from symbiote.discovery.models import DiscoveredTool
+from symbiote.discovery.repository import DiscoveredToolRepository
+from symbiote.discovery.service import DiscoveryService
 from symbiote.environment.descriptors import HttpToolConfig, ToolDescriptor
 from symbiote.environment.manager import EnvironmentManager
 from symbiote.environment.policies import PolicyGate
@@ -148,6 +151,35 @@ class ToolExecResponse(BaseModel):
     error: str | None = None
 
 
+class DiscoverRequest(BaseModel):
+    source_path: str
+
+
+class DiscoveredToolResponse(BaseModel):
+    id: str
+    tool_id: str
+    name: str
+    description: str
+    handler_type: str
+    method: str | None = None
+    url_template: str | None = None
+    parameters: dict = {}
+    status: str
+    source_path: str | None = None
+    discovered_at: str
+    approved_at: str | None = None
+
+
+class DiscoverResponse(BaseModel):
+    discovered: int
+    tools: list[DiscoveredToolResponse]
+    errors: list[str] = []
+
+
+class UpdateDiscoveredToolRequest(BaseModel):
+    status: str  # "approved" | "disabled" | "pending"
+
+
 # ── Dependency injection ──────────────────────────────────────────────────
 
 _adapter: SQLiteAdapter | None = None
@@ -233,6 +265,12 @@ def get_tool_gateway(
         gate = PolicyGate(env_manager=env, storage=adapter)
         _tool_gateway = ToolGateway(policy_gate=gate)
     return _tool_gateway
+
+
+def get_discovery_service(
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+) -> DiscoveryService:
+    return DiscoveryService(DiscoveredToolRepository(adapter))
 
 
 # ── Symbiote endpoints ───────────────────────────────────────────────────
@@ -517,6 +555,124 @@ def exec_tool(
 
 # ══════════════════════════════════════════════════════════════════════════
 # CHAT — LLM-powered conversation endpoint (B-20)
+# ── Discovery endpoints ────────────────────────────────────────────────────
+
+
+@app.post("/symbiotes/{symbiote_id}/discover", response_model=DiscoverResponse, status_code=200)
+def discover(
+    symbiote_id: str,
+    body: DiscoverRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    identity: Annotated[IdentityManager, Depends(get_identity_manager)],
+    svc: Annotated[DiscoveryService, Depends(get_discovery_service)],
+) -> DiscoverResponse:
+    """Scan a local repository path and register discovered tools for a Symbiote."""
+    sym = identity.get(symbiote_id)
+    if sym is None:
+        raise HTTPException(status_code=404, detail="Symbiote not found")
+    if sym.owner_id != auth.tenant_id and not auth.is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    result = svc.discover(symbiote_id=symbiote_id, source_path=body.source_path)
+    return DiscoverResponse(
+        discovered=result.count,
+        tools=[_tool_to_response(t) for t in result.discovered],
+        errors=result.errors,
+    )
+
+
+@app.get(
+    "/symbiotes/{symbiote_id}/discovered-tools",
+    response_model=list[DiscoveredToolResponse],
+)
+def list_discovered_tools(
+    symbiote_id: str,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    identity: Annotated[IdentityManager, Depends(get_identity_manager)],
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    status: str | None = Query(default=None),
+) -> list[DiscoveredToolResponse]:
+    """List tools discovered for a Symbiote, optionally filtered by status."""
+    sym = identity.get(symbiote_id)
+    if sym is None:
+        raise HTTPException(status_code=404, detail="Symbiote not found")
+    if sym.owner_id != auth.tenant_id and not auth.is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    repo = DiscoveredToolRepository(adapter)
+    tools = repo.list(symbiote_id, status=status)
+    return [_tool_to_response(t) for t in tools]
+
+
+@app.patch(
+    "/symbiotes/{symbiote_id}/discovered-tools/{tool_id}",
+    response_model=DiscoveredToolResponse,
+)
+def update_discovered_tool(
+    symbiote_id: str,
+    tool_id: str,
+    body: UpdateDiscoveredToolRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    identity: Annotated[IdentityManager, Depends(get_identity_manager)],
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+) -> DiscoveredToolResponse:
+    """Update a discovered tool's status (approved / disabled / pending)."""
+    if body.status not in ("approved", "disabled", "pending"):
+        raise HTTPException(status_code=422, detail="status must be approved, disabled, or pending")
+
+    sym = identity.get(symbiote_id)
+    if sym is None:
+        raise HTTPException(status_code=404, detail="Symbiote not found")
+    if sym.owner_id != auth.tenant_id and not auth.is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    repo = DiscoveredToolRepository(adapter)
+    updated = repo.set_status(symbiote_id, tool_id, body.status)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Discovered tool not found")
+
+    tool = repo.get(symbiote_id, tool_id)
+    return _tool_to_response(tool)
+
+
+@app.delete("/symbiotes/{symbiote_id}/discovered-tools/{tool_id}", status_code=200)
+def delete_discovered_tool(
+    symbiote_id: str,
+    tool_id: str,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    identity: Annotated[IdentityManager, Depends(get_identity_manager)],
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+) -> dict:
+    """Remove a discovered tool entry."""
+    sym = identity.get(symbiote_id)
+    if sym is None:
+        raise HTTPException(status_code=404, detail="Symbiote not found")
+    if sym.owner_id != auth.tenant_id and not auth.is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    repo = DiscoveredToolRepository(adapter)
+    if not repo.delete(symbiote_id, tool_id):
+        raise HTTPException(status_code=404, detail="Discovered tool not found")
+    return {"removed": tool_id}
+
+
+def _tool_to_response(tool: DiscoveredTool) -> DiscoveredToolResponse:
+    return DiscoveredToolResponse(
+        id=tool.id,
+        tool_id=tool.tool_id,
+        name=tool.name,
+        description=tool.description,
+        handler_type=tool.handler_type,
+        method=tool.method,
+        url_template=tool.url_template,
+        parameters=tool.parameters,
+        status=tool.status,
+        source_path=tool.source_path,
+        discovered_at=tool.discovered_at,
+        approved_at=tool.approved_at,
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════════
 
 
@@ -647,6 +803,14 @@ def dashboard_data(
         "SELECT tenant_id, COUNT(*) as key_count FROM api_keys "
         "WHERE is_active = 1 GROUP BY tenant_id ORDER BY key_count DESC"
     )
+    discovered_tools = adapter.fetch_all(
+        "SELECT dt.tool_id, dt.name, dt.method, dt.url_template, dt.status, "
+        "dt.source_path, dt.discovered_at, dt.approved_at, dt.symbiote_id, "
+        "sym.name as symbiote_name "
+        "FROM discovered_tools dt "
+        "JOIN symbiotes sym ON dt.symbiote_id = sym.id "
+        "ORDER BY dt.discovered_at DESC"
+    )
     stats = {
         "symbiotes": adapter.fetch_one("SELECT COUNT(*) as c FROM symbiotes")["c"],
         "sessions": adapter.fetch_one("SELECT COUNT(*) as c FROM sessions")["c"],
@@ -655,11 +819,16 @@ def dashboard_data(
         )["c"],
         "memories": adapter.fetch_one("SELECT COUNT(*) as c FROM memory_entries WHERE is_active = 1")["c"],
         "api_keys": adapter.fetch_one("SELECT COUNT(*) as c FROM api_keys WHERE is_active = 1")["c"],
+        "discovered_tools": adapter.fetch_one("SELECT COUNT(*) as c FROM discovered_tools")["c"],
+        "pending_tools": adapter.fetch_one(
+            "SELECT COUNT(*) as c FROM discovered_tools WHERE status = 'pending'"
+        )["c"],
     }
     return {
         "symbiotes": [dict(r) for r in symbiotes],
         "sessions": [dict(r) for r in sessions],
         "tenants": [dict(r) for r in tenant_counts],
+        "discovered_tools": [dict(r) for r in discovered_tools],
         "stats": stats,
     }
 

@@ -632,5 +632,186 @@ def tools_audit(
         kernel.shutdown()
 
 
+# ── init / discover ────────────────────────────────────────────────────────
+
+_SYMBIOTE_CONFIG_DIR = ".symbiote"
+_SYMBIOTE_CONFIG_FILE = ".symbiote/config"
+
+
+def _read_symbiote_config(path: Path = Path(".")) -> dict:
+    """Read .symbiote/config from the project root."""
+    cfg_file = path / _SYMBIOTE_CONFIG_FILE
+    if not cfg_file.exists():
+        err_console.print("[red]No .symbiote/config found.[/] Run [bold]symbiote init[/] first.")
+        raise typer.Exit(1)
+    import configparser
+
+    cp = configparser.ConfigParser()
+    cp.read(str(cfg_file))
+    return dict(cp["symbiote"]) if "symbiote" in cp else {}
+
+
+def _write_symbiote_config(cfg: dict, path: Path = Path(".")) -> None:
+    """Write .symbiote/config to the project root."""
+    import configparser
+
+    cfg_dir = path / _SYMBIOTE_CONFIG_DIR
+    cfg_dir.mkdir(exist_ok=True)
+    cp = configparser.ConfigParser()
+    cp["symbiote"] = cfg
+    with open(path / _SYMBIOTE_CONFIG_FILE, "w") as f:
+        cp.write(f)
+
+
+@app.command()
+def init(
+    server: str = typer.Option(
+        None, "--server", "-s", help="Symbiote server URL (default: http://localhost:8000)"
+    ),
+    api_key: str = typer.Option(None, "--api-key", "-k", help="API key (sk-symbiote_...)"),
+    name: str = typer.Option(None, "--name", "-n", help="Symbiote name"),
+    role: str = typer.Option("assistant", "--role", "-r", help="Symbiote role"),
+    symbiote_id: str = typer.Option(None, "--id", help="Existing Symbiote ID to link (skip creation)"),
+) -> None:
+    """Initialize a Symbiote project — links a local repo to a Symbiote on a server."""
+    console.print(Panel("[bold cyan]symbiote init[/]", expand=False))
+
+    # Prompt for missing values
+    if server is None:
+        server = typer.prompt("Server URL", default="http://localhost:8000")
+    if api_key is None:
+        api_key = typer.prompt("API key", hide_input=True)
+    if name is None and symbiote_id is None:
+        name = typer.prompt("Symbiote name")
+
+    import urllib.error
+    import urllib.request
+
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    if symbiote_id:
+        # Verify existing symbiote
+        req = urllib.request.Request(
+            f"{server.rstrip('/')}/symbiotes/{symbiote_id}",
+            headers=headers,
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                import json as _json
+                data = _json.loads(resp.read())
+                name = data.get("name", symbiote_id)
+        except urllib.error.HTTPError as exc:
+            err_console.print(f"[red]Failed to fetch symbiote:[/] HTTP {exc.code}")
+            raise typer.Exit(1) from exc
+        except Exception as exc:
+            err_console.print(f"[red]Connection error:[/] {exc}")
+            raise typer.Exit(1) from exc
+    else:
+        # Create new symbiote
+        import json as _json
+
+        payload = _json.dumps({"name": name, "role": role}).encode()
+        req = urllib.request.Request(
+            f"{server.rstrip('/')}/symbiotes",
+            data=payload,
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = _json.loads(resp.read())
+                symbiote_id = data["id"]
+        except urllib.error.HTTPError as exc:
+            err_console.print(f"[red]Failed to create symbiote:[/] HTTP {exc.code}: {exc.read().decode()}")
+            raise typer.Exit(1) from exc
+        except Exception as exc:
+            err_console.print(f"[red]Connection error:[/] {exc}")
+            raise typer.Exit(1) from exc
+
+    _write_symbiote_config({
+        "server": server.rstrip("/"),
+        "api_key": api_key,
+        "id": symbiote_id,
+        "name": name or symbiote_id,
+    })
+
+    console.print(f"[green]✓[/] Connected to {server}")
+    console.print(f"[green]✓[/] Symbiote: [bold]{name}[/] ({symbiote_id[:8]}...)")
+    console.print(f"[green]✓[/] Config saved to [dim]{_SYMBIOTE_CONFIG_FILE}[/]")
+    console.print("\nNext: [bold]symbiote discover .[/]")
+
+
+@app.command()
+def discover(
+    source_path: str = typer.Argument(".", help="Repository path to scan"),
+) -> None:
+    """Scan a repository for APIs and register discovered tools."""
+    cfg = _read_symbiote_config()
+
+    server = cfg.get("server", "http://localhost:8000")
+    api_key = cfg.get("api_key", "")
+    symbiote_id = cfg.get("id", "")
+    symbiote_name = cfg.get("name", symbiote_id)
+
+    if not symbiote_id:
+        err_console.print("[red]No symbiote ID in config.[/] Run [bold]symbiote init[/] first.")
+        raise typer.Exit(1)
+
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    abs_path = str(Path(source_path).resolve())
+    payload = _json.dumps({"source_path": abs_path}).encode()
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    req = urllib.request.Request(
+        f"{server}/symbiotes/{symbiote_id}/discover",
+        data=payload,
+        headers=headers,
+        method="POST",
+    )
+
+    console.print(f"Scanning [dim]{abs_path}[/] for [bold]{symbiote_name}[/]...")
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = _json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        err_console.print(f"[red]Discovery failed:[/] HTTP {exc.code}: {exc.read().decode()}")
+        raise typer.Exit(1) from exc
+    except Exception as exc:
+        err_console.print(f"[red]Connection error:[/] {exc}")
+        raise typer.Exit(1) from exc
+
+    count = data.get("discovered", 0)
+    errors = data.get("errors", [])
+
+    console.print(f"[green]✓[/] {count} tool(s) discovered")
+
+    if count > 0:
+        table = Table(title="Discovered Tools")
+        table.add_column("Tool ID", style="cyan")
+        table.add_column("Method", style="dim")
+        table.add_column("Endpoint")
+        table.add_column("Source", style="dim", max_width=40)
+        for t in data.get("tools", []):
+            table.add_row(
+                t["tool_id"],
+                t.get("method") or t.get("handler_type", ""),
+                t.get("url_template") or "",
+                (t.get("source_path") or "")[-40:],
+            )
+        console.print(table)
+
+    if errors:
+        console.print(f"[yellow]Warnings:[/] {len(errors)} scan error(s)")
+        for e in errors[:3]:
+            console.print(f"  [dim]{e}[/]")
+
+    console.print(f"\nReview and approve at: [bold]{server}[/]")
+
+
 if __name__ == "__main__":
     app()

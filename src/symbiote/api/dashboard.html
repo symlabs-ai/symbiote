@@ -393,6 +393,14 @@ footer a {
     <div class="stat-label">API Keys</div>
     <div class="stat-value" id="stat-keys">-</div>
   </div>
+  <div class="stat">
+    <div class="stat-label">Tools</div>
+    <div class="stat-value" id="stat-tools">-</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Pending</div>
+    <div class="stat-value" id="stat-pending">-</div>
+  </div>
 </div>
 
 <main>
@@ -428,6 +436,16 @@ footer a {
 
   <section>
     <div class="section-header">
+      <div class="section-title">Discovered Tools</div>
+      <div class="section-count" id="tools-count">0</div>
+    </div>
+    <div class="table-scroll" id="tools-table">
+      <div class="loading">Loading</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-header">
       <div class="section-title">Quick Reference</div>
     </div>
     <div style="padding: 16px 20px; font-size: 12px; line-height: 2;">
@@ -439,6 +457,10 @@ footer a {
       <div><span style="color: var(--amber);">GET</span>&nbsp; <span style="color: var(--text-bright);">/memory/search?query=</span></div>
       <div><span style="color: var(--amber);">GET</span>&nbsp; <span style="color: var(--text-bright);">/health</span></div>
       <div><span style="color: var(--amber);">GET</span>&nbsp; <span style="color: var(--text-bright);">/docs</span> <span style="color: var(--text-dim);">(OpenAPI)</span></div>
+      <div style="color: var(--text-dim); margin-top: 12px; margin-bottom: 8px;">Discovery</div>
+      <div><span style="color: var(--accent);">POST</span> <span style="color: var(--text-bright);">/symbiotes/{id}/discover</span></div>
+      <div><span style="color: var(--amber);">GET</span>&nbsp; <span style="color: var(--text-bright);">/symbiotes/{id}/discovered-tools</span></div>
+      <div><span style="color: var(--blue);">PATCH</span> <span style="color: var(--text-bright);">/symbiotes/{id}/discovered-tools/{tool_id}</span></div>
       <div style="color: var(--text-dim); margin-top: 12px; margin-bottom: 8px;">SDK</div>
       <div style="color: var(--purple);">pip install symbiote</div>
       <pre style="color: var(--text-dim); margin-top: 8px; font-size: 11px; line-height: 1.6;">from symbiote.sdk import SymbioteClient
@@ -451,7 +473,7 @@ client = SymbioteClient(
 </main>
 
 <footer>
-  <span>Symbiote Kernel v0.2.0 &mdash; <a href="/docs">API Docs</a></span>
+  <span>Symbiote Kernel v0.2.3 &mdash; <a href="/docs">API Docs</a></span>
   <span id="last-refresh">-</span>
 </footer>
 
@@ -467,6 +489,22 @@ function fmtDate(iso) {
 
 function badge(text, cls) {
   return `<span class="badge badge-${cls}">${text}</span>`;
+}
+
+async function toggleTool(symbioteId, toolId, currentStatus) {
+  const newStatus = currentStatus === 'approved' ? 'disabled' : 'approved';
+  try {
+    const resp = await fetch(`/symbiotes/${symbioteId}/discovered-tools/${toolId}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({status: newStatus}),
+    });
+    if (!resp.ok) { console.error('Toggle failed', resp.status); return; }
+    // Refresh dashboard to reflect new state
+    await loadDashboard();
+  } catch (e) {
+    console.error('Toggle error:', e);
+  }
 }
 
 async function loadDashboard() {
@@ -485,6 +523,8 @@ async function loadDashboard() {
     $('stat-active').textContent = data.stats.sessions_active;
     $('stat-memories').textContent = data.stats.memories;
     $('stat-keys').textContent = data.stats.api_keys;
+    $('stat-tools').textContent = data.stats.discovered_tools || 0;
+    $('stat-pending').textContent = data.stats.pending_tools || 0;
 
     // Symbiotes table
     $('sym-count').textContent = data.symbiotes.length;
@@ -529,6 +569,25 @@ async function loadDashboard() {
           <div class="tenant-keys">${t.key_count}<span class="label">keys</span></div>
         </div>
       `).join('')}</div>`;
+    }
+
+    // Discovered Tools table
+    const tools = data.discovered_tools || [];
+    $('tools-count').textContent = tools.length;
+    if (tools.length === 0) {
+      $('tools-table').innerHTML = '<div class="empty">No tools discovered — run <code>symbiote discover .</code></div>';
+    } else {
+      $('tools-table').innerHTML = `<table>
+        <thead><tr><th>Tool ID</th><th>Symbiote</th><th>Method</th><th>Endpoint</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody>${tools.map(t => `<tr id="tool-row-${t.tool_id}">
+          <td style="color: var(--text-bright); font-size: 11px">${t.tool_id}</td>
+          <td style="color: var(--text-dim)">${t.symbiote_name || t.symbiote_id.slice(0,8)}</td>
+          <td>${t.method ? `<span style="color:var(--accent)">${t.method}</span>` : '<span style="color:var(--text-dim)">cli</span>'}</td>
+          <td style="color: var(--text-dim); font-size: 11px; max-width: 180px; overflow: hidden; text-overflow: ellipsis">${t.url_template || '-'}</td>
+          <td id="tool-status-${t.tool_id}">${badge(t.status, t.status === 'approved' ? 'active' : t.status === 'disabled' ? 'closed' : 'role')}</td>
+          <td><button onclick="toggleTool('${t.symbiote_id}','${t.tool_id}','${t.status}')" style="font-size:11px;padding:3px 8px;cursor:pointer;background:var(--bg-hover);color:var(--text);border:1px solid var(--border);border-radius:4px">${t.status === 'approved' ? 'Disable' : 'Approve'}</button></td>
+        </tr>`).join('')}</tbody>
+      </table>`;
     }
 
     $('last-refresh').textContent = 'refreshed ' + new Date().toLocaleTimeString();
