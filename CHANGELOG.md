@@ -3,6 +3,18 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [0.2.4] — 2026-03-18
+
+### Added — B-24: DiscoveredToolLoader
+
+- `symbiote.discovery.loader.DiscoveredToolLoader` — reads approved discovered tools from SQLite and registers them as HTTP tools in `ToolGateway` with `allow_internal=True`; resolves `{base_url}` placeholder and skips CLI tools (`handler_type=custom`) or tools without `method`/`url_template`
+- `SymbioteKernel.load_discovered_tools(symbiote_id, base_url)` — single call to load and auto-authorize discovered tools via `EnvironmentManager.configure()`, closing the loop: `discover → approve → kernel uses`
+
+### Fixed
+
+- SQLite `check_same_thread=False` in `SymbioteKernel.__init__` (prevented thread errors in asyncio context)
+- Dev mode auth bypass (`SYMBIOTE_DEV_MODE=1`) now unconditional — checked before `key_manager` initialization to prevent 401 on second request
+
 ## [0.2.3] — 2026-03-18
 
 ### Added — Discovery Service (sprint-discovery-service)

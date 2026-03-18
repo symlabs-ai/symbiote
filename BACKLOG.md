@@ -8,12 +8,12 @@
 |---|-----------|--------|------------|--------|
 | 7 | MCP Integration via forge-llm (McpToolProvider → ToolGateway → PolicyGate) | dev | baixa | pending |
 | 23 | Deploy Hosted — porta, domínio, nginx, CI para Symbiote como serviço | dev | alta | pending |
-| 24 | DiscoveredToolLoader — bridge entre discovered_tools aprovadas e ToolGateway: ao inicializar o kernel, carregar automaticamente as tools com status=approved do SQLite e registrá-las como HttpTool com method + url_template salvos pelo Discovery | dev | alta | pending |
 
 ## Implementadas
 
 | # | Descrição | Implementada em | Versão |
 |---|-----------|-----------------|--------|
+| 24 | DiscoveredToolLoader — bridge entre discovered_tools aprovadas e ToolGateway: kernel.load_discovered_tools() carrega tools com status=approved, registra como HttpTool e autoriza via EnvironmentManager | 2026-03-18 | 0.2.4 |
 | 19 | API Key Auth — Bearer token, SHA-256, tenant isolation, admin/user roles | 2026-03-17 | 0.1.8 |
 | 20 | Chat Endpoint — POST /sessions/{id}/chat com kernel.message() | 2026-03-17 | 0.1.8 |
 | 21 | Multi-tenant Isolation — owner_id enforcement em endpoints | 2026-03-17 | 0.1.8 |
