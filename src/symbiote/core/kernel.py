@@ -16,6 +16,8 @@ from symbiote.core.models import Session, Symbiote
 from symbiote.core.ports import LLMPort
 from symbiote.core.reflection import ReflectionEngine
 from symbiote.core.session import SessionManager
+from symbiote.discovery.loader import DiscoveredToolLoader
+from symbiote.discovery.repository import DiscoveredToolRepository
 from symbiote.environment.manager import EnvironmentManager
 from symbiote.environment.policies import PolicyGate
 from symbiote.environment.tools import ToolGateway
@@ -248,6 +250,27 @@ class SymbioteKernel:
             self._reflection.reflect_session(session_id, row["symbiote_id"])
 
         return self._sessions.close(session_id)
+
+    def load_discovered_tools(self, symbiote_id: str, base_url: str = "") -> list[str]:
+        """Load approved discovered tools into the ToolGateway and authorize them.
+
+        Reads all tools with ``status=approved`` from ``discovered_tools`` for
+        *symbiote_id*, registers each HTTP tool in the ToolGateway, and calls
+        ``EnvironmentManager.configure()`` so the PolicyGate allows them.
+
+        Returns the list of tool_ids that were registered.  Call this once
+        during app startup after the kernel is initialized::
+
+            tool_ids = kernel.load_discovered_tools(clark_id, base_url="http://127.0.0.1:8000")
+        """
+        loader = DiscoveredToolLoader(
+            repository=DiscoveredToolRepository(self._storage),
+            gateway=self._tool_gateway,
+        )
+        tool_ids = loader.load(symbiote_id, base_url=base_url)
+        if tool_ids:
+            self._environment.configure(symbiote_id=symbiote_id, tools=tool_ids)
+        return tool_ids
 
     def shutdown(self) -> None:
         """Close the storage adapter."""

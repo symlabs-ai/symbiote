@@ -8,6 +8,7 @@
 |---|-----------|--------|------------|--------|
 | 7 | MCP Integration via forge-llm (McpToolProvider → ToolGateway → PolicyGate) | dev | baixa | pending |
 | 23 | Deploy Hosted — porta, domínio, nginx, CI para Symbiote como serviço | dev | alta | pending |
+| 24 | DiscoveredToolLoader — bridge entre discovered_tools aprovadas e ToolGateway: ao inicializar o kernel, carregar automaticamente as tools com status=approved do SQLite e registrá-las como HttpTool com method + url_template salvos pelo Discovery | dev | alta | pending |
 
 ## Implementadas
 
