@@ -203,7 +203,7 @@ def get_adapter() -> SQLiteAdapter:
     global _adapter
     if _adapter is None:
         config = KernelConfig()
-        _adapter = SQLiteAdapter(db_path=config.db_path)
+        _adapter = SQLiteAdapter(db_path=config.db_path, check_same_thread=False)
         _adapter.init_schema()
 
         # Init API key schema

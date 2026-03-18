@@ -33,20 +33,21 @@ async def require_auth(
 
     Injects the validated APIKey into the route handler.
     """
-    if _key_manager is None:
-        # Auth not configured — only allow in explicit dev mode
-        if os.environ.get("SYMBIOTE_DEV_MODE") == "1":
-            from symbiote.api.auth import APIKey
+    # Dev mode bypasses all auth checks regardless of key_manager state
+    if os.environ.get("SYMBIOTE_DEV_MODE") == "1":
+        from symbiote.api.auth import APIKey
 
-            return APIKey(
-                id="dev",
-                tenant_id="default",
-                name="development",
-                key_prefix="dev",
-                role="admin",
-                is_active=True,
-                created_at="",
-            )
+        return APIKey(
+            id="dev",
+            tenant_id="default",
+            name="development",
+            key_prefix="dev",
+            role="admin",
+            is_active=True,
+            created_at="",
+        )
+
+    if _key_manager is None:
         raise HTTPException(
             status_code=503, detail="Authentication not configured"
         )

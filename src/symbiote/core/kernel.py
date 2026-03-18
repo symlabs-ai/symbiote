@@ -37,7 +37,7 @@ class SymbioteKernel:
         self._llm = llm
 
         # Storage
-        self._storage = SQLiteAdapter(config.db_path)
+        self._storage = SQLiteAdapter(config.db_path, check_same_thread=False)
         self._storage.init_schema()
 
         # Managers
