@@ -272,6 +272,30 @@ class SymbioteKernel:
             self._environment.configure(symbiote_id=symbiote_id, tools=tool_ids)
         return tool_ids
 
+    def load_mcp_tools(self, registry: object, symbiote_id: str) -> list[str]:
+        """Register all tools from a forge_llm ToolRegistry into the ToolGateway.
+
+        The *registry* must be a live ``forge_llm.application.tools.ToolRegistry``
+        produced by ``McpToolset.from_stdio()`` or ``McpToolset.from_http()``.
+        The caller is responsible for keeping the McpToolset context manager alive
+        for as long as the registered tools are in use.
+
+        Also calls ``EnvironmentManager.configure()`` so PolicyGate authorizes the
+        tools for *symbiote_id*::
+
+            async with McpToolset.from_http("http://localhost:8000/mcp") as registry:
+                tool_ids = kernel.load_mcp_tools(registry, symbiote_id="clark")
+
+        Returns the list of tool_ids that were registered.
+        """
+        from symbiote.mcp.provider import McpToolProvider
+
+        provider = McpToolProvider()
+        tool_ids = provider.load(registry, self._tool_gateway)
+        if tool_ids:
+            self._environment.configure(symbiote_id=symbiote_id, tools=tool_ids)
+        return tool_ids
+
     def shutdown(self) -> None:
         """Close the storage adapter."""
         self._storage.close()

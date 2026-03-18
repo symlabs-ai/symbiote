@@ -5,6 +5,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [0.2.4] — 2026-03-18
 
+### Added — B-7: MCP Integration
+
+- `symbiote.mcp.provider.McpToolProvider` — bridges a live `forge_llm.application.tools.ToolRegistry` (produced by `McpToolset`) into Symbiote's `ToolGateway`; each MCP tool is registered as an async custom handler that delegates to `McpTool.execute_async()`
+- `SymbioteKernel.load_mcp_tools(registry, symbiote_id)` — convenience method: loads all tools from a forge_llm ToolRegistry and auto-authorizes them via `EnvironmentManager.configure()`
+- Tool names are sanitized (hyphens and spaces → underscores) to produce valid tool_ids
+- MCP errors (`result.is_error`) surface as `RuntimeError` so PolicyGate captures them as failed tool results
+- Supports stdio and HTTP transports via forge_llm's `McpToolset.from_stdio()` / `McpToolset.from_http()` / `McpToolset.from_servers()`
+
 ### Added — B-24: DiscoveredToolLoader
 
 - `symbiote.discovery.loader.DiscoveredToolLoader` — reads approved discovered tools from SQLite and registers them as HTTP tools in `ToolGateway` with `allow_internal=True`; resolves `{base_url}` placeholder and skips CLI tools (`handler_type=custom`) or tools without `method`/`url_template`
