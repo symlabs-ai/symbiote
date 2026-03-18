@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from symbiote.adapters.export.markdown import ExportService
 from symbiote.adapters.storage.message_repository import MessageRepository
 from symbiote.adapters.storage.sqlite import SQLiteAdapter
@@ -183,6 +185,57 @@ class SymbioteKernel:
         # Add assistant message
         self._sessions.add_message(session_id, "assistant", text)
 
+        return response
+
+    async def message_async(
+        self,
+        session_id: str,
+        content: str,
+        extra_context: dict | None = None,
+        on_token: Callable[[str], None] | None = None,
+    ) -> str:
+        """Async variant of message() — supports async tool handlers and on_token streaming.
+
+        Args:
+            session_id: Active session ID.
+            content: User message text.
+            extra_context: Optional extra context injected into the system prompt.
+            on_token: Optional callback invoked with each generated token.  If the
+                LLM adapter exposes ``stream()``, tokens arrive incrementally;
+                otherwise the callback is called once with the full response text.
+
+        Example::
+
+            async def sse_handler(request):
+                async def send(token: str):
+                    await queue.put(token)
+
+                await kernel.message_async(session_id, user_input, on_token=send)
+        """
+
+        row = self._storage.fetch_one(
+            "SELECT symbiote_id FROM sessions WHERE id = ?", (session_id,)
+        )
+        if row is None:
+            raise EntityNotFoundError("Session", session_id)
+        symbiote_id = row["symbiote_id"]
+
+        self._sessions.add_message(session_id, "user", content)
+
+        response = await self._capabilities.chat_async(
+            symbiote_id,
+            session_id,
+            content,
+            extra_context=extra_context,
+            on_token=on_token,
+        )
+
+        if isinstance(response, dict):
+            text = response.get("text", str(response))
+        else:
+            text = response
+
+        self._sessions.add_message(session_id, "assistant", text)
         return response
 
     def close_session(self, session_id: str) -> Session:

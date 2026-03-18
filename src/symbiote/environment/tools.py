@@ -278,7 +278,8 @@ def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
         from symbiote.security.network import validate_url
 
         url = config.url_template.format(**params)
-        validate_url(url)  # SSRF protection: block private/internal IPs
+        if not config.allow_internal:
+            validate_url(url)  # SSRF protection: block private/internal IPs
 
         body_bytes: bytes | None = None
         if config.body_template is not None:
@@ -308,9 +309,12 @@ def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
             import json as _json
 
             # Disable auto-redirect to prevent SSRF via redirect to internal IPs
+            _allow_internal = config.allow_internal
+
             class _NoRedirect(urllib.request.HTTPRedirectHandler):
                 def redirect_request(self, req, fp, code, msg, headers, newurl):
-                    validate_url(newurl)  # re-validate redirect target
+                    if not _allow_internal:
+                        validate_url(newurl)  # re-validate redirect target
                     return super().redirect_request(req, fp, code, msg, headers, newurl)
 
             opener = urllib.request.build_opener(_NoRedirect)

@@ -95,3 +95,42 @@ class TestHttpToolSSRFIntegration:
 
         with pytest.raises(Exception, match="[Bb]locked"):
             handler({"id": "42"})
+
+    def test_allow_internal_bypasses_ssrf(self) -> None:
+        """allow_internal=True lets the handler reach loopback without SSRFError."""
+        import io
+        import json as _json
+
+        from symbiote.environment.descriptors import HttpToolConfig
+        from symbiote.environment.tools import _make_http_handler
+
+        config = HttpToolConfig(
+            method="GET",
+            url_template="http://localhost:8000/api/search?q={q}",
+            allow_internal=True,
+        )
+        handler = _make_http_handler(config)
+
+        body = io.BytesIO(_json.dumps({"results": []}).encode())
+        body.__enter__ = lambda s: s
+        body.__exit__ = lambda s, *a: None
+
+        with patch("urllib.request.OpenerDirector.open", return_value=body):
+            result = handler({"q": "test"})
+
+        assert result["data"] == {"results": []}
+
+    def test_allow_internal_false_still_blocks(self) -> None:
+        """allow_internal=False (default) still raises SSRFError for localhost."""
+        from symbiote.environment.descriptors import HttpToolConfig
+        from symbiote.environment.tools import _make_http_handler
+
+        config = HttpToolConfig(
+            method="GET",
+            url_template="http://localhost:8000/api/search?q={q}",
+            allow_internal=False,
+        )
+        handler = _make_http_handler(config)
+
+        with pytest.raises(Exception, match="[Bb]locked"):
+            handler({"q": "test"})

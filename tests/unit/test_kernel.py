@@ -187,6 +187,50 @@ class TestMessageErrors:
             kernel_with_llm.close_session("nonexistent-session")
 
 
+class TestMessageAsync:
+    @pytest.mark.asyncio
+    async def test_message_async_returns_response(
+        self, kernel_with_llm: SymbioteKernel, fake_llm: FakeLLM
+    ) -> None:
+        sym = kernel_with_llm.create_symbiote("bot", "assistant")
+        session = kernel_with_llm.start_session(sym.id)
+        response = await kernel_with_llm.message_async(session.id, "hello")
+        assert response == "fake-response"
+
+    @pytest.mark.asyncio
+    async def test_message_async_stores_messages(
+        self, kernel_with_llm: SymbioteKernel
+    ) -> None:
+        sym = kernel_with_llm.create_symbiote("bot", "assistant")
+        session = kernel_with_llm.start_session(sym.id)
+        await kernel_with_llm.message_async(session.id, "hello async")
+        messages = kernel_with_llm._sessions.get_messages(session.id)
+        roles = {m.role for m in messages}
+        assert "user" in roles
+        assert "assistant" in roles
+
+    @pytest.mark.asyncio
+    async def test_message_async_on_token_called(
+        self, kernel_with_llm: SymbioteKernel
+    ) -> None:
+        """on_token is called at least once (once with full response for non-streaming LLM)."""
+        sym = kernel_with_llm.create_symbiote("bot", "assistant")
+        session = kernel_with_llm.start_session(sym.id)
+
+        received: list[str] = []
+        await kernel_with_llm.message_async(
+            session.id, "hello", on_token=received.append
+        )
+        assert received == ["fake-response"]
+
+    @pytest.mark.asyncio
+    async def test_message_async_invalid_session_raises(
+        self, kernel_with_llm: SymbioteKernel
+    ) -> None:
+        with pytest.raises(EntityNotFoundError):
+            await kernel_with_llm.message_async("nonexistent-session", "hello")
+
+
 class TestShutdown:
     def test_shutdown_closes_adapter(self, config: KernelConfig) -> None:
         k = SymbioteKernel(config)

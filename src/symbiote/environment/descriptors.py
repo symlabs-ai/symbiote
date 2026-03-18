@@ -41,6 +41,10 @@ class HttpToolConfig(BaseModel):
     """Optional callable invoked per-request to supply dynamic headers (e.g. auth tokens).
     Its return value is merged on top of ``headers`` at call time, so it can
     override static headers as well as add new ones."""
+    allow_internal: bool = False
+    """When True, skip SSRF validation so the tool can call loopback / private-network
+    endpoints (e.g. a service running on the same host).  Only set this for tools
+    that intentionally target internal services you control."""
     timeout: float = 30.0
     body_template: dict | None = None  # JSON body template with {param} placeholders
 

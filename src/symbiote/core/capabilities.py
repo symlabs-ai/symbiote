@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
 from symbiote.core.context import ContextAssembler
 from symbiote.core.exceptions import SymbioteError
@@ -121,6 +122,41 @@ class CapabilitySurface:
         )
 
         result = runner.run(context)
+        if not result.success:
+            raise CapabilityError("chat", result.error or "Chat runner failed")
+
+        return result.output
+
+    async def chat_async(
+        self,
+        symbiote_id: str,
+        session_id: str,
+        content: str,
+        extra_context: dict | None = None,
+        on_token: Callable[[str], None] | None = None,
+    ) -> Any:
+        """Async variant of chat() — uses run_async() so tool handlers can be coroutines.
+
+        Args:
+            on_token: Optional callback invoked with each token as it is generated.
+                Requires the LLM adapter to expose a ``stream()`` method; otherwise
+                called once with the full response text.
+        """
+        runner = self._runner_registry.select("chat")
+        if runner is None:
+            raise CapabilityError("chat", "No runner available for intent 'chat'")
+
+        context = self._context_assembler.build(
+            session_id=session_id,
+            symbiote_id=symbiote_id,
+            user_input=content,
+            extra_context=extra_context,
+        )
+
+        if not hasattr(runner, "run_async"):
+            raise CapabilityError("chat", "Runner does not support async execution")
+
+        result = await runner.run_async(context, on_token=on_token)
         if not result.success:
             raise CapabilityError("chat", result.error or "Chat runner failed")
 
