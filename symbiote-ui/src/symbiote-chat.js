@@ -181,11 +181,33 @@ class SymbioteChat extends HTMLElement {
       const data = await this._adapter.loadHistory(key);
       if (data.messages && data.messages.length > 0) {
         this._hideEmpty();
-        data.messages.forEach(msg => this._addMessage(msg.role, msg.content));
+        data.messages.forEach(msg => {
+          // Tool badges from history (if the message carries tool_results)
+          if (msg.tool_results && msg.tool_results.length) {
+            this._addToolBadges(msg.tool_results);
+          }
+          this._addMessage(msg.role, msg.content);
+        });
+        // Extract suggestions from last assistant message
+        const lastAssistant = [...data.messages].reverse().find(m => m.role === 'assistant');
+        if (lastAssistant) {
+          const suggestions = this._extractSuggestions(lastAssistant.content);
+          if (suggestions.length) this._addFollowups(suggestions);
+        }
       }
     } catch (e) {
       console.error('[symbiote-chat] History load error:', e);
     }
+  }
+
+  _extractSuggestions(text) {
+    if (!text) return [];
+    const match = text.match(/:::suggestions\s*\n([\s\S]*?)(?:\n:::|\s*$)/);
+    if (!match) return [];
+    return match[1]
+      .split('\n')
+      .map(line => line.replace(/^[\s*•\-]+/, '').trim())
+      .filter(Boolean);
   }
 
   // ── Send flow ──
@@ -478,7 +500,7 @@ class SymbioteChat extends HTMLElement {
     } else if (role === 'user') {
       div.textContent = content;
     } else {
-      div.innerHTML = symbioteFormatMarkdown(content);
+      div.innerHTML = symbioteFormatMarkdown(this._applyTextFilter(content));
     }
 
     container.appendChild(div);
