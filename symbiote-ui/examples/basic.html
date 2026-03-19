@@ -39,7 +39,7 @@
 <body>
   <h1>Symbiote Chat — Basic Example</h1>
   <p>Click the FAB button in the bottom-right corner to open the chat panel.</p>
-  <p>This example uses a <code>MockAdapter</code> that echoes messages back with a delay.</p>
+  <p>This example uses a <code>MockAdapter</code> with SSE streaming and real-time tool badges.</p>
 
   <!-- The component: one tag, fully configured via attributes -->
   <symbiote-chat
@@ -55,39 +55,73 @@
   <script>
     const chat = document.querySelector('symbiote-chat');
 
-    // Mock adapter — simulates a backend
+    // ── Mock SSE helper: creates a fake Response with a ReadableStream ──
+    function mockSSEResponse(events) {
+      const encoder = new TextEncoder();
+      let idx = 0;
+      const stream = new ReadableStream({
+        async pull(controller) {
+          if (idx >= events.length) {
+            controller.close();
+            return;
+          }
+          const { event, data, delay } = events[idx++];
+          if (delay) await new Promise(r => setTimeout(r, delay));
+          const chunk = `event:${event}\ndata:${JSON.stringify(data)}\n\n`;
+          controller.enqueue(encoder.encode(chunk));
+        }
+      });
+      return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    }
+
+    // ── Mock adapter — simulates SSE streaming + falls back to sync ──
     chat.adapter = {
       _history: [],
 
-      async sendMessage(message, context) {
-        // Simulate network delay
-        await new Promise(r => setTimeout(r, 800));
+      // Streaming adapter method
+      async sendMessageStream(message, context) {
+        // Build the SSE event sequence based on the message
+        const events = [];
+        const lc = message.toLowerCase();
 
-        const response = `You said: **${message}**\n\nI received ${context.length || 0} chars of context.`;
-
-        // Simulate tool results on certain keywords
-        let tool_results = null;
-        if (message.toLowerCase().includes('tool')) {
-          tool_results = [
-            { tool_id: 'search_items', success: true, output: [{id: '1', title: 'Example Item'}] },
-            { tool_id: 'list_journals', success: true, output: ['Journal A', 'Journal B'] },
-          ];
+        if (lc.includes('tool') || lc.includes('stream')) {
+          events.push({ event: 'tool_start', data: { tool_id: 'search_items', name: 'Search Items', detail: 'Searching...' }, delay: 200 });
+          events.push({ event: 'text_delta', data: { text: 'Searching ' }, delay: 300 });
+          events.push({ event: 'text_delta', data: { text: 'your items' }, delay: 150 });
+          events.push({ event: 'tool_done', data: { tool_id: 'search_items', name: 'Search Items', success: true, result_count: 3 }, delay: 400 });
+          events.push({ event: 'tool_start', data: { tool_id: 'list_journals', name: 'List Journals' }, delay: 100 });
+          events.push({ event: 'text_delta', data: { text: '...\n\n' }, delay: 200 });
+          events.push({ event: 'tool_done', data: { tool_id: 'list_journals', name: 'List Journals', success: true, result_count: 2 }, delay: 500 });
+          events.push({ event: 'text_delta', data: { text: 'Found **3 items** and **2 journals**. ' }, delay: 150 });
+          events.push({ event: 'text_delta', data: { text: 'Here are your results!' }, delay: 100 });
+        } else if (lc.includes('error')) {
+          events.push({ event: 'tool_start', data: { tool_id: 'delete_item', name: 'Delete Item', detail: 'Deleting...' }, delay: 200 });
+          events.push({ event: 'text_delta', data: { text: 'Trying to delete' }, delay: 300 });
+          events.push({ event: 'tool_done', data: { tool_id: 'delete_item', name: 'Delete Item', success: false, error: 'Permission denied' }, delay: 600 });
+          events.push({ event: 'text_delta', data: { text: '...\n\nCould not delete: **permission denied**.' }, delay: 200 });
+        } else {
+          // Simple text streaming
+          const words = `You said: **${message}**\n\nI received ${(context || '').length} chars of context.`.split(' ');
+          words.forEach((w, i) => {
+            events.push({ event: 'text_delta', data: { text: (i > 0 ? ' ' : '') + w }, delay: 60 });
+          });
         }
-        if (message.toLowerCase().includes('error')) {
-          tool_results = [
-            { tool_id: 'delete_item', success: false, error: 'Permission denied' },
-          ];
-        }
 
-        // Store in history
-        this._history.push({ role: 'user', content: message });
-        this._history.push({ role: 'assistant', content: response });
+        events.push({ event: 'response_done', data: {
+          suggestions: ['Tell me more', 'Show streaming tools', 'Simulate error']
+        }, delay: 100 });
 
-        return {
-          response,
-          suggestions: ['Tell me more', 'Show tools', 'Simulate error'],
-          tool_results,
+        // Intercept fetch to return mock SSE
+        const realFetch = window.fetch;
+        window.fetch = async (url, opts) => {
+          if (url === '/__mock_sse__') {
+            window.fetch = realFetch;
+            return mockSSEResponse(events);
+          }
+          return realFetch(url, opts);
         };
+
+        return { url: '/__mock_sse__' };
       },
 
       async loadHistory(sessionKey) {

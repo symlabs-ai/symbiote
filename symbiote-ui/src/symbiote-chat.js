@@ -203,10 +203,20 @@ class SymbioteChat extends HTMLElement {
   }
 
   async _doSend(message) {
+    if (this._adapter.sendMessageStream) {
+      return this._doSendStream(message);
+    }
+    return this._doSendSync(message);
+  }
+
+  async _doSendSync(message) {
     const sendBtn = this._ref('sendBtn');
     if (sendBtn) sendBtn.disabled = true;
 
-    const loadingId = this._addMessage('assistant', '<span class="symbiote-spinner"></span> ...', true);
+    const loadingHtml = this._adapter.loadingContent
+      ? this._adapter.loadingContent()
+      : '<span class="symbiote-spinner"></span> ...';
+    const loadingId = this._addMessage('assistant', loadingHtml, true);
 
     try {
       const context = this._contextProvider ? this._contextProvider() : '';
@@ -219,8 +229,10 @@ class SymbioteChat extends HTMLElement {
         this._addToolBadges(data.tool_results);
       }
 
-      // Assistant message
-      this._addMessage('assistant', data.response);
+      // Assistant message (apply textFilter if provided)
+      const filteredResponse = this._applyTextFilter(data.response);
+      const msgId = this._addMessage('assistant', filteredResponse);
+      this._fireMessageRendered(msgId, data.response);
 
       // Follow-up suggestions
       if (data.suggestions && data.suggestions.length) {
@@ -240,6 +252,204 @@ class SymbioteChat extends HTMLElement {
     }
 
     this.dispatchEvent(new CustomEvent('symbiote-message-sent', { detail: { message } }));
+  }
+
+  async _doSendStream(message) {
+    const sendBtn = this._ref('sendBtn');
+    if (sendBtn) sendBtn.disabled = true;
+
+    // Badges container (shown above the assistant message, populated by tool_start/done)
+    const badgesWrap = document.createElement('div');
+    badgesWrap.className = 'symbiote-tool-badges';
+    const container = this._getMessagesContainer();
+
+    // Streaming assistant message bubble (starts empty)
+    const msgId = 'symbiote-msg-' + (++this._msgCounter);
+    const msgDiv = document.createElement('div');
+    msgDiv.className = 'symbiote-msg assistant';
+    msgDiv.id = msgId;
+    msgDiv.setAttribute('part', 'message');
+    const loadingHtml = this._adapter.loadingContent
+      ? this._adapter.loadingContent()
+      : '<span class="symbiote-spinner"></span>';
+    msgDiv.innerHTML = loadingHtml;
+
+    container.appendChild(badgesWrap);
+    container.appendChild(msgDiv);
+    container.scrollTop = container.scrollHeight;
+
+    let accumulated = '';
+    let renderTimer = null;
+    const throttleMs = 100;
+
+    const scheduleRender = () => {
+      if (renderTimer) return;
+      renderTimer = setTimeout(() => {
+        renderTimer = null;
+        msgDiv.innerHTML = symbioteFormatMarkdown(this._applyTextFilter(accumulated));
+        container.scrollTop = container.scrollHeight;
+      }, throttleMs);
+    };
+
+    try {
+      const context = this._contextProvider ? this._contextProvider() : '';
+      const endpoint = await this._adapter.sendMessageStream(message, context);
+
+      const fetchHeaders = { 'Content-Type': 'application/json', ...(endpoint.headers || {}) };
+      const fetchBody = endpoint.body !== undefined
+        ? (typeof endpoint.body === 'string' ? endpoint.body : JSON.stringify(endpoint.body))
+        : JSON.stringify({ message, context });
+
+      const resp = await fetch(endpoint.url, { method: 'POST', headers: fetchHeaders, body: fetchBody });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // keep incomplete line
+
+        let eventType = null;
+        for (const line of lines) {
+          if (line.startsWith('event:')) {
+            eventType = line.slice(6).trim();
+          } else if (line.startsWith('data:')) {
+            const raw = line.slice(5).trim();
+            if (!raw) continue;
+            try {
+              const data = JSON.parse(raw);
+              this._handleSSE(eventType || 'text_delta', data, badgesWrap, msgDiv, () => {
+                accumulated += (data.text || '');
+                scheduleRender();
+              });
+            } catch (_) { /* ignore malformed JSON */ }
+            eventType = null;
+          }
+        }
+      }
+
+      // Flush any pending render
+      if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
+      if (accumulated) {
+        msgDiv.innerHTML = symbioteFormatMarkdown(this._applyTextFilter(accumulated));
+        this._fireMessageRendered(msgId, accumulated);
+      } else {
+        msgDiv.remove();
+      }
+      if (!badgesWrap.children.length) badgesWrap.remove();
+      container.scrollTop = container.scrollHeight;
+
+    } catch (e) {
+      if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
+      msgDiv.innerHTML = symbioteFormatMarkdown(accumulated || 'Connection error.');
+      this.dispatchEvent(new CustomEvent('symbiote-error', { detail: { error: e } }));
+    } finally {
+      if (sendBtn) sendBtn.disabled = false;
+    }
+
+    this.dispatchEvent(new CustomEvent('symbiote-message-sent', { detail: { message } }));
+  }
+
+  _handleSSE(event, data, badgesWrap, msgDiv, onTextDelta) {
+    const container = this._getMessagesContainer();
+
+    switch (event) {
+      case 'text_delta':
+        onTextDelta();
+        break;
+
+      case 'tool_start':
+        this._addToolBadgePending(badgesWrap, data.tool_id, data.name, data.detail);
+        break;
+
+      case 'tool_done':
+        this._updateToolBadge(badgesWrap, data.tool_id, data.name, data.success, data.result_count, data.error);
+        break;
+
+      case 'response_done': {
+        // Final text override (if the server sends full text at end)
+        if (data.text) {
+          msgDiv.innerHTML = symbioteFormatMarkdown(this._applyTextFilter(data.text));
+        }
+        // Final tool_results (for adapters that also send sync-style results)
+        if (data.tool_results && data.tool_results.length) {
+          data.tool_results.forEach(tr => {
+            const existing = badgesWrap.querySelector(`[data-tool-id="${tr.tool_id}"]`);
+            if (!existing) {
+              this._updateToolBadge(badgesWrap, tr.tool_id, tr.tool_id, tr.success, null, tr.error);
+            }
+          });
+        }
+        // Follow-up suggestions
+        if (data.suggestions && data.suggestions.length) {
+          this._addFollowups(data.suggestions);
+        }
+        this.dispatchEvent(new CustomEvent('symbiote-message-received', {
+          detail: { response: data.text, suggestions: data.suggestions, tool_results: data.tool_results }
+        }));
+        break;
+      }
+
+      case 'error':
+        msgDiv.innerHTML = symbioteFormatMarkdown(data.message || 'An error occurred.');
+        this.dispatchEvent(new CustomEvent('symbiote-error', { detail: { error: new Error(data.message) } }));
+        break;
+    }
+
+    if (container) container.scrollTop = container.scrollHeight;
+  }
+
+  _addToolBadgePending(wrap, toolId, name, detail) {
+    const badge = document.createElement('span');
+    badge.className = 'symbiote-tool-badge pending';
+    badge.setAttribute('data-tool-id', toolId);
+    const label = name || toolId.replace(/_/g, ' ');
+    badge.title = detail || label;
+    badge.innerHTML = `<span class="badge-dot"></span>${label}`;
+    wrap.appendChild(badge);
+  }
+
+  _updateToolBadge(wrap, toolId, name, success, resultCount, error) {
+    let badge = wrap.querySelector(`[data-tool-id="${toolId}"]`);
+    if (!badge) {
+      // Badge wasn't created via tool_start — create it now
+      badge = document.createElement('span');
+      badge.setAttribute('data-tool-id', toolId);
+      wrap.appendChild(badge);
+    }
+    const status = success ? 'success' : 'error';
+    badge.className = `symbiote-tool-badge ${status}`;
+    const label = name || toolId.replace(/_/g, ' ');
+    const suffix = success && resultCount != null ? ` (${resultCount})` : '';
+    badge.title = success ? `${label}${suffix}` : (error || 'Error');
+    badge.innerHTML = `<span class="badge-dot"></span>${label}${suffix}`;
+  }
+
+  // ── Adapter hooks ──
+
+  _applyTextFilter(text) {
+    if (this._adapter.textFilter) {
+      try { return this._adapter.textFilter(text); } catch (_) {}
+    }
+    return text;
+  }
+
+  _fireMessageRendered(msgId, rawText) {
+    if (!msgId) return;
+    const el = this._shadow.getElementById(msgId);
+    if (!el) return;
+    if (this._adapter.onMessageRendered) {
+      try { this._adapter.onMessageRendered(el, rawText); } catch (_) {}
+    }
+    this.dispatchEvent(new CustomEvent('symbiote-message-rendered', {
+      detail: { element: el, rawText }
+    }));
   }
 
   // ── DOM helpers ──
