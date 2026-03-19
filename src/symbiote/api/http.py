@@ -151,6 +151,12 @@ class ToolExecResponse(BaseModel):
     error: str | None = None
 
 
+class ToolTagsRequest(BaseModel):
+    tags: list[str]
+    loading: str = "full"  # "full" | "index" | "semantic"
+    loop: bool = True  # enable tool execution loop
+
+
 class DiscoverRequest(BaseModel):
     source_path: str
     url: str | None = None  # live server URL to fetch /openapi.json from
@@ -165,6 +171,7 @@ class DiscoveredToolResponse(BaseModel):
     method: str | None = None
     url_template: str | None = None
     parameters: dict = {}
+    tags: list[str] = []
     status: str
     source_path: str | None = None
     discovered_at: str
@@ -667,11 +674,54 @@ def _tool_to_response(tool: DiscoveredTool) -> DiscoveredToolResponse:
         method=tool.method,
         url_template=tool.url_template,
         parameters=tool.parameters,
+        tags=tool.tags,
         status=tool.status,
         source_path=tool.source_path,
         discovered_at=tool.discovered_at,
         approved_at=tool.approved_at,
     )
+
+
+# ── Tool Tags endpoints ──────────────────────────────────────────────────
+
+
+@app.put("/symbiotes/{symbiote_id}/tool-tags", status_code=200)
+def set_tool_tags(
+    symbiote_id: str,
+    body: ToolTagsRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    identity: Annotated[IdentityManager, Depends(get_identity_manager)],
+    env: Annotated[EnvironmentManager, Depends(get_env_manager)],
+) -> dict:
+    """Set tool visibility tags for a symbiote."""
+    sym = identity.get(symbiote_id)
+    if sym is None:
+        raise HTTPException(status_code=404, detail="Symbiote not found")
+    if sym.owner_id and sym.owner_id != auth.tenant_id and not auth.is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    env.configure(symbiote_id=symbiote_id, tool_tags=body.tags, tool_loading=body.loading, tool_loop=body.loop)
+    return {"tags": body.tags, "loading": body.loading, "loop": body.loop}
+
+
+@app.get("/symbiotes/{symbiote_id}/tool-tags")
+def get_tool_tags(
+    symbiote_id: str,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    identity: Annotated[IdentityManager, Depends(get_identity_manager)],
+    env: Annotated[EnvironmentManager, Depends(get_env_manager)],
+) -> dict:
+    """Get tool visibility tags for a symbiote."""
+    sym = identity.get(symbiote_id)
+    if sym is None:
+        raise HTTPException(status_code=404, detail="Symbiote not found")
+    if sym.owner_id and sym.owner_id != auth.tenant_id and not auth.is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    tags = env.get_tool_tags(symbiote_id)
+    loading = env.get_tool_loading(symbiote_id)
+    loop = env.get_tool_loop(symbiote_id)
+    return {"tags": tags, "loading": loading, "loop": loop}
 
 
 # ══════════════════════════════════════════════════════════════════════════

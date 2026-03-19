@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from symbiote.core.context import AssembledContext
 from symbiote.core.models import Message
 from symbiote.core.ports import LLMPort
-from symbiote.environment.descriptors import LLMResponse, ToolCallResult
+from symbiote.environment.descriptors import LLMResponse, ToolCall, ToolCallResult
 from symbiote.environment.parser import parse_tool_calls
 from symbiote.environment.runtime_context import inject_runtime_context
 from symbiote.memory.working import WorkingMemory
@@ -20,16 +20,29 @@ if TYPE_CHECKING:
     from symbiote.memory.consolidator import MemoryConsolidator
 
 _HANDLED_INTENTS = frozenset({"chat", "ask", "question", "talk"})
+_MAX_TOOL_ITERATIONS = 10
 
 _TOOL_INSTRUCTIONS = """\
-To use a tool, include a fenced code block with the language tag `tool_call` containing a JSON object:
+You are an autonomous agent that EXECUTES actions via tools. Rules:
+- Do not narrate or explain what you will do. Just call the tool.
+- Never ask the user to do something manually when a tool exists.
+- Never invent or assume values (like IDs). If you need data, call a tool to get it first.
+- After including a tool_call block, STOP your response immediately. \
+Do not guess the result. Do not call another tool that depends on it. \
+Wait for the actual result, which will be provided in the next message.
+- You may include multiple tool_call blocks ONLY if they are fully independent \
+(neither depends on the other's result).
+
+To call a tool:
 
 ```tool_call
 {"tool": "<tool_id>", "params": {<parameters>}}
-```
+```"""
 
-You may include multiple tool_call blocks in a single response. \
-Tool results will be provided back to you."""
+_INDEX_INSTRUCTIONS = """\
+The tool list below shows only names and descriptions — parameters are NOT shown.
+You MUST call `get_tool_schema` to fetch the full parameter schema \
+BEFORE calling any other tool. Calling a tool with invented parameters will fail."""
 
 
 class ChatRunner:
@@ -60,83 +73,53 @@ class ChatRunner:
         context: AssembledContext,
         on_token: Callable[[str], None] | None = None,
     ) -> RunResult:
-        """Run the chat runner synchronously.
+        """Run the chat runner synchronously with tool-loop support.
 
-        Args:
-            context: Assembled context for this turn.
-            on_token: Optional callback invoked with each text token as it is
-                generated.  If the LLM adapter exposes a ``stream()`` method,
-                tokens are emitted incrementally; otherwise the callback is
-                called once with the full response text so callers (e.g. SSE
-                endpoints) don't need to branch on LLM capabilities.
+        When ``context.tool_loop`` is True (default), the runner feeds tool
+        results back to the LLM and re-invokes it until the LLM responds
+        without tool calls or ``_MAX_TOOL_ITERATIONS`` is reached.
         """
         messages = self._build_messages(context)
+        kwargs = self._build_llm_kwargs(context)
+        max_iters = _MAX_TOOL_ITERATIONS if context.tool_loop else 1
 
-        # Build native tool definitions if enabled
-        native_tool_defs: list[dict] | None = None
-        if self._native_tools and context.available_tools:
-            from symbiote.environment.descriptors import ToolDescriptor
+        all_tool_results: list[ToolCallResult] = []
+        final_text = ""
 
-            native_tool_defs = [
-                ToolDescriptor(**t).to_openai_schema() for t in context.available_tools
-            ]
+        for _ in range(max_iters):
+            try:
+                response = self._call_llm_sync(messages, kwargs, on_token)
+            except Exception as exc:
+                return RunResult(success=False, error=str(exc), runner_type=self.runner_type)
 
-        kwargs: dict = {"config": context.generation_settings}
-        if native_tool_defs is not None:
-            kwargs["tools"] = native_tool_defs
+            clean_text, tool_calls = self._parse_response(response)
+            final_text = clean_text
 
-        try:
-            if on_token is not None and hasattr(self._llm, "stream"):
-                chunks: list[str] = []
-                for token in self._llm.stream(messages, **kwargs):
-                    on_token(token)
-                    chunks.append(token)
-                response: str | LLMResponse = "".join(chunks)
-            else:
-                response = self._llm.complete(messages, **kwargs)
-                if on_token is not None and isinstance(response, str):
-                    on_token(response)
-        except Exception as exc:
-            return RunResult(success=False, error=str(exc), runner_type=self.runner_type)
+            if not tool_calls or self._tool_gateway is None:
+                break
 
-        # Determine if response is native (LLMResponse) or text-based (str)
-        if isinstance(response, LLMResponse):
-            clean_text = response.content
-            tool_calls = [tc.to_tool_call() for tc in response.tool_calls]
-        else:
-            # Backward compatible: plain str — parse text-based tool calls
-            clean_text, tool_calls = parse_tool_calls(response)
-
-        # Execute tool calls
-        tool_results: list[ToolCallResult] = []
-        if tool_calls and self._tool_gateway is not None:
-            tool_results = self._tool_gateway.execute_tool_calls(
+            results = self._tool_gateway.execute_tool_calls(
                 symbiote_id=context.symbiote_id,
                 session_id=context.session_id,
                 calls=tool_calls,
             )
+            all_tool_results.extend(results)
 
+            # Feed results back for the next iteration
+            messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
+            messages.append({"role": "user", "content": self._format_tool_results(results)})
+
+        # Save only the final response to working memory
         if self._working_memory is not None:
             self._working_memory.update_message(
-                Message(
-                    session_id=context.session_id,
-                    role="assistant",
-                    content=clean_text,
-                )
+                Message(session_id=context.session_id, role="assistant", content=final_text)
             )
-
-            # Consolidate if working memory exceeds token threshold
             if self._consolidator is not None:
-                self._consolidator.consolidate_if_needed(
-                    self._working_memory, context.symbiote_id
-                )
+                self._consolidator.consolidate_if_needed(self._working_memory, context.symbiote_id)
 
-        output = clean_text
-        if tool_results:
-            output = {
-                "text": clean_text,
-                "tool_results": [r.model_dump() for r in tool_results],
-            }
+        output = final_text
+        if all_tool_results:
+            output = {"text": final_text, "tool_results": [r.model_dump() for r in all_tool_results]}
 
         return RunResult(success=True, output=output, runner_type=self.runner_type)
 
@@ -145,15 +128,53 @@ class ChatRunner:
         context: AssembledContext,
         on_token: Callable[[str], None] | None = None,
     ) -> RunResult:
-        """Async variant of run() — awaits coroutine tool handlers.
-
-        Use this instead of run() when tool handlers may be async coroutines
-        (e.g. handlers that call internal services on the same event loop to
-        avoid the deadlock that arises with blocking urllib calls inside a
-        single-worker uvicorn process).
-        """
+        """Async variant of run() with tool-loop support."""
         messages = self._build_messages(context)
+        kwargs = self._build_llm_kwargs(context)
+        max_iters = _MAX_TOOL_ITERATIONS if context.tool_loop else 1
 
+        all_tool_results: list[ToolCallResult] = []
+        final_text = ""
+
+        for _ in range(max_iters):
+            try:
+                response = self._call_llm_sync(messages, kwargs, on_token)
+            except Exception as exc:
+                return RunResult(success=False, error=str(exc), runner_type=self.runner_type)
+
+            clean_text, tool_calls = self._parse_response(response)
+            final_text = clean_text
+
+            if not tool_calls or self._tool_gateway is None:
+                break
+
+            results = await self._tool_gateway.execute_tool_calls_async(
+                symbiote_id=context.symbiote_id,
+                session_id=context.session_id,
+                calls=tool_calls,
+            )
+            all_tool_results.extend(results)
+
+            messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
+            messages.append({"role": "user", "content": self._format_tool_results(results)})
+
+        if self._working_memory is not None:
+            self._working_memory.update_message(
+                Message(session_id=context.session_id, role="assistant", content=final_text)
+            )
+            if self._consolidator is not None:
+                self._consolidator.consolidate_if_needed(self._working_memory, context.symbiote_id)
+
+        output = final_text
+        if all_tool_results:
+            output = {"text": final_text, "tool_results": [r.model_dump() for r in all_tool_results]}
+
+        return RunResult(success=True, output=output, runner_type=self.runner_type)
+
+    # ── internal ─────────────────────────────────────────────────────────
+
+    def _build_llm_kwargs(self, context: AssembledContext) -> dict:
+        """Build kwargs dict for the LLM call (config + native tools)."""
         native_tool_defs: list[dict] | None = None
         if self._native_tools and context.available_tools:
             from symbiote.environment.descriptors import ToolDescriptor
@@ -161,67 +182,61 @@ class ChatRunner:
             native_tool_defs = [
                 ToolDescriptor(**t).to_openai_schema() for t in context.available_tools
             ]
-
         kwargs: dict = {"config": context.generation_settings}
         if native_tool_defs is not None:
             kwargs["tools"] = native_tool_defs
+        return kwargs
 
-        try:
-            if on_token is not None and hasattr(self._llm, "stream"):
-                chunks: list[str] = []
-                response: str | LLMResponse = ""
-                for item in self._llm.stream(messages, **kwargs):
-                    if isinstance(item, LLMResponse):
-                        response = item
-                    else:
-                        on_token(item)
-                        chunks.append(item)
-                if not isinstance(response, LLMResponse):
-                    response = "".join(chunks)
-            else:
-                response = self._llm.complete(messages, **kwargs)
-                if on_token is not None and isinstance(response, str):
-                    on_token(response)
-        except Exception as exc:
-            return RunResult(success=False, error=str(exc), runner_type=self.runner_type)
+    def _call_llm_sync(
+        self, messages: list[dict], kwargs: dict,
+        on_token: Callable[[str], None] | None,
+    ) -> str | LLMResponse:
+        """Call the LLM synchronously, with optional streaming."""
+        if on_token is not None and hasattr(self._llm, "stream"):
+            chunks: list[str] = []
+            response: str | LLMResponse = ""
+            for item in self._llm.stream(messages, **kwargs):
+                if isinstance(item, LLMResponse):
+                    response = item
+                else:
+                    on_token(item)
+                    chunks.append(item)
+            if not isinstance(response, LLMResponse):
+                response = "".join(chunks)
+            return response
+        response = self._llm.complete(messages, **kwargs)
+        if on_token is not None and isinstance(response, str):
+            on_token(response)
+        return response
 
+    @staticmethod
+    def _parse_response(response: str | LLMResponse) -> tuple[str, list]:
+        """Extract clean text and tool calls from LLM response."""
         if isinstance(response, LLMResponse):
-            clean_text = response.content
-            tool_calls = [tc.to_tool_call() for tc in response.tool_calls]
-        else:
-            clean_text, tool_calls = parse_tool_calls(response)
+            return response.content, [tc.to_tool_call() for tc in response.tool_calls]
+        return parse_tool_calls(response)
 
-        tool_results: list[ToolCallResult] = []
-        if tool_calls and self._tool_gateway is not None:
-            tool_results = await self._tool_gateway.execute_tool_calls_async(
-                symbiote_id=context.symbiote_id,
-                session_id=context.session_id,
-                calls=tool_calls,
-            )
+    @staticmethod
+    def _format_assistant_with_calls(text: str, calls: list[ToolCall]) -> str:
+        """Format assistant message including tool_call blocks for the loop context."""
+        parts = []
+        if text:
+            parts.append(text)
+        for call in calls:
+            block = json.dumps({"tool": call.tool_id, "params": call.params}, ensure_ascii=False)
+            parts.append(f"```tool_call\n{block}\n```")
+        return "\n".join(parts)
 
-        if self._working_memory is not None:
-            self._working_memory.update_message(
-                Message(
-                    session_id=context.session_id,
-                    role="assistant",
-                    content=clean_text,
-                )
-            )
-            if self._consolidator is not None:
-                self._consolidator.consolidate_if_needed(
-                    self._working_memory, context.symbiote_id
-                )
-
-        output = clean_text
-        if tool_results:
-            output = {
-                "text": clean_text,
-                "tool_results": [r.model_dump() for r in tool_results],
-            }
-
-        return RunResult(success=True, output=output, runner_type=self.runner_type)
-
-    # ── internal ─────────────────────────────────────────────────────────
+    @staticmethod
+    def _format_tool_results(results: list[ToolCallResult]) -> str:
+        """Format tool results as a user message for the next LLM turn."""
+        parts = []
+        for r in results:
+            if r.success:
+                parts.append(f"[Tool result: {r.tool_id}]\n{json.dumps(r.output, default=str, ensure_ascii=False)}")
+            else:
+                parts.append(f"[Tool error: {r.tool_id}]\n{r.error}")
+        return "\n\n".join(parts)
 
     def _build_messages(self, context: AssembledContext) -> list[dict]:
         messages: list[dict] = []
@@ -249,21 +264,39 @@ class ChatRunner:
         # Persona
         if context.persona:
             parts.append("## Persona")
-            parts.append(json.dumps(context.persona, indent=2, default=str))
+            parts.append(self._render_persona(context.persona))
 
         # Available tools (text-based instructions only when NOT using native tools)
         if context.available_tools and not self._native_tools:
-            parts.append("## Available Tools")
-            parts.append(_TOOL_INSTRUCTIONS)
-            for tool in context.available_tools:
-                tool_id = tool.get("tool_id", "")
-                name = tool.get("name", "")
-                desc = tool.get("description", "")
-                params = tool.get("parameters", {})
-                parts.append(f"### {tool_id} — {name}")
-                parts.append(desc)
-                if params:
-                    parts.append(f"Parameters: ```json\n{json.dumps(params, indent=2)}\n```")
+            if context.tool_loading == "index":
+                parts.append("## Available Tools (Index)")
+                parts.append(_TOOL_INSTRUCTIONS)
+                parts.append(_INDEX_INSTRUCTIONS)
+                for tool in context.available_tools:
+                    tool_id = tool.get("tool_id", "")
+                    name = tool.get("name", "")
+                    desc = tool.get("description", "")
+                    params = tool.get("parameters")
+                    if params:
+                        # get_tool_schema itself — show full params
+                        parts.append(f"### {tool_id} — {name}")
+                        parts.append(desc)
+                        parts.append(f"Parameters: ```json\n{json.dumps(params, indent=2)}\n```")
+                    else:
+                        # Index entry — compact, no params
+                        parts.append(f"- **{tool_id}** — {name}: {desc}")
+            else:
+                parts.append("## Available Tools")
+                parts.append(_TOOL_INSTRUCTIONS)
+                for tool in context.available_tools:
+                    tool_id = tool.get("tool_id", "")
+                    name = tool.get("name", "")
+                    desc = tool.get("description", "")
+                    params = tool.get("parameters", {})
+                    parts.append(f"### {tool_id} — {name}")
+                    parts.append(desc)
+                    if params:
+                        parts.append(f"Parameters: ```json\n{json.dumps(params, indent=2)}\n```")
 
         # Extra context (host-injected, e.g. page context)
         if context.extra_context:
@@ -289,3 +322,29 @@ class ChatRunner:
             return "You are a helpful assistant."
 
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _render_persona(persona: dict) -> str:
+        """Render persona dict as natural-language instructions.
+
+        Recognised keys are rendered as structured text; any remaining
+        keys are appended as a compact JSON block so nothing is lost.
+        """
+        known_keys = {"role", "tone", "language", "behavior"}
+        lines: list[str] = []
+
+        if role := persona.get("role"):
+            lines.append(f"You are: {role}")
+        if tone := persona.get("tone"):
+            lines.append(f"Tone: {tone}")
+        if lang := persona.get("language"):
+            lines.append(f"Language: {lang}")
+        if behavior := persona.get("behavior"):
+            lines.append(f"\n{behavior}")
+
+        # Render any extra keys the host added (custom fields)
+        extra = {k: v for k, v in persona.items() if k not in known_keys}
+        if extra:
+            lines.append(json.dumps(extra, indent=2, default=str, ensure_ascii=False))
+
+        return "\n".join(lines) if lines else json.dumps(persona, indent=2, default=str)

@@ -19,6 +19,7 @@ class DiscoveredTool(BaseModel):
     method: str | None = None
     url_template: str | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list)
     status: Literal["pending", "approved", "disabled"] = "pending"
     source_path: str | None = None
     discovered_at: str = ""

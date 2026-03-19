@@ -141,6 +141,7 @@ class DiscoveryService:
                     method=method.upper(),
                     url_template=f"{base_url}{path}",
                     parameters=parameters,
+                    tags=op.get("tags", []),
                     source_path=openapi_url,
                     discovered_at=now,
                 ))
@@ -212,6 +213,7 @@ class DiscoveryService:
                     method=method.upper(),
                     url_template=f"{base_url}{path}",
                     parameters=parameters,
+                    tags=op.get("tags", []),
                     source_path=str(spec_file),
                     discovered_at=now,
                 ))

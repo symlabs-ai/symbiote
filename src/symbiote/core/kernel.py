@@ -54,13 +54,14 @@ class SymbioteKernel:
         self._policy_gate = PolicyGate(self._environment, self._storage)
         self._tool_gateway = ToolGateway(self._policy_gate)
 
-        # Context assembler (with tool gateway)
+        # Context assembler (with tool gateway + environment for auto tag filtering)
         self._context_assembler = ContextAssembler(
             identity=self._identity,
             memory=self._memory,
             knowledge=self._knowledge,
             context_budget=config.context_budget,
             tool_gateway=self._tool_gateway,
+            environment=self._environment,
         )
 
         # Runners
@@ -295,6 +296,43 @@ class SymbioteKernel:
         if tool_ids:
             self._environment.configure(symbiote_id=symbiote_id, tools=tool_ids)
         return tool_ids
+
+    def configure_tool_visibility(
+        self,
+        symbiote_id: str,
+        tags: list[str],
+        loading: str = "full",
+        loop: bool = True,
+    ) -> None:
+        """Set which tool tags are visible in the LLM prompt for a symbiote.
+
+        All tools remain registered in the ToolGateway and executable;
+        tags only control which tools appear in the assembled context.
+
+        Args:
+            tags: OpenAPI tags that determine which tools are visible.
+            loading: How tools appear in the prompt:
+                ``"full"`` — complete schemas (default),
+                ``"index"`` — compact catalog + ``get_tool_schema`` meta-tool,
+                ``"semantic"`` — cheap LLM pre-filters tags per message.
+            loop: When True (default), the ChatRunner feeds tool results
+                back to the LLM and re-invokes it until no more tool calls
+                are made or the iteration limit is reached.
+        """
+        self._environment.configure(
+            symbiote_id=symbiote_id,
+            tool_tags=tags,
+            tool_loading=loading,
+            tool_loop=loop,
+        )
+
+    def set_semantic_llm(self, llm: LLMPort) -> None:
+        """Inject a cheap LLM for semantic tool tag resolution.
+
+        The host provides this — the kernel never instantiates an LLM on its own.
+        Only used when ``tool_loading="semantic"`` is configured for a symbiote.
+        """
+        self._context_assembler._semantic_llm = llm
 
     def shutdown(self) -> None:
         """Close the storage adapter."""

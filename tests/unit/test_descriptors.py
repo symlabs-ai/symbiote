@@ -39,6 +39,19 @@ class TestToolDescriptor:
             d = ToolDescriptor(tool_id="t", name="T", description="T", handler_type=ht)
             assert d.handler_type == ht
 
+    def test_tags_default_empty(self) -> None:
+        d = ToolDescriptor(tool_id="t", name="T", description="T")
+        assert d.tags == []
+
+    def test_tags_stored(self) -> None:
+        d = ToolDescriptor(
+            tool_id="search",
+            name="Search",
+            description="Search items",
+            tags=["Items", "Compose"],
+        )
+        assert d.tags == ["Items", "Compose"]
+
 
 class TestHttpToolConfig:
     def test_defaults(self) -> None:
@@ -162,6 +175,33 @@ class TestToolDescriptorOpenAISchema:
         d = ToolDescriptor(tool_id="list", name="List", description="List all")
         schema = d.to_openai_schema()
         assert schema["function"]["parameters"] == {"type": "object", "properties": {}}
+
+
+class TestHttpToolConfigOptionalAndArrayParams:
+    def test_optional_params_default_empty(self) -> None:
+        c = HttpToolConfig(url_template="http://localhost/api/items")
+        assert c.optional_params == []
+
+    def test_array_params_default_empty(self) -> None:
+        c = HttpToolConfig(url_template="http://localhost/api/items")
+        assert c.array_params == []
+
+    def test_optional_params_stored(self) -> None:
+        c = HttpToolConfig(
+            url_template="http://localhost/api/items?status={status}&limit={limit}",
+            optional_params=["status", "limit"],
+        )
+        assert "status" in c.optional_params
+        assert "limit" in c.optional_params
+
+    def test_array_params_stored(self) -> None:
+        c = HttpToolConfig(
+            url_template="http://localhost/api/bulk",
+            method="POST",
+            body_template={"item_ids": "{item_ids}", "action": "{action}"},
+            array_params=["item_ids"],
+        )
+        assert "item_ids" in c.array_params
 
 
 class TestHttpToolConfigHeaderFactory:

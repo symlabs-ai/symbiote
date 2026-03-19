@@ -58,6 +58,7 @@ class DiscoveredToolLoader:
                 name=tool.name,
                 description=tool.description or tool.name,
                 parameters=tool.parameters or {},
+                tags=tool.tags,
                 handler_type="http",
             )
             config = HttpToolConfig(

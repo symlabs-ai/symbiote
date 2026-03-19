@@ -3,6 +3,63 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [0.2.5] — 2026-03-19
+
+### Added — Tool Loop (agentic multi-step execution)
+
+- `ChatRunner` tool loop — when `tool_loop=True` (default), the runner iterates: LLM → parse tool calls → execute → feed results back → LLM, until the model responds without tool calls or hits `max_iterations` (default 10). Previously the LLM was blind after the first tool call (single-shot).
+- `_format_tool_results()` — formats tool execution results as structured messages injected back into the conversation for the next LLM turn
+- `_format_assistant_with_calls()` — preserves the assistant's tool call text in conversation history so the LLM sees the full chain of reasoning
+- Working memory only stores the **final** response, not intermediate tool-calling turns
+- `RunResult.output` returns `{"text": ..., "tool_results": [...]}` when tools were executed, preserving full audit trail
+- `run_async()` — async variant with identical loop semantics, uses `execute_tool_calls_async()`
+
+### Added — Semantic Tool Loading
+
+- `ContextAssembler` now supports three tool loading modes via `EnvironmentConfig.tool_loading`:
+  - **full** — complete tool schemas in system prompt (existing behavior)
+  - **index** — compact one-line-per-tool catalog with a `get_tool_schema` meta-tool for lazy schema fetching
+  - **semantic** — LLM-powered pre-filter resolves relevant tool tags before context assembly, minimizing prompt size
+- `ToolTagResolver` (`environment/resolver.py`) — uses a cheap/fast LLM to select relevant tool tags from the user query, reducing the tool set sent to the main LLM
+- `EnvironmentConfig.tool_loading: Literal["full", "index", "semantic"]` — persisted per-symbiote
+- `EnvironmentConfig.tool_loop: bool` — toggle agentic loop on/off per-symbiote
+- `EnvironmentConfig.tool_tags: list[str]` — filter tools by tag for scoped visibility
+- `EnvironmentManager.get_tool_loading()`, `get_tool_loop()`, `get_tool_tags()` — accessors with SQLite persistence
+- `PUT/GET /symbiotes/{id}/tool-tags` — REST endpoints for tool loading configuration
+- `kernel.configure_tool_visibility()` — unified API for setting tags, loading mode, and loop toggle
+
+### Added — ToolGateway enhancements
+
+- `ToolGateway.execute_tool_calls()` — batch execution accepting `list[ToolCall]`, returns `list[ToolCallResult]`
+- `ToolGateway.execute_tool_calls_async()` — async batch variant
+- `ToolGateway.get_tool_schema(tool_id)` — returns full schema dict for a single tool (used by index mode's meta-tool)
+- `ToolGateway.list_tags()` — returns deduplicated set of all registered tool tags
+- `ToolGateway.get_descriptors_by_tags(tags)` — filter registered tools by tag list
+- `ToolCallResult` model — structured result with `tool_id`, `success`, `output`, `error`
+
+### Added — Discovery enhancements
+
+- `DiscoveredTool.handler_type` field — distinguishes HTTP vs CLI vs custom discovered tools
+- `DiscoveryService` FastAPI strategy now extracts response models and query parameters
+- `DiscoveredToolRepository` upsert preserves `handler_type` across re-scans
+
+### Changed
+
+- `ChatRunner.run()` refactored from single-shot to iterative loop (backward compatible: `tool_loop=False` restores single-shot)
+- `ChatRunner._build_system()` now includes brief tool-loop instructions when `tool_loop=True`
+- `AssembledContext` gains `tool_loading`, `tool_loop`, `available_tools` fields
+- SQLite schema: `env_configs` table gains `tool_loading`, `tool_loop`, `tool_tags` columns (idempotent ALTER TABLE)
+
+### Tests
+
+- 794 tests passing (+170 new)
+- `test_chat_runner_tools.py` — tool loop iterations, max_iterations guard, async loop, tool results accumulation
+- `test_context.py` — all three loading modes (full/index/semantic), token budget with tools
+- `test_tool_gateway.py` — batch execution, tag filtering, schema retrieval, async execution
+- `test_environment.py` — tool_loading/tool_loop/tool_tags persistence round-trip
+- `test_loading_modes.py` — 241 realistic tools (YouNews-like), semantic filtering with mock LLM
+- `test_resolver.py` — ToolTagResolver unit tests
+
 ## [0.2.4] — 2026-03-18
 
 ### Added — B-23: Deploy Hosted (DevOps)

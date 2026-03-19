@@ -286,3 +286,77 @@ class TestOpenApiUrlStrategy:
         ids = [t.tool_id for t in result.discovered]
         assert "get_api_items" in ids
         assert "yn_list_items" not in ids
+
+    def test_captures_tags_from_openapi(
+        self, service: DiscoveryService, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        spec = {
+            "openapi": "3.0.0",
+            "info": {"title": "Test", "version": "1.0.0"},
+            "paths": {
+                "/api/items": {
+                    "get": {
+                        "operationId": "list_items",
+                        "summary": "List items",
+                        "tags": ["Items", "Compose"],
+                    }
+                },
+                "/api/admin/config": {
+                    "get": {
+                        "operationId": "get_config",
+                        "summary": "Get config",
+                        "tags": ["Admin"],
+                    }
+                },
+                "/api/health": {
+                    "get": {
+                        "operationId": "health_check",
+                        "summary": "Health",
+                    }
+                },
+            },
+        }
+        with self._mock_urlopen(spec):
+            result = service.discover(symbiote_id, str(tmp_path), url="http://localhost:8000")
+
+        items = next(t for t in result.discovered if t.tool_id == "list_items")
+        assert items.tags == ["Items", "Compose"]
+
+        admin = next(t for t in result.discovered if t.tool_id == "get_config")
+        assert admin.tags == ["Admin"]
+
+        health = next(t for t in result.discovered if t.tool_id == "health_check")
+        assert health.tags == []
+
+    def test_tags_persisted_via_repository(
+        self, service: DiscoveryService, adapter: SQLiteAdapter, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        spec = {
+            "openapi": "3.0.0",
+            "info": {"title": "Test", "version": "1.0.0"},
+            "paths": {
+                "/api/items": {
+                    "get": {
+                        "operationId": "list_items",
+                        "summary": "List items",
+                        "tags": ["Items"],
+                    }
+                },
+            },
+        }
+        with self._mock_urlopen(spec):
+            service.discover(symbiote_id, str(tmp_path), url="http://localhost:8000")
+
+        repo = DiscoveredToolRepository(adapter)
+        tool = repo.get(symbiote_id, "list_items")
+        assert tool is not None
+        assert tool.tags == ["Items"]
+
+    def test_file_scan_tags_empty(
+        self, service: DiscoveryService, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        """FastAPI/Flask file scan should produce empty tags."""
+        (tmp_path / "routes.py").write_text('@router.get("/api/items")\ndef f(): pass\n')
+        result = service.discover(symbiote_id, str(tmp_path))
+        for tool in result.discovered:
+            assert tool.tags == []

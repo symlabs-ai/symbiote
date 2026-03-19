@@ -58,12 +58,17 @@ def tool_gateway(env_manager: EnvironmentManager, adapter: SQLiteAdapter) -> Too
     return ToolGateway(policy_gate=gate)
 
 
-def _make_context(symbiote_id: str, user_input: str, tools: list[dict] | None = None) -> AssembledContext:
+def _make_context(
+    symbiote_id: str, user_input: str,
+    tools: list[dict] | None = None,
+    tool_loop: bool = False,
+) -> AssembledContext:
     return AssembledContext(
         symbiote_id=symbiote_id,
         session_id="sess-1",
         user_input=user_input,
         available_tools=tools or [],
+        tool_loop=tool_loop,
     )
 
 
@@ -274,3 +279,154 @@ class TestChatRunnerNativeTools:
         runner.run(context)
 
         assert llm.last_tools is None
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TOOL LOOP TESTS
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class MultiStepMockLLM:
+    """Mock LLM that returns different responses on each call.
+
+    First call returns a tool call, second call returns a final text.
+    """
+
+    def __init__(self, responses: list[str]) -> None:
+        self._responses = list(responses)
+        self._call_idx = 0
+        self.call_count = 0
+        self.all_messages: list[list[dict]] = []
+
+    def complete(self, messages, **kwargs):
+        self.call_count += 1
+        self.all_messages.append(list(messages))
+        idx = min(self._call_idx, len(self._responses) - 1)
+        self._call_idx += 1
+        return self._responses[idx]
+
+
+class TestToolLoop:
+    """Tests for the tool execution loop (Ralph Loop)."""
+
+    def test_loop_completes_multi_step_task(
+        self, symbiote_id, tool_gateway, env_manager,
+    ) -> None:
+        """Loop feeds tool results back to LLM until it responds without tools."""
+        tool_gateway.register_tool("items_list", lambda p: [{"id": 42, "title": "Incêndio"}])
+        tool_gateway.register_tool("items_publish", lambda p: {"published": True})
+        env_manager.configure(symbiote_id=symbiote_id, tools=["items_list", "items_publish"])
+
+        llm = MultiStepMockLLM([
+            # Step 1: LLM calls items_list
+            '```tool_call\n{"tool": "items_list", "params": {}}\n```',
+            # Step 2: LLM sees results, calls items_publish
+            '```tool_call\n{"tool": "items_publish", "params": {"item_id": 42}}\n```',
+            # Step 3: LLM sees publish result, responds with text
+            "Matéria publicada com sucesso.",
+        ])
+        runner = ChatRunner(llm, tool_gateway=tool_gateway)
+        context = _make_context(symbiote_id, "publique a matéria", tool_loop=True)
+        result = runner.run(context)
+
+        assert result.success is True
+        assert llm.call_count == 3
+        assert isinstance(result.output, dict)
+        assert result.output["text"] == "Matéria publicada com sucesso."
+        assert len(result.output["tool_results"]) == 2
+        assert result.output["tool_results"][0]["tool_id"] == "items_list"
+        assert result.output["tool_results"][1]["tool_id"] == "items_publish"
+
+    def test_loop_disabled_is_single_shot(
+        self, symbiote_id, tool_gateway, env_manager,
+    ) -> None:
+        """With tool_loop=False, only one LLM call is made."""
+        tool_gateway.register_tool("items_list", lambda p: [{"id": 42}])
+        env_manager.configure(symbiote_id=symbiote_id, tools=["items_list"])
+
+        llm = MultiStepMockLLM([
+            '```tool_call\n{"tool": "items_list", "params": {}}\n```',
+            "Should never reach this.",
+        ])
+        runner = ChatRunner(llm, tool_gateway=tool_gateway)
+        context = _make_context(symbiote_id, "list items", tool_loop=False)
+        result = runner.run(context)
+
+        assert result.success is True
+        assert llm.call_count == 1
+        assert isinstance(result.output, dict)
+        assert len(result.output["tool_results"]) == 1
+
+    def test_loop_stops_when_no_tool_calls(self, symbiote_id) -> None:
+        """Loop stops immediately when LLM responds without tool calls."""
+        llm = MultiStepMockLLM(["Just a plain answer."])
+        runner = ChatRunner(llm)
+        context = _make_context(symbiote_id, "hello", tool_loop=True)
+        result = runner.run(context)
+
+        assert result.success is True
+        assert llm.call_count == 1
+        assert result.output == "Just a plain answer."
+
+    def test_loop_respects_max_iterations(
+        self, symbiote_id, tool_gateway, env_manager,
+    ) -> None:
+        """Loop stops at _MAX_TOOL_ITERATIONS even if LLM keeps calling tools."""
+        tool_gateway.register_tool("echo", lambda p: "ok")
+        env_manager.configure(symbiote_id=symbiote_id, tools=["echo"])
+
+        # LLM always returns a tool call
+        infinite_response = '```tool_call\n{"tool": "echo", "params": {}}\n```'
+        llm = MultiStepMockLLM([infinite_response] * 20)
+        runner = ChatRunner(llm, tool_gateway=tool_gateway)
+        context = _make_context(symbiote_id, "loop forever", tool_loop=True)
+        result = runner.run(context)
+
+        assert result.success is True
+        from symbiote.runners.chat import _MAX_TOOL_ITERATIONS
+        assert llm.call_count == _MAX_TOOL_ITERATIONS
+
+    def test_loop_feeds_results_in_messages(
+        self, symbiote_id, tool_gateway, env_manager,
+    ) -> None:
+        """Verify that tool results appear in messages sent to the LLM."""
+        tool_gateway.register_tool("get_name", lambda p: "Alice")
+        env_manager.configure(symbiote_id=symbiote_id, tools=["get_name"])
+
+        llm = MultiStepMockLLM([
+            '```tool_call\n{"tool": "get_name", "params": {}}\n```',
+            "Hello Alice!",
+        ])
+        runner = ChatRunner(llm, tool_gateway=tool_gateway)
+        context = _make_context(symbiote_id, "who am I?", tool_loop=True)
+        runner.run(context)
+
+        # Second call should include tool result in messages
+        second_call_messages = llm.all_messages[1]
+        tool_result_msg = second_call_messages[-1]  # last message = tool result
+        assert "[Tool result: get_name]" in tool_result_msg["content"]
+        assert "Alice" in tool_result_msg["content"]
+
+    def test_loop_accumulates_all_tool_results(
+        self, symbiote_id, tool_gateway, env_manager,
+    ) -> None:
+        """All tool results across iterations are accumulated in output."""
+        tool_gateway.register_tool("step1", lambda p: "result1")
+        tool_gateway.register_tool("step2", lambda p: "result2")
+        tool_gateway.register_tool("step3", lambda p: "result3")
+        env_manager.configure(symbiote_id=symbiote_id, tools=["step1", "step2", "step3"])
+
+        llm = MultiStepMockLLM([
+            '```tool_call\n{"tool": "step1", "params": {}}\n```',
+            '```tool_call\n{"tool": "step2", "params": {}}\n```',
+            '```tool_call\n{"tool": "step3", "params": {}}\n```',
+            "All done.",
+        ])
+        runner = ChatRunner(llm, tool_gateway=tool_gateway)
+        context = _make_context(symbiote_id, "do 3 steps", tool_loop=True)
+        result = runner.run(context)
+
+        assert llm.call_count == 4
+        assert len(result.output["tool_results"]) == 3
+        tool_ids = [r["tool_id"] for r in result.output["tool_results"]]
+        assert tool_ids == ["step1", "step2", "step3"]

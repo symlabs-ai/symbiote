@@ -25,6 +25,9 @@ class EnvironmentManager:
         humans: list[str] | None = None,
         policies: dict | None = None,
         resources: dict | None = None,
+        tool_tags: list[str] | None = None,
+        tool_loading: str | None = None,
+        tool_loop: bool | None = None,
     ) -> EnvironmentConfig:
         """Create or update an environment config for a symbiote+workspace combo."""
         existing = self._fetch_exact(symbiote_id, workspace_id)
@@ -40,11 +43,15 @@ class EnvironmentManager:
                 humans=humans if humans is not None else existing.humans,
                 policies=policies if policies is not None else existing.policies,
                 resources=resources if resources is not None else existing.resources,
+                tool_tags=tool_tags if tool_tags is not None else existing.tool_tags,
+                tool_loading=tool_loading if tool_loading is not None else existing.tool_loading,
+                tool_loop=tool_loop if tool_loop is not None else existing.tool_loop,
             )
             self._storage.execute(
                 "UPDATE environment_configs SET "
                 "tools_json = ?, services_json = ?, humans_json = ?, "
-                "policies_json = ?, resources_json = ? "
+                "policies_json = ?, resources_json = ?, tool_tags_json = ?, "
+                "tool_loading = ?, tool_loop = ? "
                 "WHERE id = ?",
                 (
                     json.dumps(cfg.tools),
@@ -52,6 +59,9 @@ class EnvironmentManager:
                     json.dumps(cfg.humans),
                     json.dumps(cfg.policies),
                     json.dumps(cfg.resources),
+                    json.dumps(cfg.tool_tags),
+                    cfg.tool_loading,
+                    int(cfg.tool_loop),
                     cfg.id,
                 ),
             )
@@ -66,12 +76,16 @@ class EnvironmentManager:
             humans=humans or [],
             policies=policies or {},
             resources=resources or {},
+            tool_tags=tool_tags or [],
+            tool_loading=tool_loading or "full",
+            tool_loop=tool_loop if tool_loop is not None else True,
         )
         self._storage.execute(
             "INSERT INTO environment_configs "
             "(id, symbiote_id, workspace_id, tools_json, services_json, "
-            "humans_json, policies_json, resources_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "humans_json, policies_json, resources_json, tool_tags_json, "
+            "tool_loading, tool_loop) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 cfg.id,
                 cfg.symbiote_id,
@@ -81,6 +95,9 @@ class EnvironmentManager:
                 json.dumps(cfg.humans),
                 json.dumps(cfg.policies),
                 json.dumps(cfg.resources),
+                json.dumps(cfg.tool_tags),
+                cfg.tool_loading,
+                int(cfg.tool_loop),
             ),
         )
         return cfg
@@ -110,6 +127,33 @@ class EnvironmentManager:
     ) -> bool:
         """Check if a tool is in the tools list."""
         return tool_id in self.list_tools(symbiote_id, workspace_id)
+
+    def get_tool_tags(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> list[str]:
+        """Return tool_tags from config, or empty list if no config."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return []
+        return cfg.tool_tags
+
+    def get_tool_loading(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> str:
+        """Return tool_loading mode from config, or 'full' if no config."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return "full"
+        return cfg.tool_loading
+
+    def get_tool_loop(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> bool:
+        """Return tool_loop flag from config, or True if no config."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return True
+        return cfg.tool_loop
 
     # ── private helpers ────────────────────────────────────────────────
 
@@ -144,4 +188,7 @@ class EnvironmentManager:
             humans=json.loads(row["humans_json"]),
             policies=json.loads(row["policies_json"]),
             resources=json.loads(row["resources_json"]),
+            tool_tags=json.loads(row.get("tool_tags_json") or "[]"),
+            tool_loading=row.get("tool_loading") or "full",
+            tool_loop=bool(row.get("tool_loop", 1)),
         )

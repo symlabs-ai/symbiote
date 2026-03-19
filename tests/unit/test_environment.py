@@ -190,3 +190,121 @@ class TestConfigureAllFields:
         assert fetched.humans == ["alice", "bob"]
         assert fetched.policies == {"max_tokens": 4096, "allow_exec": False}
         assert fetched.resources == {"cpu": "2cores", "mem": "4gb"}
+
+
+# ── Tool tags ────────────────────────────────────────────────────────────
+
+
+class TestToolTags:
+    def test_configure_with_tool_tags(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        cfg = manager.configure(
+            symbiote_id=symbiote_id,
+            tool_tags=["Items", "Compose", "Clark"],
+        )
+        assert cfg.tool_tags == ["Items", "Compose", "Clark"]
+
+    def test_tool_tags_persisted_and_retrieved(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        manager.configure(
+            symbiote_id=symbiote_id,
+            tool_tags=["Items", "Admin"],
+        )
+        fetched = manager.get_config(symbiote_id)
+        assert fetched is not None
+        assert fetched.tool_tags == ["Items", "Admin"]
+
+    def test_get_tool_tags(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        manager.configure(
+            symbiote_id=symbiote_id,
+            tool_tags=["Items"],
+        )
+        assert manager.get_tool_tags(symbiote_id) == ["Items"]
+
+    def test_get_tool_tags_no_config_returns_empty(
+        self, manager: EnvironmentManager
+    ) -> None:
+        assert manager.get_tool_tags("no-such-symbiote") == []
+
+    def test_tool_tags_default_empty_list(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        manager.configure(symbiote_id=symbiote_id, tools=["git"])
+        cfg = manager.get_config(symbiote_id)
+        assert cfg is not None
+        assert cfg.tool_tags == []
+
+    def test_update_tool_tags_preserves_other_fields(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        manager.configure(
+            symbiote_id=symbiote_id,
+            tools=["git", "pytest"],
+            tool_tags=["Items"],
+        )
+        cfg = manager.configure(
+            symbiote_id=symbiote_id,
+            tool_tags=["Items", "Admin"],
+        )
+        assert cfg.tools == ["git", "pytest"]
+        assert cfg.tool_tags == ["Items", "Admin"]
+
+
+# ── Tool loading mode ────────────────────────────────────────────────────
+
+
+class TestToolLoading:
+    def test_tool_loading_default_full(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        manager.configure(symbiote_id=symbiote_id, tools=["git"])
+        cfg = manager.get_config(symbiote_id)
+        assert cfg is not None
+        assert cfg.tool_loading == "full"
+
+    def test_configure_tool_loading_index(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        cfg = manager.configure(
+            symbiote_id=symbiote_id, tool_loading="index"
+        )
+        assert cfg.tool_loading == "index"
+
+    def test_tool_loading_persisted_and_retrieved(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        manager.configure(symbiote_id=symbiote_id, tool_loading="semantic")
+        fetched = manager.get_config(symbiote_id)
+        assert fetched is not None
+        assert fetched.tool_loading == "semantic"
+
+    def test_get_tool_loading(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        manager.configure(symbiote_id=symbiote_id, tool_loading="index")
+        assert manager.get_tool_loading(symbiote_id) == "index"
+
+    def test_get_tool_loading_no_config_returns_full(
+        self, manager: EnvironmentManager
+    ) -> None:
+        assert manager.get_tool_loading("no-such-symbiote") == "full"
+
+    def test_update_tool_loading_preserves_other_fields(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        manager.configure(
+            symbiote_id=symbiote_id,
+            tools=["git"],
+            tool_tags=["Items"],
+            tool_loading="full",
+        )
+        cfg = manager.configure(
+            symbiote_id=symbiote_id, tool_loading="index"
+        )
+        assert cfg.tools == ["git"]
+        assert cfg.tool_tags == ["Items"]
+        assert cfg.tool_loading == "index"

@@ -11,6 +11,10 @@ from symbiote.core.context import AssembledContext, ContextAssembler, ContextIns
 from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.identity import IdentityManager
 from symbiote.core.models import Decision, MemoryEntry, Message
+from symbiote.environment.descriptors import ToolDescriptor
+from symbiote.environment.manager import EnvironmentManager
+from symbiote.environment.policies import PolicyGate
+from symbiote.environment.tools import ToolGateway
 from symbiote.knowledge.service import KnowledgeService
 from symbiote.memory.store import MemoryStore
 from symbiote.memory.working import WorkingMemory
@@ -395,3 +399,254 @@ class TestTokenEstimation:
         assert assembler._estimate_tokens("abc") == 0
         # 4 chars -> 4//4 = 1
         assert assembler._estimate_tokens("abcd") == 1
+
+
+# ── Tool tag filtering ────────────────────────────────────────────────────
+
+
+class TestToolTagFiltering:
+    def test_build_with_tool_tags_filters_descriptors(
+        self,
+        identity: IdentityManager,
+        memory: MemoryStore,
+        knowledge: KnowledgeService,
+        adapter: SQLiteAdapter,
+        symbiote_id: str,
+        session_id: str,
+    ) -> None:
+        env = EnvironmentManager(storage=adapter)
+        gate = PolicyGate(env_manager=env, storage=adapter)
+        gw = ToolGateway(policy_gate=gate)
+
+        # Register tools with different tags
+        d1 = ToolDescriptor(
+            tool_id="items_list", name="List Items", description="List items",
+            tags=["Items"],
+        )
+        d2 = ToolDescriptor(
+            tool_id="admin_config", name="Admin Config", description="Admin",
+            tags=["Admin"],
+        )
+        d3 = ToolDescriptor(
+            tool_id="compose_draft", name="Compose Draft", description="Compose",
+            tags=["Items", "Compose"],
+        )
+        gw.register_descriptor(d1, lambda p: None)
+        gw.register_descriptor(d2, lambda p: None)
+        gw.register_descriptor(d3, lambda p: None)
+
+        assembler = ContextAssembler(
+            identity=identity,
+            memory=memory,
+            knowledge=knowledge,
+            context_budget=4000,
+            tool_gateway=gw,
+        )
+
+        ctx = assembler.build(
+            session_id=session_id,
+            symbiote_id=symbiote_id,
+            user_input="hello",
+            tool_tags=["Items"],
+        )
+
+        tool_ids = {t["tool_id"] for t in ctx.available_tools}
+        assert "items_list" in tool_ids
+        assert "compose_draft" in tool_ids
+        assert "admin_config" not in tool_ids
+
+    def test_build_without_tool_tags_returns_all(
+        self,
+        identity: IdentityManager,
+        memory: MemoryStore,
+        knowledge: KnowledgeService,
+        adapter: SQLiteAdapter,
+        symbiote_id: str,
+        session_id: str,
+    ) -> None:
+        env = EnvironmentManager(storage=adapter)
+        gate = PolicyGate(env_manager=env, storage=adapter)
+        gw = ToolGateway(policy_gate=gate)
+
+        d1 = ToolDescriptor(
+            tool_id="t1", name="T1", description="T1", tags=["Items"],
+        )
+        d2 = ToolDescriptor(
+            tool_id="t2", name="T2", description="T2", tags=["Admin"],
+        )
+        gw.register_descriptor(d1, lambda p: None)
+        gw.register_descriptor(d2, lambda p: None)
+
+        assembler = ContextAssembler(
+            identity=identity,
+            memory=memory,
+            knowledge=knowledge,
+            context_budget=4000,
+            tool_gateway=gw,
+        )
+
+        ctx = assembler.build(
+            session_id=session_id,
+            symbiote_id=symbiote_id,
+            user_input="hello",
+        )
+
+        tool_ids = {t["tool_id"] for t in ctx.available_tools}
+        # Should include all registered tools (including builtins)
+        assert "t1" in tool_ids
+        assert "t2" in tool_ids
+
+
+# ── Tool loading modes ───────────────────────────────────────────────────
+
+
+def _make_gateway_with_tools(adapter):
+    """Helper: create gateway with tagged tools."""
+    env = EnvironmentManager(storage=adapter)
+    gate = PolicyGate(env_manager=env, storage=adapter)
+    gw = ToolGateway(policy_gate=gate)
+
+    d1 = ToolDescriptor(
+        tool_id="items_list", name="List Items", description="List items",
+        parameters={"type": "object", "properties": {"status": {"type": "string"}}},
+        tags=["Items"],
+    )
+    d2 = ToolDescriptor(
+        tool_id="admin_config", name="Admin Config", description="Admin config",
+        parameters={"type": "object", "properties": {"key": {"type": "string"}}},
+        tags=["Admin"],
+    )
+    gw.register_descriptor(d1, lambda p: None)
+    gw.register_descriptor(d2, lambda p: None)
+    return env, gw
+
+
+class TestIndexMode:
+    def test_index_mode_omits_parameters(
+        self,
+        identity: IdentityManager,
+        memory: MemoryStore,
+        knowledge: KnowledgeService,
+        adapter: SQLiteAdapter,
+        symbiote_id: str,
+        session_id: str,
+    ) -> None:
+        env, gw = _make_gateway_with_tools(adapter)
+        env.configure(symbiote_id=symbiote_id, tool_loading="index")
+
+        assembler = ContextAssembler(
+            identity=identity, memory=memory, knowledge=knowledge,
+            context_budget=8000, tool_gateway=gw, environment=env,
+        )
+
+        ctx = assembler.build(
+            session_id=session_id, symbiote_id=symbiote_id, user_input="hello",
+        )
+
+        assert ctx.tool_loading == "index"
+        # Index entries should not have parameters
+        for tool in ctx.available_tools:
+            if tool["tool_id"] == "get_tool_schema":
+                assert "parameters" in tool  # meta-tool has full params
+            else:
+                assert "parameters" not in tool
+
+    def test_index_mode_includes_get_tool_schema(
+        self,
+        identity: IdentityManager,
+        memory: MemoryStore,
+        knowledge: KnowledgeService,
+        adapter: SQLiteAdapter,
+        symbiote_id: str,
+        session_id: str,
+    ) -> None:
+        env, gw = _make_gateway_with_tools(adapter)
+        env.configure(symbiote_id=symbiote_id, tool_loading="index")
+
+        assembler = ContextAssembler(
+            identity=identity, memory=memory, knowledge=knowledge,
+            context_budget=8000, tool_gateway=gw, environment=env,
+        )
+
+        ctx = assembler.build(
+            session_id=session_id, symbiote_id=symbiote_id, user_input="hello",
+        )
+
+        tool_ids = [t["tool_id"] for t in ctx.available_tools]
+        assert "get_tool_schema" in tool_ids
+        # get_tool_schema should be first
+        assert tool_ids[0] == "get_tool_schema"
+
+
+class _MockSemanticLLM:
+    """Mock LLM for semantic resolver tests."""
+
+    def __init__(self, response_tags: list[str]) -> None:
+        import json
+        self._response = json.dumps(response_tags)
+
+    def complete(self, messages: list[dict], **kwargs) -> str:
+        return self._response
+
+
+class TestSemanticMode:
+    def test_semantic_mode_filters_by_resolved_tags(
+        self,
+        identity: IdentityManager,
+        memory: MemoryStore,
+        knowledge: KnowledgeService,
+        adapter: SQLiteAdapter,
+        symbiote_id: str,
+        session_id: str,
+    ) -> None:
+        env, gw = _make_gateway_with_tools(adapter)
+        env.configure(symbiote_id=symbiote_id, tool_loading="semantic")
+
+        # Mock LLM returns only ["Items"]
+        semantic_llm = _MockSemanticLLM(["Items"])
+
+        assembler = ContextAssembler(
+            identity=identity, memory=memory, knowledge=knowledge,
+            context_budget=8000, tool_gateway=gw, environment=env,
+            semantic_llm=semantic_llm,
+        )
+
+        ctx = assembler.build(
+            session_id=session_id, symbiote_id=symbiote_id,
+            user_input="show me my items",
+        )
+
+        assert ctx.tool_loading == "semantic"
+        tool_ids = {t["tool_id"] for t in ctx.available_tools}
+        assert "items_list" in tool_ids
+        assert "admin_config" not in tool_ids
+        # Full mode: parameters should be present
+        for tool in ctx.available_tools:
+            assert "parameters" in tool
+
+    def test_semantic_mode_without_llm_falls_back_to_full(
+        self,
+        identity: IdentityManager,
+        memory: MemoryStore,
+        knowledge: KnowledgeService,
+        adapter: SQLiteAdapter,
+        symbiote_id: str,
+        session_id: str,
+    ) -> None:
+        env, gw = _make_gateway_with_tools(adapter)
+        env.configure(symbiote_id=symbiote_id, tool_loading="semantic")
+
+        # No semantic_llm set
+        assembler = ContextAssembler(
+            identity=identity, memory=memory, knowledge=knowledge,
+            context_budget=8000, tool_gateway=gw, environment=env,
+        )
+
+        ctx = assembler.build(
+            session_id=session_id, symbiote_id=symbiote_id, user_input="hello",
+        )
+
+        # Should still return tools (fallback to full/all)
+        tool_ids = {t["tool_id"] for t in ctx.available_tools}
+        assert "items_list" in tool_ids
+        assert "admin_config" in tool_ids

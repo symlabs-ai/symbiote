@@ -93,7 +93,10 @@ CREATE TABLE IF NOT EXISTS environment_configs (
     services_json   TEXT DEFAULT '[]',
     humans_json     TEXT DEFAULT '[]',
     policies_json   TEXT DEFAULT '{}',
-    resources_json  TEXT DEFAULT '{}'
+    resources_json  TEXT DEFAULT '{}',
+    tool_tags_json  TEXT DEFAULT '[]',
+    tool_loading    TEXT DEFAULT 'full',
+    tool_loop       INTEGER DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS decisions (
@@ -149,6 +152,7 @@ CREATE TABLE IF NOT EXISTS discovered_tools (
     source_path    TEXT,
     discovered_at  TEXT NOT NULL,
     approved_at    TEXT,
+    tags_json       TEXT DEFAULT '[]',
     UNIQUE(symbiote_id, tool_id)
 );
 
@@ -178,6 +182,19 @@ class SQLiteAdapter:
     def init_schema(self) -> None:
         """Create all tables if they don't already exist."""
         self._conn.executescript(_SCHEMA_SQL)
+
+        # Idempotent migrations for existing databases
+        for stmt in (
+            "ALTER TABLE discovered_tools ADD COLUMN tags_json TEXT DEFAULT '[]'",
+            "ALTER TABLE environment_configs ADD COLUMN tool_tags_json TEXT DEFAULT '[]'",
+            "ALTER TABLE environment_configs ADD COLUMN tool_loading TEXT DEFAULT 'full'",
+            "ALTER TABLE environment_configs ADD COLUMN tool_loop INTEGER DEFAULT 1",
+        ):
+            try:
+                self._conn.execute(stmt)
+                self._conn.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
     def execute(self, sql: str, params: tuple | None = None) -> sqlite3.Cursor:
         """Run an INSERT / UPDATE / DELETE and auto-commit."""

@@ -233,9 +233,71 @@ class ToolGateway:
         """Return the descriptor for a tool, or None."""
         return self._descriptors.get(tool_id)
 
-    def get_descriptors(self) -> list[ToolDescriptor]:
-        """Return all registered descriptors."""
-        return list(self._descriptors.values())
+    def get_descriptors(self, tags: list[str] | None = None) -> list[ToolDescriptor]:
+        """Return registered descriptors, optionally filtered by tags.
+
+        When *tags* is provided, only descriptors that share at least one tag
+        are returned.  When ``None``, all descriptors are returned (backward
+        compatible).
+        """
+        if tags is None:
+            return list(self._descriptors.values())
+        tag_set = set(tags)
+        return [
+            d for d in self._descriptors.values()
+            if tag_set & set(d.tags)
+        ]
+
+    def get_available_tags(self) -> list[str]:
+        """Return distinct tags across all registered descriptors."""
+        tags: set[str] = set()
+        for d in self._descriptors.values():
+            tags.update(d.tags)
+        return sorted(tags)
+
+    def register_index_tool(self) -> None:
+        """Register the ``get_tool_schema`` meta-tool for index mode.
+
+        This builtin tool lets the LLM fetch the full schema (with parameters)
+        of any registered tool on demand, instead of receiving all schemas
+        upfront in the system prompt.
+        """
+        if "get_tool_schema" in self._descriptors:
+            return  # already registered
+
+        descriptor = ToolDescriptor(
+            tool_id="get_tool_schema",
+            name="Get Tool Schema",
+            description=(
+                "Fetch the full parameter schema for a tool. "
+                "Call this before using a tool to get its required parameters."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "tool_id": {
+                        "type": "string",
+                        "description": "The tool_id to fetch the schema for",
+                    },
+                },
+                "required": ["tool_id"],
+            },
+            handler_type="builtin",
+        )
+
+        def _get_tool_schema(params: dict) -> dict:
+            tid = params.get("tool_id", "")
+            desc = self._descriptors.get(tid)
+            if desc is None:
+                return {"error": f"Tool '{tid}' not found"}
+            return {
+                "tool_id": desc.tool_id,
+                "name": desc.name,
+                "description": desc.description,
+                "parameters": desc.parameters,
+            }
+
+        self.register_descriptor(descriptor, _get_tool_schema)
 
     def get_http_config(self, tool_id: str) -> HttpToolConfig | None:
         """Return the HTTP config for a tool, or None."""
@@ -268,6 +330,69 @@ def _wrap_external_content(content: Any) -> Any:
 # ── HTTP handler factory ─────────────────────────────────────────────────────
 
 
+def _build_url(url_template: str, params: dict, optional_params: list[str]) -> str:
+    """Render *url_template* with *params*, stripping optional placeholders that
+    are absent or empty rather than raising KeyError.
+
+    Handles both query-string segments (``?key={param}`` / ``&key={param}``) and
+    bare path placeholders (``/{param}/``).
+    """
+    import re
+
+    for name in optional_params:
+        if not params.get(name):
+            # Remove ``?key={name}`` or ``&key={name}`` (query-string style)
+            url_template = re.sub(
+                rf"[?&][^?&=]+=\{{{re.escape(name)}\}}",
+                "",
+                url_template,
+            )
+            # Remove a bare path-style placeholder that may remain
+            url_template = url_template.replace(f"{{{name}}}", "")
+
+    # Rebuild a clean query string if we left a bare ``&`` at the start
+    # (e.g. ``/items/?&limit=10`` → ``/items/?limit=10``)
+    url_template = re.sub(r"\?&", "?", url_template)
+    # Remove trailing ``?`` when all query params were stripped
+    url_template = re.sub(r"\?$", "", url_template)
+
+    # Only pass params that are actually referenced in the (possibly trimmed) template
+    format_params = {k: v for k, v in params.items() if f"{{{k}}}" in url_template}
+    return url_template.format(**format_params)
+
+
+def _build_body(
+    body_template: dict,
+    params: dict,
+    array_params: list[str],
+) -> dict:
+    """Render *body_template* substituting *params*.
+
+    Values listed in *array_params* are passed through as-is (preserving list
+    type) rather than being coerced to a string via ``str.format``.
+    """
+    body: dict = {}
+    for k, v in body_template.items():
+        if not isinstance(v, str):
+            body[k] = v
+            continue
+        # Detect a pure placeholder: exactly ``{param_name}``
+        import re as _re
+
+        pure_match = _re.fullmatch(r"\{(\w+)\}", v)
+        if pure_match:
+            param_name = pure_match.group(1)
+            raw = params.get(param_name)
+            if param_name in array_params:
+                # Preserve list; fall back to empty list if missing
+                body[k] = raw if isinstance(raw, list) else ([] if raw is None else raw)
+            else:
+                body[k] = raw if raw is not None else v.format(**params)
+        else:
+            body[k] = v.format(**params)
+    return body
+
+
 def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
     """Create a synchronous HTTP handler from an HttpToolConfig."""
 
@@ -277,7 +402,7 @@ def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
 
         from symbiote.security.network import validate_url
 
-        url = config.url_template.format(**params)
+        url = _build_url(config.url_template, params, config.optional_params)
         if not config.allow_internal:
             validate_url(url)  # SSRF protection: block private/internal IPs
 
@@ -285,7 +410,7 @@ def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
         if config.body_template is not None:
             import json as _json
 
-            body = {k: v.format(**params) if isinstance(v, str) else v for k, v in config.body_template.items()}
+            body = _build_body(config.body_template, params, config.array_params)
             body_bytes = _json.dumps(body).encode("utf-8")
         elif config.method in ("POST", "PUT", "PATCH"):
             import json as _json

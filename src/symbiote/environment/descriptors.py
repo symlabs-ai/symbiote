@@ -15,6 +15,7 @@ class ToolDescriptor(BaseModel):
     name: str
     description: str
     parameters: dict = Field(default_factory=dict)  # JSON Schema
+    tags: list[str] = Field(default_factory=list)
     handler_type: Literal["builtin", "http", "custom"] = "custom"
 
     def to_openai_schema(self) -> dict:
@@ -47,6 +48,15 @@ class HttpToolConfig(BaseModel):
     that intentionally target internal services you control."""
     timeout: float = 30.0
     body_template: dict | None = None  # JSON body template with {param} placeholders
+    optional_params: list[str] = Field(default_factory=list)
+    """Params listed here are removed from the URL template when absent or empty,
+    instead of raising KeyError.  Any ``{param}`` placeholder — along with its
+    surrounding query-string segment (``&key={param}`` or ``?key={param}``) — is
+    stripped from the URL before the request is sent."""
+    array_params: list[str] = Field(default_factory=list)
+    """Params listed here are serialised as JSON arrays in the request body rather
+    than being coerced to a plain string via ``str.format``.  Only relevant when
+    ``body_template`` is set."""
 
 
 class ToolCall(BaseModel):

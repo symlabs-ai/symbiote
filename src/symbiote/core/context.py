@@ -13,6 +13,8 @@ from symbiote.core.ports import KnowledgePort, MemoryPort
 from symbiote.memory.working import WorkingMemory
 
 if TYPE_CHECKING:
+    from symbiote.core.ports import LLMPort
+    from symbiote.environment.manager import EnvironmentManager
     from symbiote.environment.tools import ToolGateway
 
 # ── Models ────────────────────────────────────────────────────────────────────
@@ -26,6 +28,8 @@ class AssembledContext(BaseModel):
     relevant_memories: list[dict] = Field(default_factory=list)
     relevant_knowledge: list[dict] = Field(default_factory=list)
     available_tools: list[dict] = Field(default_factory=list)
+    tool_loading: str = "full"
+    tool_loop: bool = True
     extra_context: dict | None = None
     generation_settings: dict | None = None  # from GenerationSettings.to_config_dict()
     user_input: str
@@ -59,12 +63,16 @@ class ContextAssembler:
         knowledge: KnowledgePort,
         context_budget: int = 4000,
         tool_gateway: ToolGateway | None = None,
+        environment: EnvironmentManager | None = None,
+        semantic_llm: LLMPort | None = None,
     ) -> None:
         self._identity = identity
         self._memory = memory
         self._knowledge = knowledge
         self._budget = context_budget
         self._tool_gateway = tool_gateway
+        self._environment = environment
+        self._semantic_llm = semantic_llm
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -75,6 +83,7 @@ class ContextAssembler:
         user_input: str,
         working_memory: WorkingMemory | None = None,
         extra_context: dict | None = None,
+        tool_tags: list[str] | None = None,
     ) -> AssembledContext:
         """Assemble context within token budget.
 
@@ -117,18 +126,24 @@ class ContextAssembler:
             for k in raw_knowledge
         ]
 
-        # 5. Tool descriptors
+        # 5. Tool descriptors — mode-aware loading
+        #    Resolve tags: explicit param > EnvironmentConfig > None (all)
+        effective_tags = tool_tags
+        if not effective_tags and self._environment is not None:
+            effective_tags = self._environment.get_tool_tags(symbiote_id) or None
+
+        # Resolve loading mode and tool loop from EnvironmentConfig
+        loading_mode = "full"
+        loop_enabled = True
+        if self._environment is not None:
+            loading_mode = self._environment.get_tool_loading(symbiote_id)
+            loop_enabled = self._environment.get_tool_loop(symbiote_id)
+
         tool_dicts: list[dict] = []
         if self._tool_gateway is not None:
-            tool_dicts = [
-                {
-                    "tool_id": d.tool_id,
-                    "name": d.name,
-                    "description": d.description,
-                    "parameters": d.parameters,
-                }
-                for d in self._tool_gateway.get_descriptors()
-            ]
+            tool_dicts = self._build_tool_dicts(
+                symbiote_id, user_input, effective_tags, loading_mode
+            )
 
         # 6. Trim to fit budget
         persona, wm_snapshot, memories_dicts, knowledge_dicts = self._trim_to_budget(
@@ -148,6 +163,8 @@ class ContextAssembler:
             relevant_memories=memories_dicts,
             relevant_knowledge=knowledge_dicts,
             available_tools=tool_dicts,
+            tool_loading=loading_mode,
+            tool_loop=loop_enabled,
             extra_context=extra_context,
             user_input=user_input,
             total_tokens_estimate=total,
@@ -164,6 +181,98 @@ class ContextAssembler:
         )
 
     # ── internal helpers ──────────────────────────────────────────────────
+
+    def _build_tool_dicts(
+        self,
+        symbiote_id: str,
+        user_input: str,
+        effective_tags: list[str] | None,
+        loading_mode: str,
+    ) -> list[dict]:
+        """Build tool dicts for the assembled context based on the loading mode.
+
+        - ``full``: full schema (tool_id, name, description, parameters)
+        - ``index``: compact catalog (tool_id, name, description only) +
+          ensures ``get_tool_schema`` meta-tool is registered
+        - ``semantic``: use cheap LLM to pre-filter tags, then full schema
+        """
+        assert self._tool_gateway is not None
+
+        resolved_tags = effective_tags
+
+        if loading_mode == "semantic":
+            resolved_tags = self._resolve_semantic_tags(
+                user_input, effective_tags
+            )
+
+        descriptors = self._tool_gateway.get_descriptors(tags=resolved_tags)
+
+        if loading_mode == "index":
+            # Register meta-tool so the LLM can fetch full schemas on demand
+            self._tool_gateway.register_index_tool()
+            # Include get_tool_schema descriptor in the list (with full params)
+            index_desc = self._tool_gateway.get_descriptor("get_tool_schema")
+
+            tool_dicts = [
+                {
+                    "tool_id": d.tool_id,
+                    "name": d.name,
+                    "description": d.description,
+                }
+                for d in descriptors
+                if d.tool_id != "get_tool_schema"
+            ]
+            # Add get_tool_schema with full parameters so the LLM knows how to call it
+            if index_desc is not None:
+                tool_dicts.insert(0, {
+                    "tool_id": index_desc.tool_id,
+                    "name": index_desc.name,
+                    "description": index_desc.description,
+                    "parameters": index_desc.parameters,
+                })
+            return tool_dicts
+
+        # full or semantic: return full schemas
+        return [
+            {
+                "tool_id": d.tool_id,
+                "name": d.name,
+                "description": d.description,
+                "parameters": d.parameters,
+            }
+            for d in descriptors
+        ]
+
+    def _resolve_semantic_tags(
+        self,
+        user_input: str,
+        effective_tags: list[str] | None,
+    ) -> list[str] | None:
+        """Use cheap LLM to select relevant tags. Falls back to effective_tags."""
+        import logging
+
+        if self._semantic_llm is None:
+            logging.getLogger(__name__).warning(
+                "semantic tool_loading configured but no semantic_llm set; "
+                "falling back to full mode"
+            )
+            return effective_tags
+
+        assert self._tool_gateway is not None
+        from symbiote.environment.resolver import ToolTagResolver
+
+        all_tags = self._tool_gateway.get_available_tags()
+        # Intersect with configured tags if set
+        if effective_tags:
+            candidate_tags = [t for t in all_tags if t in set(effective_tags)]
+        else:
+            candidate_tags = all_tags
+
+        if not candidate_tags:
+            return effective_tags
+
+        resolver = ToolTagResolver(self._semantic_llm)
+        return resolver.resolve(user_input, candidate_tags) or effective_tags
 
     def _estimate_tokens(self, text: str) -> int:
         """Rough chars-to-tokens heuristic: len(text) // 4."""
