@@ -6,12 +6,12 @@
 
 | # | Descrição | Origem | Prioridade | Status |
 |---|-----------|--------|------------|--------|
-| 23 | Deploy Hosted — porta, domínio, nginx, CI para Symbiote como serviço | dev | alta | pending |
 
 ## Implementadas
 
 | # | Descrição | Implementada em | Versão |
 |---|-----------|-----------------|--------|
+| 23 | Deploy Hosted — porta 8008, symbiote.service, nginx + SSL em symbiote.symlabs.ai, CI/CD Gitea Actions | 2026-03-18 | 0.2.4 |
 | 7 | MCP Integration — McpToolProvider bridges forge_llm ToolRegistry → ToolGateway; kernel.load_mcp_tools(registry, symbiote_id) | 2026-03-18 | 0.2.4 |
 | 24 | DiscoveredToolLoader — bridge entre discovered_tools aprovadas e ToolGateway: kernel.load_discovered_tools() carrega tools com status=approved, registra como HttpTool e autoriza via EnvironmentManager | 2026-03-18 | 0.2.4 |
 | 19 | API Key Auth — Bearer token, SHA-256, tenant isolation, admin/user roles | 2026-03-17 | 0.1.8 |

@@ -5,6 +5,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [0.2.4] — 2026-03-18
 
+### Added — B-23: Deploy Hosted (DevOps)
+
+- Porta 8008 alocada no port-registry
+- `symbiote.service` systemd unit rodando em produção
+- Nginx + SSL via certbot em `symbiote.symlabs.ai`
+- CI/CD via `.gitea/workflows/staging-deploy.yml` — push na main → pull + restart automático
+- Deploy prod via `promote.sh`
+
 ### Added — B-7: MCP Integration
 
 - `symbiote.mcp.provider.McpToolProvider` — bridges a live `forge_llm.application.tools.ToolRegistry` (produced by `McpToolset`) into Symbiote's `ToolGateway`; each MCP tool is registered as an async custom handler that delegates to `McpTool.execute_async()`
