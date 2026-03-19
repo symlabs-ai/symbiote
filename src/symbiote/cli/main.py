@@ -828,5 +828,128 @@ def discover(
     console.print(f"\nReview and approve at: [bold]{server}[/]")
 
 
+@app.command()
+def classify(
+    approve: str = typer.Option(None, "--approve", "-a", help="Tags to approve (comma-separated)"),
+    disable_rest: bool = typer.Option(False, "--disable-rest", help="Disable non-matching pending tools"),
+    summary: bool = typer.Option(False, "--summary", "-s", help="Show tag summary, no changes"),
+    reset: bool = typer.Option(False, "--reset", help="Reset all disabled tools back to pending"),
+) -> None:
+    """Auto-approve/disable discovered tools by OpenAPI tags."""
+    cfg = _read_symbiote_config()
+    server = cfg.get("server", "http://localhost:8000")
+    api_key = cfg.get("api_key", "")
+    symbiote_id = cfg.get("id", "")
+    symbiote_name = cfg.get("name", symbiote_id)
+
+    if not symbiote_id:
+        err_console.print("[red]No symbiote ID in config.[/] Run [bold]symbiote init[/] first.")
+        raise typer.Exit(1)
+
+    import json as _json
+    import urllib.error
+    import urllib.request
+    from collections import Counter
+
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    if reset:
+        req = urllib.request.Request(
+            f"{server}/symbiotes/{symbiote_id}/discovered-tools/reset",
+            data=b"{}",
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = _json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            err_console.print(f"[red]Reset failed:[/] HTTP {exc.code}: {exc.read().decode()}")
+            raise typer.Exit(1) from exc
+        except Exception as exc:
+            err_console.print(f"[red]Connection error:[/] {exc}")
+            raise typer.Exit(1) from exc
+        console.print(f"[green]✓[/] Reset {data['reset']} tool(s) back to pending")
+        return
+
+    if summary or not approve:
+        # Fetch all discovered tools and show tag summary
+        req = urllib.request.Request(
+            f"{server}/symbiotes/{symbiote_id}/discovered-tools",
+            headers=headers,
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                tools = _json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            err_console.print(f"[red]Failed:[/] HTTP {exc.code}: {exc.read().decode()}")
+            raise typer.Exit(1) from exc
+        except Exception as exc:
+            err_console.print(f"[red]Connection error:[/] {exc}")
+            raise typer.Exit(1) from exc
+
+        # Group by tag
+        tag_status: dict[str, Counter] = {}
+        no_tag_status: Counter = Counter()
+        for t in tools:
+            tags = t.get("tags", [])
+            status = t.get("status", "pending")
+            if tags:
+                for tag in tags:
+                    if tag not in tag_status:
+                        tag_status[tag] = Counter()
+                    tag_status[tag][status] += 1
+            else:
+                no_tag_status[status] += 1
+
+        table = Table(title=f"Tag Summary — {symbiote_name}")
+        table.add_column("Tag", style="cyan")
+        table.add_column("Pending", justify="right")
+        table.add_column("Approved", justify="right", style="green")
+        table.add_column("Disabled", justify="right", style="red")
+        table.add_column("Total", justify="right", style="bold")
+
+        for tag in sorted(tag_status):
+            c = tag_status[tag]
+            total = sum(c.values())
+            table.add_row(tag, str(c["pending"]), str(c["approved"]), str(c["disabled"]), str(total))
+
+        if no_tag_status:
+            c = no_tag_status
+            total = sum(c.values())
+            table.add_row("[dim](no tag)[/]", str(c["pending"]), str(c["approved"]), str(c["disabled"]), str(total))
+
+        console.print(table)
+        console.print(f"\nTotal: {len(tools)} tool(s)")
+
+        if not approve:
+            return
+
+    # POST classify
+    payload = _json.dumps({
+        "approve_tags": [t.strip() for t in approve.split(",")],
+        "disable_rest": disable_rest,
+    }).encode()
+    req = urllib.request.Request(
+        f"{server}/symbiotes/{symbiote_id}/discovered-tools/classify",
+        data=payload,
+        headers=headers,
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = _json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        err_console.print(f"[red]Classify failed:[/] HTTP {exc.code}: {exc.read().decode()}")
+        raise typer.Exit(1) from exc
+    except Exception as exc:
+        err_console.print(f"[red]Connection error:[/] {exc}")
+        raise typer.Exit(1) from exc
+
+    console.print(f"[green]✓[/] Approved: {data['approved']}, Disabled: {data['disabled']}, Unchanged: {data['unchanged']}")
+
+
 if __name__ == "__main__":
     app()

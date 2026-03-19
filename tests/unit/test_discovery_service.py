@@ -360,3 +360,152 @@ class TestOpenApiUrlStrategy:
         result = service.discover(symbiote_id, str(tmp_path))
         for tool in result.discovered:
             assert tool.tags == []
+
+
+# ── classify_by_tags ──────────────────────────────────────────────────────────
+
+
+class TestClassifyByTags:
+    """Tests for DiscoveredToolRepository.classify_by_tags()."""
+
+    _SPEC = {
+        "openapi": "3.0.0",
+        "info": {"title": "Test", "version": "1.0.0"},
+        "paths": {
+            "/api/items": {
+                "get": {
+                    "operationId": "list_items",
+                    "summary": "List items",
+                    "tags": ["Items"],
+                }
+            },
+            "/api/compose": {
+                "post": {
+                    "operationId": "create_compose",
+                    "summary": "Create compose",
+                    "tags": ["Compose"],
+                }
+            },
+            "/api/admin/config": {
+                "get": {
+                    "operationId": "get_config",
+                    "summary": "Get config",
+                    "tags": ["Admin"],
+                }
+            },
+            "/api/health": {
+                "get": {
+                    "operationId": "health_check",
+                    "summary": "Health",
+                }
+            },
+        },
+    }
+
+    def _mock_urlopen(self, spec: dict):
+        import io
+        import json
+        from unittest.mock import MagicMock, patch
+
+        resp = MagicMock()
+        resp.read.return_value = json.dumps(spec).encode()
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        return patch("urllib.request.urlopen", return_value=resp)
+
+    def _discover(self, service, symbiote_id, tmp_path):
+        with self._mock_urlopen(self._SPEC):
+            service.discover(symbiote_id, str(tmp_path), url="http://localhost:8000")
+
+    def test_approve_matching_tags(
+        self, service: DiscoveryService, adapter: SQLiteAdapter, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        self._discover(service, symbiote_id, tmp_path)
+        repo = DiscoveredToolRepository(adapter)
+        result = repo.classify_by_tags(symbiote_id, approve_tags=["Items", "Compose"])
+        assert result["approved"] == 2
+        assert repo.get(symbiote_id, "list_items").status == "approved"
+        assert repo.get(symbiote_id, "create_compose").status == "approved"
+
+    def test_disable_rest(
+        self, service: DiscoveryService, adapter: SQLiteAdapter, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        self._discover(service, symbiote_id, tmp_path)
+        repo = DiscoveredToolRepository(adapter)
+        result = repo.classify_by_tags(symbiote_id, approve_tags=["Items"], disable_rest=True)
+        assert result["approved"] == 1
+        assert result["disabled"] == 3  # Compose, Admin, health (no tag)
+        assert repo.get(symbiote_id, "list_items").status == "approved"
+        assert repo.get(symbiote_id, "get_config").status == "disabled"
+        assert repo.get(symbiote_id, "health_check").status == "disabled"
+
+    def test_case_insensitive_matching(
+        self, service: DiscoveryService, adapter: SQLiteAdapter, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        self._discover(service, symbiote_id, tmp_path)
+        repo = DiscoveredToolRepository(adapter)
+        result = repo.classify_by_tags(symbiote_id, approve_tags=["items", "compose"])
+        assert result["approved"] == 2
+
+    def test_idempotent_does_not_alter_already_approved(
+        self, service: DiscoveryService, adapter: SQLiteAdapter, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        self._discover(service, symbiote_id, tmp_path)
+        repo = DiscoveredToolRepository(adapter)
+
+        # First classify
+        repo.classify_by_tags(symbiote_id, approve_tags=["Items"])
+
+        # Second classify — already approved tools are not pending, so unchanged
+        result = repo.classify_by_tags(symbiote_id, approve_tags=["Items"])
+        assert result["approved"] == 0  # nothing new to approve
+
+    def test_does_not_alter_already_disabled(
+        self, service: DiscoveryService, adapter: SQLiteAdapter, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        self._discover(service, symbiote_id, tmp_path)
+        repo = DiscoveredToolRepository(adapter)
+
+        # Manually disable one
+        repo.set_status(symbiote_id, "list_items", "disabled")
+
+        # Classify with Items — should not re-approve it since it's not pending
+        result = repo.classify_by_tags(symbiote_id, approve_tags=["Items"])
+        assert result["approved"] == 0
+        assert repo.get(symbiote_id, "list_items").status == "disabled"
+
+    def test_without_disable_rest_leaves_unmatched_pending(
+        self, service: DiscoveryService, adapter: SQLiteAdapter, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        self._discover(service, symbiote_id, tmp_path)
+        repo = DiscoveredToolRepository(adapter)
+        result = repo.classify_by_tags(symbiote_id, approve_tags=["Items"], disable_rest=False)
+        assert result["approved"] == 1
+        assert result["disabled"] == 0
+        assert result["unchanged"] == 3
+        assert repo.get(symbiote_id, "get_config").status == "pending"
+
+    def test_reset_disabled_back_to_pending(
+        self, service: DiscoveryService, adapter: SQLiteAdapter, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        self._discover(service, symbiote_id, tmp_path)
+        repo = DiscoveredToolRepository(adapter)
+        repo.classify_by_tags(symbiote_id, approve_tags=["Items"], disable_rest=True)
+
+        count = repo.reset_disabled(symbiote_id)
+        assert count == 3  # Compose, Admin, health_check
+        assert repo.get(symbiote_id, "get_config").status == "pending"
+        assert repo.get(symbiote_id, "create_compose").status == "pending"
+        assert repo.get(symbiote_id, "health_check").status == "pending"
+        # Approved stays approved
+        assert repo.get(symbiote_id, "list_items").status == "approved"
+
+    def test_reset_idempotent(
+        self, service: DiscoveryService, adapter: SQLiteAdapter, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        self._discover(service, symbiote_id, tmp_path)
+        repo = DiscoveredToolRepository(adapter)
+        repo.classify_by_tags(symbiote_id, approve_tags=["Items"], disable_rest=True)
+        repo.reset_disabled(symbiote_id)
+        # Second reset — nothing to reset
+        assert repo.reset_disabled(symbiote_id) == 0

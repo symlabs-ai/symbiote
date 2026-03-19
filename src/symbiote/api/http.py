@@ -184,6 +184,21 @@ class DiscoverResponse(BaseModel):
     errors: list[str] = []
 
 
+class ClassifyToolsRequest(BaseModel):
+    approve_tags: list[str]
+    disable_rest: bool = False
+
+
+class ClassifyToolsResponse(BaseModel):
+    approved: int
+    disabled: int
+    unchanged: int
+
+
+class ResetToolsResponse(BaseModel):
+    reset: int
+
+
 class UpdateDiscoveredToolRequest(BaseModel):
     status: str  # "approved" | "disabled" | "pending"
 
@@ -641,6 +656,53 @@ def update_discovered_tool(
 
     tool = repo.get(symbiote_id, tool_id)
     return _tool_to_response(tool)
+
+
+@app.post(
+    "/symbiotes/{symbiote_id}/discovered-tools/classify",
+    response_model=ClassifyToolsResponse,
+)
+def classify_discovered_tools(
+    symbiote_id: str,
+    body: ClassifyToolsRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    identity: Annotated[IdentityManager, Depends(get_identity_manager)],
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+) -> ClassifyToolsResponse:
+    """Batch approve/disable discovered tools by OpenAPI tags."""
+    sym = identity.get(symbiote_id)
+    if sym is None:
+        raise HTTPException(status_code=404, detail="Symbiote not found")
+    if sym.owner_id != auth.tenant_id and not auth.is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    repo = DiscoveredToolRepository(adapter)
+    result = repo.classify_by_tags(
+        symbiote_id, approve_tags=body.approve_tags, disable_rest=body.disable_rest
+    )
+    return ClassifyToolsResponse(**result)
+
+
+@app.post(
+    "/symbiotes/{symbiote_id}/discovered-tools/reset",
+    response_model=ResetToolsResponse,
+)
+def reset_discovered_tools(
+    symbiote_id: str,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    identity: Annotated[IdentityManager, Depends(get_identity_manager)],
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+) -> ResetToolsResponse:
+    """Reset all disabled discovered tools back to pending."""
+    sym = identity.get(symbiote_id)
+    if sym is None:
+        raise HTTPException(status_code=404, detail="Symbiote not found")
+    if sym.owner_id != auth.tenant_id and not auth.is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    repo = DiscoveredToolRepository(adapter)
+    count = repo.reset_disabled(symbiote_id)
+    return ResetToolsResponse(reset=count)
 
 
 @app.delete("/symbiotes/{symbiote_id}/discovered-tools/{tool_id}", status_code=200)

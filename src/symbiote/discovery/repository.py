@@ -105,6 +105,47 @@ class DiscoveredToolRepository:
         )
         return cur.rowcount > 0  # type: ignore[union-attr]
 
+    def classify_by_tags(
+        self,
+        symbiote_id: str,
+        approve_tags: list[str],
+        disable_rest: bool = False,
+    ) -> dict[str, int]:
+        """Approve tools matching tags, optionally disable the rest.
+
+        Only alters tools with status='pending' (idempotent).
+        Match is case-insensitive.
+        Returns dict: {approved: int, disabled: int, unchanged: int}
+        """
+        pending = self.list(symbiote_id, status="pending")
+        approve_lower = {t.lower() for t in approve_tags}
+
+        approved = 0
+        disabled = 0
+        unchanged = 0
+
+        for tool in pending:
+            tool_tags_lower = {t.lower() for t in tool.tags}
+            if tool_tags_lower & approve_lower:
+                self.set_status(symbiote_id, tool.tool_id, "approved")
+                approved += 1
+            elif disable_rest:
+                self.set_status(symbiote_id, tool.tool_id, "disabled")
+                disabled += 1
+            else:
+                unchanged += 1
+
+        return {"approved": approved, "disabled": disabled, "unchanged": unchanged}
+
+    def reset_disabled(self, symbiote_id: str) -> int:
+        """Reset all disabled tools back to pending. Returns count of reset tools."""
+        cur = self._storage.execute(
+            "UPDATE discovered_tools SET status = 'pending', approved_at = NULL "
+            "WHERE symbiote_id = ? AND status = 'disabled'",
+            (symbiote_id,),
+        )
+        return cur.rowcount  # type: ignore[union-attr]
+
     # ── private ──────────────────────────────────────────────────────────
 
     @staticmethod

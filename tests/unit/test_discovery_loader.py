@@ -170,6 +170,115 @@ class TestLoad:
         assert gateway.get_descriptor("disabled_tool") is None
 
 
+class TestHeaderFactory:
+    def test_header_factory_applied_to_all_tools(
+        self, loader: DiscoveredToolLoader, repo: DiscoveredToolRepository,
+        gateway: ToolGateway, symbiote_id: str,
+    ) -> None:
+        repo.save(_make_tool(symbiote_id, "get_items", "approved", "GET",
+                             "{base_url}/items"))
+        repo.save(_make_tool(symbiote_id, "post_pub", "approved", "POST",
+                             "{base_url}/publish"))
+
+        def factory():
+            return {"Cookie": "token=abc"}
+
+        loader.load(symbiote_id, base_url="http://localhost:8000",
+                    header_factory=factory)
+
+        for tid in ("get_items", "post_pub"):
+            config = gateway.get_http_config(tid)
+            assert config.header_factory is factory
+            assert config.header_factory() == {"Cookie": "token=abc"}
+
+    def test_no_header_factory_leaves_none(
+        self, loader: DiscoveredToolLoader, repo: DiscoveredToolRepository,
+        gateway: ToolGateway, symbiote_id: str,
+    ) -> None:
+        repo.save(_make_tool(symbiote_id, "get_items", "approved"))
+        loader.load(symbiote_id, base_url="http://localhost:8000")
+        config = gateway.get_http_config("get_items")
+        assert config.header_factory is None
+
+
+class TestDeriveHttpConfig:
+    def test_post_tool_gets_body_template(
+        self, loader: DiscoveredToolLoader, repo: DiscoveredToolRepository,
+        gateway: ToolGateway, symbiote_id: str,
+    ) -> None:
+        tool = _make_tool(symbiote_id, "post_capture", "approved", "POST",
+                          "http://localhost:8000/items/capture")
+        tool.parameters = {
+            "type": "object",
+            "properties": {"url": {"type": "string"}, "journal_id": {"type": "string"}},
+            "required": ["url", "journal_id"],
+        }
+        repo.save(tool)
+        loader.load(symbiote_id)
+
+        config = gateway.get_http_config("post_capture")
+        assert config.body_template == {"url": "{url}", "journal_id": "{journal_id}"}
+
+    def test_post_excludes_path_params_from_body(
+        self, loader: DiscoveredToolLoader, repo: DiscoveredToolRepository,
+        gateway: ToolGateway, symbiote_id: str,
+    ) -> None:
+        tool = _make_tool(symbiote_id, "post_publish", "approved", "POST",
+                          "http://localhost:8000/items/{item_id}/publish")
+        tool.parameters = {
+            "type": "object",
+            "properties": {"item_id": {"type": "integer"}},
+            "required": ["item_id"],
+        }
+        repo.save(tool)
+        loader.load(symbiote_id)
+
+        config = gateway.get_http_config("post_publish")
+        # item_id is a path param, so body should be empty
+        assert config.body_template is None
+
+    def test_get_tool_gets_optional_params(
+        self, loader: DiscoveredToolLoader, repo: DiscoveredToolRepository,
+        gateway: ToolGateway, symbiote_id: str,
+    ) -> None:
+        tool = _make_tool(symbiote_id, "get_items", "approved", "GET",
+                          "http://localhost:8000/items/?status={status}&limit={limit}")
+        tool.parameters = {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+        }
+        repo.save(tool)
+        loader.load(symbiote_id)
+
+        config = gateway.get_http_config("get_items")
+        assert config.body_template is None
+        assert set(config.optional_params) == {"status", "limit"}
+
+    def test_array_params_detected(
+        self, loader: DiscoveredToolLoader, repo: DiscoveredToolRepository,
+        gateway: ToolGateway, symbiote_id: str,
+    ) -> None:
+        tool = _make_tool(symbiote_id, "post_bulk", "approved", "POST",
+                          "http://localhost:8000/bulk")
+        tool.parameters = {
+            "type": "object",
+            "properties": {
+                "item_ids": {"type": "array", "items": {"type": "string"}},
+                "action": {"type": "string"},
+            },
+            "required": ["item_ids", "action"],
+        }
+        repo.save(tool)
+        loader.load(symbiote_id)
+
+        config = gateway.get_http_config("post_bulk")
+        assert config.array_params == ["item_ids"]
+        assert config.body_template == {"item_ids": "{item_ids}", "action": "{action}"}
+
+
 class TestKernelIntegration:
     def test_kernel_load_discovered_tools(self, tmp_path: Path) -> None:
         """Integration: kernel.load_discovered_tools registers and authorizes tools."""

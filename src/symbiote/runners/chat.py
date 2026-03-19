@@ -249,12 +249,65 @@ class ChatRunner:
             for msg in self._working_memory.recent_messages:
                 messages.append({"role": msg.role, "content": msg.content})
 
-        # 3. Current user input (with ephemeral runtime context for the LLM)
+        # 3. Conversation history from extra_context (when working_memory is not used)
+        #    The host app (e.g. YouNews) can inject "conversation_history" as a
+        #    newline-separated list of "Role: content" lines. We promote these to
+        #    real user/assistant message pairs so the LLM sees proper multi-turn.
+        if self._working_memory is None and context.extra_context:
+            history_text = context.extra_context.get("conversation_history")
+            if history_text:
+                for msg in self._parse_conversation_history(history_text):
+                    messages.append(msg)
+
+        # 4. Current user input (with ephemeral runtime context for the LLM)
         user_content = inject_runtime_context(
             context.user_input,
             session_id=context.session_id,
         )
         messages.append({"role": "user", "content": user_content})
+
+        return messages
+
+    @staticmethod
+    def _parse_conversation_history(text: str) -> list[dict]:
+        """Parse "Role: content" lines into LLM message dicts.
+
+        Expected format (produced by YouNews clark.py):
+            Usuário: message text
+            Clark: response text
+
+        Consecutive lines with the same role are merged.
+        """
+        messages: list[dict] = []
+        role_map = {
+            "usuário": "user", "usuario": "user", "user": "user",
+            "clark": "assistant", "assistant": "assistant",
+        }
+        current_role = None
+        current_lines: list[str] = []
+
+        for line in text.split("\n"):
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            # Try to parse "Role: content"
+            parsed = False
+            if ": " in stripped:
+                prefix, rest = stripped.split(": ", 1)
+                mapped = role_map.get(prefix.lower())
+                if mapped:
+                    if current_role and current_lines:
+                        messages.append({"role": current_role, "content": "\n".join(current_lines)})
+                    current_role = mapped
+                    current_lines = [rest]
+                    parsed = True
+
+            if not parsed and current_role:
+                current_lines.append(stripped)
+
+        if current_role and current_lines:
+            messages.append({"role": current_role, "content": "\n".join(current_lines)})
 
         return messages
 
@@ -299,10 +352,17 @@ class ChatRunner:
                         parts.append(f"Parameters: ```json\n{json.dumps(params, indent=2)}\n```")
 
         # Extra context (host-injected, e.g. page context)
+        # conversation_history is excluded here — it's promoted to real
+        # messages in _build_messages() for proper multi-turn LLM context.
         if context.extra_context:
-            parts.append("## Context")
-            for key, value in context.extra_context.items():
-                parts.append(f"### {key}\n{value}")
+            ctx_items = {
+                k: v for k, v in context.extra_context.items()
+                if k != "conversation_history"
+            }
+            if ctx_items:
+                parts.append("## Context")
+                for key, value in ctx_items.items():
+                    parts.append(f"### {key}\n{value}")
 
         # Relevant memories
         if context.relevant_memories:

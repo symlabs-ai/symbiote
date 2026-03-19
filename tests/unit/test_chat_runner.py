@@ -288,3 +288,97 @@ class TestRunAsync:
 
         assert result.success is False
         assert result.error == "LLM connection failed"
+
+
+# ── conversation_history promotion ──────────────────────────────────────────
+
+
+class TestConversationHistoryPromotion:
+    """conversation_history in extra_context should become real messages."""
+
+    def test_history_becomes_real_messages(self) -> None:
+        llm = FakeLLM(response="Journal Sandbox, certo!")
+        runner = ChatRunner(llm=llm)
+        ctx = AssembledContext(
+            symbiote_id="sym-1",
+            session_id="sess-1",
+            user_input="1",
+            extra_context={
+                "conversation_history": (
+                    "Usuário: Capture https://youtube.com/abc\n\n"
+                    "Clark: Aqui estão seus journals:\n1. Sandbox\n2. Tech\nQual deseja?"
+                ),
+                "page_url": "/inbox",
+            },
+        )
+
+        runner.run(ctx)
+
+        msgs = llm.last_messages
+        # system, user(history), assistant(history), user("1")
+        assert len(msgs) == 4
+        assert msgs[0]["role"] == "system"
+        assert msgs[1]["role"] == "user"
+        assert "youtube.com" in msgs[1]["content"]
+        assert msgs[2]["role"] == "assistant"
+        assert "Sandbox" in msgs[2]["content"]
+        assert msgs[3]["role"] == "user"
+        assert "1" in msgs[3]["content"]
+
+    def test_history_excluded_from_system_prompt(self) -> None:
+        llm = FakeLLM()
+        runner = ChatRunner(llm=llm)
+        ctx = AssembledContext(
+            symbiote_id="sym-1",
+            session_id="sess-1",
+            user_input="1",
+            extra_context={
+                "conversation_history": "Usuário: hello\n\nClark: hi there",
+                "page_url": "/inbox",
+            },
+        )
+
+        runner.run(ctx)
+
+        system = llm.last_messages[0]["content"]
+        assert "conversation_history" not in system
+        assert "page_url" in system  # other extra_context still there
+
+    def test_no_history_no_extra_messages(self) -> None:
+        llm = FakeLLM()
+        runner = ChatRunner(llm=llm)
+        ctx = AssembledContext(
+            symbiote_id="sym-1",
+            session_id="sess-1",
+            user_input="hello",
+            extra_context={"page_url": "/inbox"},
+        )
+
+        runner.run(ctx)
+
+        # system + user only
+        assert len(llm.last_messages) == 2
+
+    def test_working_memory_takes_precedence(self) -> None:
+        """When working_memory is provided, conversation_history is ignored."""
+        llm = FakeLLM()
+        wm = WorkingMemory(session_id="sess-1")
+        wm.update_message(Message(session_id="sess-1", role="user", content="previous"))
+        wm.update_message(Message(session_id="sess-1", role="assistant", content="response"))
+        runner = ChatRunner(llm=llm, working_memory=wm)
+        ctx = AssembledContext(
+            symbiote_id="sym-1",
+            session_id="sess-1",
+            user_input="new message",
+            extra_context={
+                "conversation_history": "Usuário: should be ignored\n\nClark: ignored too",
+            },
+        )
+
+        runner.run(ctx)
+
+        msgs = llm.last_messages
+        # system + 2 from working_memory + user
+        assert len(msgs) == 4
+        assert msgs[1]["content"] == "previous"
+        assert msgs[2]["content"] == "response"
