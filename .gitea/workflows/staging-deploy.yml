@@ -26,3 +26,11 @@ jobs:
         run: |
           sleep 3
           curl -sf http://localhost:8008/health > /dev/null && echo "Symbiote staging OK" || echo "WARNING: health check failed"
+
+  auto-promote:
+    needs: deploy
+    runs-on: linux
+    if: ${{ vars.AUTO_DEPLOY == 'true' }}
+    steps:
+      - name: Promote to production
+        run: ~/scripts/ci-promote.sh symbiote
