@@ -64,19 +64,22 @@ class DiscoveryService:
         tools: list[DiscoveredTool] = []
 
         # Strategy 0: Live OpenAPI from running server (highest priority)
+        # When a live URL is provided, skip file-based scanning (strategies 1-3)
+        # since the live spec is authoritative and has richer data (operationId,
+        # full Pydantic schemas, tags).
         if url:
             tools.extend(self._scan_openapi_url(symbiote_id, url, now, result))
+        else:
+            # Strategy 1: OpenAPI specs in repository files
+            tools.extend(self._scan_openapi(symbiote_id, root, now, result))
 
-        # Strategy 1: OpenAPI specs in repository files
-        tools.extend(self._scan_openapi(symbiote_id, root, now, result))
+            # Strategy 2: FastAPI routes
+            tools.extend(self._scan_fastapi(symbiote_id, root, now, result))
 
-        # Strategy 2: FastAPI routes
-        tools.extend(self._scan_fastapi(symbiote_id, root, now, result))
+            # Strategy 3: Flask routes
+            tools.extend(self._scan_flask(symbiote_id, root, now, result))
 
-        # Strategy 3: Flask routes
-        tools.extend(self._scan_flask(symbiote_id, root, now, result))
-
-        # Strategy 4: pyproject.toml scripts
+        # Strategy 4: pyproject.toml scripts (always — CLI tools complement HTTP)
         tools.extend(self._scan_pyproject_scripts(symbiote_id, root, now, result))
 
         # Deduplicate by tool_id (first wins)
