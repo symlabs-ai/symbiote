@@ -150,3 +150,139 @@ class TestPersistence:
         result = service.discover(symbiote_id, str(tmp_path))
         ids = [t.tool_id for t in result.discovered]
         assert ids.count("get_api_search") == 1
+
+
+# ── _scan_openapi_url ─────────────────────────────────────────────────────────
+
+
+class TestOpenApiUrlStrategy:
+    _SPEC = {
+        "openapi": "3.0.0",
+        "info": {"title": "YouNews", "version": "1.0.0"},
+        "paths": {
+            "/api/items/{item_id}/publish": {
+                "post": {
+                    "operationId": "yn_publish_item",
+                    "summary": "Publish a news item",
+                    "parameters": [
+                        {
+                            "name": "item_id",
+                            "in": "path",
+                            "required": True,
+                            "schema": {"type": "integer"},
+                        }
+                    ],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "title": {"type": "string"},
+                                        "body": {"type": "string"},
+                                    },
+                                    "required": ["title"],
+                                }
+                            }
+                        },
+                    },
+                }
+            },
+            "/api/items": {
+                "get": {
+                    "operationId": "yn_list_items",
+                    "summary": "List news items",
+                }
+            },
+        },
+    }
+
+    def _mock_urlopen(self, spec: dict):
+        """Return a context manager that yields a mock HTTP response."""
+        import io
+        import json
+        from unittest.mock import MagicMock, patch
+
+        resp = MagicMock()
+        resp.read.return_value = json.dumps(spec).encode()
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        return patch("urllib.request.urlopen", return_value=resp)
+
+    def test_uses_operation_id_as_tool_id(
+        self, service: DiscoveryService, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        with self._mock_urlopen(self._SPEC):
+            result = service.discover(symbiote_id, str(tmp_path), url="http://localhost:8000")
+
+        ids = [t.tool_id for t in result.discovered]
+        assert "yn_publish_item" in ids
+        assert "yn_list_items" in ids
+
+    def test_captures_full_parameter_schema(
+        self, service: DiscoveryService, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        with self._mock_urlopen(self._SPEC):
+            result = service.discover(symbiote_id, str(tmp_path), url="http://localhost:8000")
+
+        publish = next(t for t in result.discovered if t.tool_id == "yn_publish_item")
+        assert "item_id" in publish.parameters.get("properties", {})
+        assert "title" in publish.parameters.get("properties", {})
+        assert "body" in publish.parameters.get("properties", {})
+
+    def test_url_template_uses_base_url(
+        self, service: DiscoveryService, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        with self._mock_urlopen(self._SPEC):
+            result = service.discover(symbiote_id, str(tmp_path), url="http://localhost:8000")
+
+        publish = next(t for t in result.discovered if t.tool_id == "yn_publish_item")
+        assert publish.url_template == "http://localhost:8000/api/items/{item_id}/publish"
+
+    def test_live_openapi_wins_deduplication_over_file_scan(
+        self, service: DiscoveryService, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        """Strategy 0 (live URL) runs first, so it wins when tool_id collides with file scan."""
+        # File scan would also find /api/items with tool_id get_api_items
+        (tmp_path / "routes.py").write_text('@router.get("/api/items")\ndef f(): pass\n')
+
+        with self._mock_urlopen(self._SPEC):
+            result = service.discover(symbiote_id, str(tmp_path), url="http://localhost:8000")
+
+        # yn_list_items from live spec wins over get_api_items from file scan
+        ids = [t.tool_id for t in result.discovered]
+        assert "yn_list_items" in ids
+        # file-based get_api_items is deduped out (same path, different id — both present
+        # since they have different tool_ids)
+        assert ids.count("yn_list_items") == 1
+
+    def test_source_path_is_openapi_url(
+        self, service: DiscoveryService, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        with self._mock_urlopen(self._SPEC):
+            result = service.discover(symbiote_id, str(tmp_path), url="http://localhost:8000")
+
+        publish = next(t for t in result.discovered if t.tool_id == "yn_publish_item")
+        assert publish.source_path == "http://localhost:8000/openapi.json"
+
+    def test_connection_error_adds_to_errors(
+        self, service: DiscoveryService, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        import urllib.error
+        from unittest.mock import patch
+
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
+            result = service.discover(symbiote_id, str(tmp_path), url="http://localhost:9999")
+
+        assert any("openapi_url" in e for e in result.errors)
+
+    def test_no_url_skips_strategy(
+        self, service: DiscoveryService, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        """Without --url, strategy 0 is not called."""
+        (tmp_path / "routes.py").write_text('@router.get("/api/items")\ndef f(): pass\n')
+        result = service.discover(symbiote_id, str(tmp_path))
+        ids = [t.tool_id for t in result.discovered]
+        assert "get_api_items" in ids
+        assert "yn_list_items" not in ids

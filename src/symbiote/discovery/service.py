@@ -40,8 +40,19 @@ class DiscoveryService:
     def __init__(self, repository: DiscoveredToolRepository) -> None:
         self._repo = repository
 
-    def discover(self, symbiote_id: str, source_path: str) -> DiscoveryResult:
+    def discover(
+        self,
+        symbiote_id: str,
+        source_path: str,
+        url: str | None = None,
+    ) -> DiscoveryResult:
         """Scan *source_path* and persist discovered tools for *symbiote_id*.
+
+        When *url* is provided (e.g. ``"http://localhost:8000"``), the service
+        fetches ``{url}/openapi.json`` from the running server and uses its
+        ``operationId`` values as tool_ids and full Pydantic schemas as
+        parameter schemas.  Live OpenAPI results take priority over file-based
+        scanning in deduplication (first-seen wins).
 
         Existing tools (same symbiote_id + tool_id) are updated without
         changing their approval status (upsert preserves status).
@@ -52,7 +63,11 @@ class DiscoveryService:
 
         tools: list[DiscoveredTool] = []
 
-        # Strategy 1: OpenAPI specs
+        # Strategy 0: Live OpenAPI from running server (highest priority)
+        if url:
+            tools.extend(self._scan_openapi_url(symbiote_id, url, now, result))
+
+        # Strategy 1: OpenAPI specs in repository files
         tools.extend(self._scan_openapi(symbiote_id, root, now, result))
 
         # Strategy 2: FastAPI routes
@@ -75,6 +90,61 @@ class DiscoveryService:
         return result
 
     # ── strategies ────────────────────────────────────────────────────────
+
+    def _scan_openapi_url(
+        self,
+        symbiote_id: str,
+        url: str,
+        now: str,
+        result: DiscoveryResult,
+    ) -> list[DiscoveredTool]:
+        """Fetch /openapi.json from a live server and extract tools.
+
+        Uses ``operationId`` as ``tool_id`` (semantic, set by the framework)
+        and captures full parameter schemas from the Pydantic-generated spec.
+        """
+        import urllib.error
+        import urllib.request
+
+        base_url = url.rstrip("/")
+        openapi_url = f"{base_url}/openapi.json"
+        try:
+            with urllib.request.urlopen(openapi_url, timeout=10) as resp:
+                spec = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.URLError as exc:
+            result.errors.append(f"openapi_url:{openapi_url}: {exc}")
+            return []
+        except Exception as exc:
+            result.errors.append(f"openapi_url:{openapi_url}: {exc}")
+            return []
+
+        if not isinstance(spec, dict) or "paths" not in spec:
+            result.errors.append(f"openapi_url:{openapi_url}: invalid OpenAPI spec")
+            return []
+
+        tools: list[DiscoveredTool] = []
+        for path, methods in spec.get("paths", {}).items():
+            for method, op in methods.items():
+                if method.upper() not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+                    continue
+                op_id = op.get("operationId") or _path_to_tool_id(method, path)
+                summary = op.get("summary") or op.get("description") or f"{method.upper()} {path}"
+                parameters = _openapi_params_to_schema(
+                    op.get("parameters", []), op.get("requestBody")
+                )
+                tools.append(DiscoveredTool(
+                    id=str(uuid4()),
+                    symbiote_id=symbiote_id,
+                    tool_id=_slugify(op_id),
+                    name=summary[:80],
+                    description=op.get("description") or summary,
+                    method=method.upper(),
+                    url_template=f"{base_url}{path}",
+                    parameters=parameters,
+                    source_path=openapi_url,
+                    discovered_at=now,
+                ))
+        return tools
 
     def _scan_openapi(
         self,

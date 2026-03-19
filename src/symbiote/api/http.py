@@ -153,6 +153,7 @@ class ToolExecResponse(BaseModel):
 
 class DiscoverRequest(BaseModel):
     source_path: str
+    url: str | None = None  # live server URL to fetch /openapi.json from
 
 
 class DiscoveredToolResponse(BaseModel):
@@ -573,7 +574,7 @@ def discover(
     if sym.owner_id != auth.tenant_id and not auth.is_admin:
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    result = svc.discover(symbiote_id=symbiote_id, source_path=body.source_path)
+    result = svc.discover(symbiote_id=symbiote_id, source_path=body.source_path, url=body.url)
     return DiscoverResponse(
         discovered=result.count,
         tools=[_tool_to_response(t) for t in result.discovered],

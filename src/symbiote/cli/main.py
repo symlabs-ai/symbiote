@@ -745,8 +745,17 @@ def init(
 @app.command()
 def discover(
     source_path: str = typer.Argument(".", help="Repository path to scan"),
+    url: str | None = typer.Option(
+        None, "--url", "-u",
+        help="Live server URL to fetch /openapi.json from (e.g. http://localhost:8000). "
+             "Uses operationId as tool_id and captures full parameter schemas.",
+    ),
 ) -> None:
-    """Scan a repository for APIs and register discovered tools."""
+    """Scan a repository for APIs and register discovered tools.
+
+    Use --url to fetch the live OpenAPI spec from a running server — this
+    produces semantic tool IDs (from operationId) and complete parameter schemas.
+    """
     cfg = _read_symbiote_config()
 
     server = cfg.get("server", "http://localhost:8000")
@@ -763,7 +772,10 @@ def discover(
     import urllib.request
 
     abs_path = str(Path(source_path).resolve())
-    payload = _json.dumps({"source_path": abs_path}).encode()
+    body: dict = {"source_path": abs_path}
+    if url:
+        body["url"] = url.rstrip("/")
+    payload = _json.dumps(body).encode()
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
     req = urllib.request.Request(
@@ -773,7 +785,10 @@ def discover(
         method="POST",
     )
 
-    console.print(f"Scanning [dim]{abs_path}[/] for [bold]{symbiote_name}[/]...")
+    if url:
+        console.print(f"Scanning [dim]{abs_path}[/] + live OpenAPI from [dim]{url}[/] for [bold]{symbiote_name}[/]...")
+    else:
+        console.print(f"Scanning [dim]{abs_path}[/] for [bold]{symbiote_name}[/]...")
 
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
