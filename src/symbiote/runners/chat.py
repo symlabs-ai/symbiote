@@ -111,13 +111,11 @@ class ChatRunner:
             final_text = clean_text
 
             # Release tokens to the caller after validation.
-            # When tool calls are present, raw chunks contain tool-call JSON
-            # that must NOT reach the user.  Emit only the clean text instead.
-            if on_token is not None:
-                if tool_calls:
-                    if clean_text.strip():
-                        on_token(clean_text)
-                elif buffered_chunks is not None:
+            # When tool calls are present, suppress intermediate narration
+            # (e.g. "Vou verificar...") — only the final response should
+            # reach the user for a natural conversation experience.
+            if on_token is not None and not tool_calls:
+                if buffered_chunks is not None:
                     for chunk in buffered_chunks:
                         on_token(chunk)
                 else:
@@ -181,13 +179,11 @@ class ChatRunner:
             final_text = clean_text
 
             # Release tokens to the caller after validation.
-            # When tool calls are present, raw chunks contain tool-call JSON
-            # that must NOT reach the user.  Emit only the clean text instead.
-            if on_token is not None:
-                if tool_calls:
-                    if clean_text.strip():
-                        on_token(clean_text)
-                elif buffered_chunks is not None:
+            # When tool calls are present, suppress intermediate narration
+            # (e.g. "Vou verificar...") — only the final response should
+            # reach the user for a natural conversation experience.
+            if on_token is not None and not tool_calls:
+                if buffered_chunks is not None:
                     for chunk in buffered_chunks:
                         on_token(chunk)
                 else:

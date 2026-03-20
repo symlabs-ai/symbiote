@@ -165,6 +165,139 @@ class TestUpdateDiscoveredTool:
         assert resp.status_code == 404
 
 
+class TestClassifyEndpoint:
+    """Tests for POST /symbiotes/{id}/discovered-tools/classify."""
+
+    def _seed_tagged_tools(self, client, symbiote_id, tmp_path):
+        """Discover tools from an OpenAPI spec with tags."""
+        import json
+        from unittest.mock import MagicMock, patch
+
+        spec = {
+            "openapi": "3.0.0",
+            "info": {"title": "Test", "version": "1.0.0"},
+            "paths": {
+                "/api/items": {
+                    "get": {
+                        "operationId": "list_items",
+                        "summary": "List items",
+                        "tags": ["Items"],
+                    }
+                },
+                "/api/compose": {
+                    "post": {
+                        "operationId": "create_compose",
+                        "summary": "Create compose",
+                        "tags": ["Compose"],
+                    }
+                },
+                "/api/admin/config": {
+                    "get": {
+                        "operationId": "get_config",
+                        "summary": "Get config",
+                        "tags": ["Admin"],
+                    }
+                },
+            },
+        }
+        resp = MagicMock()
+        resp.read.return_value = json.dumps(spec).encode()
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        with patch("urllib.request.urlopen", return_value=resp):
+            client.post(
+                f"/symbiotes/{symbiote_id}/discover",
+                json={"source_path": str(tmp_path), "url": "http://localhost:8000"},
+            )
+
+    def test_classify_approves_matching_tags(
+        self, client: TestClient, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        self._seed_tagged_tools(client, symbiote_id, tmp_path)
+        resp = client.post(
+            f"/symbiotes/{symbiote_id}/discovered-tools/classify",
+            json={"approve_tags": ["Items", "Compose"]},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["approved"] == 2
+        assert data["disabled"] == 0
+
+    def test_classify_with_disable_rest(
+        self, client: TestClient, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        self._seed_tagged_tools(client, symbiote_id, tmp_path)
+        resp = client.post(
+            f"/symbiotes/{symbiote_id}/discovered-tools/classify",
+            json={"approve_tags": ["Items"], "disable_rest": True},
+        )
+        data = resp.json()
+        assert data["approved"] == 1
+        assert data["disabled"] == 2  # Compose + Admin
+
+    def test_classify_unknown_symbiote_404(
+        self, client: TestClient
+    ) -> None:
+        resp = client.post(
+            "/symbiotes/no-such-id/discovered-tools/classify",
+            json={"approve_tags": ["Items"]},
+        )
+        assert resp.status_code == 404
+
+    def test_classify_empty_tags_list(
+        self, client: TestClient, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        self._seed_tagged_tools(client, symbiote_id, tmp_path)
+        resp = client.post(
+            f"/symbiotes/{symbiote_id}/discovered-tools/classify",
+            json={"approve_tags": [], "disable_rest": True},
+        )
+        data = resp.json()
+        assert data["approved"] == 0
+        assert data["disabled"] == 3
+
+
+class TestResetEndpoint:
+    """Tests for POST /symbiotes/{id}/discovered-tools/reset."""
+
+    def test_reset_disabled_tools(
+        self, client: TestClient, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        (tmp_path / "routes.py").write_text(
+            '@app.get("/api/a")\ndef a(): pass\n'
+            '@app.get("/api/b")\ndef b(): pass\n'
+        )
+        client.post(
+            f"/symbiotes/{symbiote_id}/discover",
+            json={"source_path": str(tmp_path)},
+        )
+        # Disable one
+        client.patch(
+            f"/symbiotes/{symbiote_id}/discovered-tools/get_api_a",
+            json={"status": "disabled"},
+        )
+        resp = client.post(
+            f"/symbiotes/{symbiote_id}/discovered-tools/reset",
+        )
+        assert resp.status_code == 200
+        assert resp.json()["reset"] == 1
+
+    def test_reset_when_none_disabled(
+        self, client: TestClient, symbiote_id: str
+    ) -> None:
+        resp = client.post(
+            f"/symbiotes/{symbiote_id}/discovered-tools/reset",
+        )
+        assert resp.status_code == 200
+        assert resp.json()["reset"] == 0
+
+    def test_reset_unknown_symbiote_404(self, client: TestClient) -> None:
+        resp = client.post(
+            "/symbiotes/no-such-id/discovered-tools/reset",
+        )
+        assert resp.status_code == 404
+
+
 class TestDeleteDiscoveredTool:
     def test_delete_tool(
         self, client: TestClient, symbiote_id: str, tmp_path: Path

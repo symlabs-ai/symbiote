@@ -37,7 +37,7 @@ function buildTemplate(opts) {
         </div>
       </div>
 
-      <div class="symbiote-messages" part="messages">
+      <div class="symbiote-messages" part="messages" data-ref="messages">
         <div class="symbiote-empty" data-ref="empty">
           ${avatarHtml.empty}
           <p>${greeting}</p>

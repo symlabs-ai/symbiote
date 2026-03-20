@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Symbiote Test Harness — Clark + Kimi K2</title>
+  <style>
+    :root {
+      --primary: #3B82F6;
+      --primary-hover: #2563eb;
+      --bg: #18181b;
+      --bg-secondary: #27272a;
+      --border: #3f3f46;
+      --text: #e4e4e7;
+      --text-muted: #a1a1aa;
+      --text-primary: #fff;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+    }
+
+    .sidebar {
+      width: 280px;
+      padding: 1.5rem;
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .sidebar h1 { font-size: 1.2rem; }
+    .sidebar p { color: var(--text-muted); font-size: 0.8rem; line-height: 1.5; }
+    .sidebar code { background: var(--bg-secondary); padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.75rem; }
+
+    .sidebar .info {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      font-size: 0.8rem;
+      line-height: 1.6;
+    }
+    .sidebar .info ul { padding-left: 1rem; margin-top: 0.3rem; }
+    .sidebar .info strong { color: var(--text-primary); }
+
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .actions button {
+      padding: 0.5rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg-secondary);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.85rem;
+      text-align: left;
+      transition: background 0.15s;
+    }
+    .actions button:hover { background: var(--border); }
+    .actions button.danger { border-color: #ef4444; color: #fca5a5; }
+    .actions button.danger:hover { background: rgba(239, 68, 68, 0.2); }
+
+    .chat-area {
+      flex: 1;
+      position: relative;
+    }
+
+    /* Force the symbiote-chat to fill the right side as an open panel */
+    symbiote-chat {
+      display: block;
+      width: 100%;
+      height: 100vh;
+    }
+
+    #status {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      padding: 0.5rem;
+      border-top: 1px solid var(--border);
+      margin-top: auto;
+    }
+    #status .ok { color: #4ade80; }
+    #status .err { color: #f87171; }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <h1>Test Harness</h1>
+    <p>Clark + Kimi K2 tool loop com tools reais do YouNews</p>
+
+    <div class="info">
+      <strong>Config:</strong>
+      <ul>
+        <li>LLM: <code>Kimi K2</code></li>
+        <li>Tools: <code>.symbiote/symbiote.db</code></li>
+        <li>Backend: <code>localhost:8000</code></li>
+        <li>SSE: <code>text_delta + response_done</code></li>
+      </ul>
+    </div>
+
+    <div class="actions">
+      <strong style="font-size:0.85rem; color: var(--text-primary)">Atalhos:</strong>
+      <button onclick="sendQuick('Liste os itens do meu inbox')">Listar inbox</button>
+      <button onclick="sendQuick('Quais sao meus jornais?')">Meus jornais</button>
+      <button onclick="sendQuick('Buscar noticias sobre inteligencia artificial')">Buscar IA</button>
+      <button class="danger" onclick="clearChat()">Limpar conversa</button>
+    </div>
+
+    <div id="status">
+      Status: <span id="status-text">carregando...</span>
+    </div>
+  </div>
+
+  <div class="chat-area">
+    <symbiote-chat
+      name="Clark (Test)"
+      placeholder="Pergunte algo ao Clark..."
+      greeting="Oi! Sou Clark no modo de teste."
+      greeting-sub="Tools do symbiote.db apontando para YouNews localhost:8000."
+      session-key="test-harness"
+      fab-label="Clark"
+    ></symbiote-chat>
+  </div>
+
+  <script src="/static/symbiote-chat.js"></script>
+  <script>
+    const chat = document.querySelector('symbiote-chat');
+
+    chat.adapter = {
+      async sendMessageStream(message, context) {
+        return {
+          url: '/chat/stream',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message, session_key: 'test-harness' }),
+        };
+      },
+
+      async loadHistory(sessionKey) {
+        try {
+          const resp = await fetch(`/history?session_key=${encodeURIComponent(sessionKey)}`);
+          return await resp.json();
+        } catch {
+          return { messages: [] };
+        }
+      },
+
+      async clearHistory(sessionKey) {
+        await fetch(`/clear?session_key=${encodeURIComponent(sessionKey)}`, { method: 'POST' });
+      },
+    };
+
+    chat.initialSuggestions = [
+      { label: 'Listar inbox', message: 'Liste os itens do meu inbox' },
+      { label: 'Meus jornais', message: 'Quais sao meus jornais?' },
+      { label: 'Buscar IA', message: 'Buscar noticias sobre inteligencia artificial' },
+    ];
+
+    chat.contextProvider = () => 'Page: Test Harness | Mode: Kimi K2 tool loop';
+
+    // Auto-open on load and disable overlay (it covers the sidebar)
+    setTimeout(() => {
+      chat.open();
+      // Kill the overlay inside the Shadow DOM so sidebar clicks work
+      const overlay = chat.shadowRoot?.querySelector('.symbiote-overlay');
+      if (overlay) overlay.remove();
+      // Also hide the FAB since the panel is always visible
+      const fab = chat.shadowRoot?.querySelector('.symbiote-fab');
+      if (fab) fab.style.display = 'none';
+    }, 300);
+
+    // Sidebar helpers
+    function sendQuick(msg) {
+      if (!chat._isOpen) chat.open();
+      chat.sendMessage(msg);
+    }
+
+    async function clearChat() {
+      // Clear backend first, then UI
+      try {
+        await fetch('/clear?session_key=test-harness', { method: 'POST' });
+      } catch {}
+      chat.clearMessages();
+      setStatus('Conversa limpa', 'ok');
+    }
+
+    function setStatus(text, type) {
+      const el = document.getElementById('status-text');
+      el.textContent = text;
+      el.className = type || '';
+    }
+
+    // Intercept the clear button inside the Shadow DOM
+    chat.addEventListener('click', e => {
+      // The component's clearMessages doesn't await clearHistory,
+      // and history reloads on next open. We handle it externally.
+    });
+    // Override the clear button behavior via MutationObserver
+    setTimeout(() => {
+      const clearBtn = chat.shadowRoot?.querySelector('[data-action="clear"]');
+      if (clearBtn) {
+        // Remove existing listeners by cloning
+        const newBtn = clearBtn.cloneNode(true);
+        clearBtn.parentNode.replaceChild(newBtn, clearBtn);
+        newBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          clearChat();
+        });
+      }
+    }, 500);
+
+    // Events
+    chat.addEventListener('symbiote-message-sent', e => {
+      setStatus(`Enviado: "${e.detail.message.substring(0, 40)}..."`, 'ok');
+      console.log('[harness] sent:', e.detail.message);
+    });
+    chat.addEventListener('symbiote-message-received', e => {
+      setStatus('Resposta recebida', 'ok');
+      console.log('[harness] received:', e.detail);
+    });
+    chat.addEventListener('symbiote-error', e => {
+      setStatus(`Erro: ${e.detail.error}`, 'err');
+      console.error('[harness] error:', e.detail);
+    });
+
+    // Initial status check
+    fetch('/history?session_key=test-harness')
+      .then(r => r.json())
+      .then(d => setStatus(`Pronto (${d.messages.length} msgs no historico)`, 'ok'))
+      .catch(() => setStatus('Servidor indisponivel', 'err'));
+  </script>
+</body>
+</html>
