@@ -84,7 +84,7 @@ async def lifespan(app: FastAPI):
 
     # Init kernel with existing DB (contains discovered tools)
     assert _DB_PATH.exists(), f"symbiote.db not found at {_DB_PATH}"
-    config = KernelConfig(db_path=_DB_PATH, context_budget=16000)
+    config = KernelConfig(db_path=_DB_PATH, context_budget=8000)
     kernel = SymbioteKernel(config=config, llm=llm)
 
     # Find the Clark that actually has approved tools

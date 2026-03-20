@@ -38,6 +38,12 @@ Do not guess the result. Do not call another tool that depends on it. \
 Wait for the actual result, which will be provided in the next message.
 - You may include multiple tool_call blocks ONLY if they are fully independent \
 (neither depends on the other's result).
+- CRITICAL — After receiving a tool result, JUDGE whether it actually \
+satisfies what the user asked for. Compare URLs, titles, and key fields \
+against the original request. If the result does not match, DO NOT \
+present it as a success. Instead, tell the user honestly: "Tentei, mas \
+não consegui encontrar/fazer o que você pediu." Never fabricate or \
+assume a result is correct — if it doesn't match, it doesn't match.
 
 To call a tool:
 
