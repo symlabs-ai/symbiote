@@ -111,10 +111,13 @@ class ChatRunner:
             final_text = clean_text
 
             # Release tokens to the caller after validation.
-            # Streaming: flush the buffered chunks.
-            # Non-streaming: emit the full text once (original behaviour).
+            # When tool calls are present, raw chunks contain tool-call JSON
+            # that must NOT reach the user.  Emit only the clean text instead.
             if on_token is not None:
-                if buffered_chunks is not None:
+                if tool_calls:
+                    if clean_text.strip():
+                        on_token(clean_text)
+                elif buffered_chunks is not None:
                     for chunk in buffered_chunks:
                         on_token(chunk)
                 else:
@@ -178,8 +181,13 @@ class ChatRunner:
             final_text = clean_text
 
             # Release tokens to the caller after validation.
+            # When tool calls are present, raw chunks contain tool-call JSON
+            # that must NOT reach the user.  Emit only the clean text instead.
             if on_token is not None:
-                if buffered_chunks is not None:
+                if tool_calls:
+                    if clean_text.strip():
+                        on_token(clean_text)
+                elif buffered_chunks is not None:
                     for chunk in buffered_chunks:
                         on_token(chunk)
                 else:
