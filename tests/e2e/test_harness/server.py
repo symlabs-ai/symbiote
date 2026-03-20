@@ -111,17 +111,19 @@ async def lifespan(app: FastAPI):
     tool_ids = kernel.load_discovered_tools(clark_id, base_url=_YOUNEWS_BASE_URL)
     print(f"[harness] Loaded {len(tool_ids)} tools from symbiote.db")
 
-    # Configure tool visibility
-    kernel.configure_tool_visibility(clark_id, tags=_TOOL_TAGS, loading="index", loop=True)
+    # Detect native tool support based on model
+    _native = "gpt" in _MODEL.lower() or "openai" in _MODEL.lower()
 
-    # Replace ChatRunner with text-based tool calling
-    # (ForgeLLMAdapter doesn't forward native tools to the provider)
+    # Configure tool visibility
+    _loading = "full" if _native else "index"
+    kernel.configure_tool_visibility(clark_id, tags=_TOOL_TAGS, loading=_loading, loop=True)
     kernel._runner_registry._runners = [
         r for r in kernel._runner_registry._runners if r.runner_type != "chat"
     ]
     kernel._runner_registry.register(
-        ChatRunner(llm, tool_gateway=kernel._tool_gateway, native_tools=False)
+        ChatRunner(llm, tool_gateway=kernel._tool_gateway, native_tools=_native)
     )
+    print(f"[harness] native_tools={_native} for model {_MODEL}")
 
     # Register domain knowledge
     kernel._knowledge.register_source(
