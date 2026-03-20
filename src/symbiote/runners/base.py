@@ -11,6 +11,26 @@ from symbiote.core.context import AssembledContext
 # ── RunResult model ──────────────────────────────────────────────────────────
 
 
+class LoopStep(BaseModel):
+    """One iteration of the tool loop."""
+
+    iteration: int
+    tool_id: str
+    params: dict[str, Any] = {}
+    success: bool = False
+    error: str | None = None
+    elapsed_ms: int = 0
+
+
+class LoopTrace(BaseModel):
+    """Full trace of a tool-loop execution."""
+
+    steps: list[LoopStep] = []
+    total_iterations: int = 0
+    total_tool_calls: int = 0
+    total_elapsed_ms: int = 0
+
+
 class RunResult(BaseModel):
     """Standardised result returned by every runner."""
 
@@ -18,6 +38,7 @@ class RunResult(BaseModel):
     output: Any = None
     error: str | None = None
     runner_type: str = ""
+    loop_trace: LoopTrace | None = None
 
 
 # ── Runner protocol ─────────────────────────────────────────────────────────

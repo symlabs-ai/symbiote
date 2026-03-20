@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -13,12 +15,14 @@ from symbiote.environment.descriptors import LLMResponse, ToolCall, ToolCallResu
 from symbiote.environment.parser import parse_tool_calls
 from symbiote.environment.runtime_context import inject_runtime_context
 from symbiote.memory.working import WorkingMemory
-from symbiote.runners.base import RunResult
+from symbiote.runners.base import LoopStep, LoopTrace, RunResult
 from symbiote.runners.response_validator import (
     fallback_text,
     is_valid_response,
     reformulate_message,
 )
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from symbiote.environment.tools import ToolGateway
@@ -170,13 +174,15 @@ class ChatRunner:
         max_iters = _MAX_TOOL_ITERATIONS if context.tool_loop else 1
 
         all_tool_results: list[ToolCallResult] = []
+        trace = LoopTrace()
         final_text = ""
+        loop_start = time.monotonic()
 
-        for _ in range(max_iters):
+        for iteration in range(max_iters):
             try:
                 response, buffered_chunks = self._call_llm_sync(messages, kwargs, on_token)
             except Exception as exc:
-                return RunResult(success=False, error=str(exc), runner_type=self.runner_type)
+                return RunResult(success=False, error=str(exc), runner_type=self.runner_type, loop_trace=trace)
 
             clean_text, tool_calls = self._parse_response(response)
 
@@ -189,9 +195,6 @@ class ChatRunner:
             final_text = clean_text
 
             # Release tokens to the caller after validation.
-            # When tool calls are present, suppress intermediate narration
-            # (e.g. "Vou verificar...") — only the final response should
-            # reach the user for a natural conversation experience.
             if on_token is not None and not tool_calls:
                 if buffered_chunks is not None:
                     for chunk in buffered_chunks:
@@ -202,15 +205,37 @@ class ChatRunner:
             if not tool_calls or self._tool_gateway is None:
                 break
 
+            step_start = time.monotonic()
             results = await self._tool_gateway.execute_tool_calls_async(
                 symbiote_id=context.symbiote_id,
                 session_id=context.session_id,
                 calls=tool_calls,
             )
+            step_elapsed = int((time.monotonic() - step_start) * 1000)
             all_tool_results.extend(results)
+
+            # Record trace for each tool call
+            for tc, tr in zip(tool_calls, results, strict=False):
+                step = LoopStep(
+                    iteration=iteration + 1,
+                    tool_id=tc.tool_id,
+                    params=tc.params,
+                    success=tr.success,
+                    error=tr.error,
+                    elapsed_ms=step_elapsed,
+                )
+                trace.steps.append(step)
+                logger.info(
+                    "[tool-loop] iter=%d tool=%s success=%s elapsed=%dms",
+                    iteration + 1, tc.tool_id, tr.success, step_elapsed,
+                )
 
             messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
             messages.append({"role": "user", "content": self._format_tool_results(results)})
+
+        trace.total_iterations = iteration + 1 if context.tool_loop else 0
+        trace.total_tool_calls = len(trace.steps)
+        trace.total_elapsed_ms = int((time.monotonic() - loop_start) * 1000)
 
         if self._working_memory is not None:
             self._working_memory.update_message(
@@ -223,7 +248,16 @@ class ChatRunner:
         if all_tool_results:
             output = {"text": final_text, "tool_results": [r.model_dump() for r in all_tool_results]}
 
-        return RunResult(success=True, output=output, runner_type=self.runner_type)
+        if trace.steps:
+            logger.info(
+                "[tool-loop] completed: %d iterations, %d tool calls, %dms total",
+                trace.total_iterations, trace.total_tool_calls, trace.total_elapsed_ms,
+            )
+
+        return RunResult(
+            success=True, output=output, runner_type=self.runner_type,
+            loop_trace=trace if trace.steps else None,
+        )
 
     # ── internal ─────────────────────────────────────────────────────────
 
