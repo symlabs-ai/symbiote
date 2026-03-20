@@ -14,6 +14,11 @@ from symbiote.environment.parser import parse_tool_calls
 from symbiote.environment.runtime_context import inject_runtime_context
 from symbiote.memory.working import WorkingMemory
 from symbiote.runners.base import RunResult
+from symbiote.runners.response_validator import (
+    fallback_text,
+    is_valid_response,
+    reformulate_message,
+)
 
 if TYPE_CHECKING:
     from symbiote.environment.tools import ToolGateway
@@ -21,6 +26,7 @@ if TYPE_CHECKING:
 
 _HANDLED_INTENTS = frozenset({"chat", "ask", "question", "talk"})
 _MAX_TOOL_ITERATIONS = 10
+_MAX_VALIDATION_RETRIES = 2
 
 _TOOL_INSTRUCTIONS = """\
 You are an autonomous agent that EXECUTES actions via tools. Rules:
@@ -88,12 +94,31 @@ class ChatRunner:
 
         for _ in range(max_iters):
             try:
-                response = self._call_llm_sync(messages, kwargs, on_token)
+                response, buffered_chunks = self._call_llm_sync(messages, kwargs, on_token)
             except Exception as exc:
                 return RunResult(success=False, error=str(exc), runner_type=self.runner_type)
 
             clean_text, tool_calls = self._parse_response(response)
+
+            # ── Response validation ───────────────────────────────────────
+            # Only validate when there are no tool calls (a tool-call
+            # response is intentionally structured and not meant for the user).
+            if not tool_calls:
+                clean_text, buffered_chunks = self._validate_and_fix(
+                    clean_text, buffered_chunks, messages, kwargs
+                )
+
             final_text = clean_text
+
+            # Release tokens to the caller after validation.
+            # Streaming: flush the buffered chunks.
+            # Non-streaming: emit the full text once (original behaviour).
+            if on_token is not None:
+                if buffered_chunks is not None:
+                    for chunk in buffered_chunks:
+                        on_token(chunk)
+                else:
+                    on_token(clean_text)
 
             if not tool_calls or self._tool_gateway is None:
                 break
@@ -138,12 +163,27 @@ class ChatRunner:
 
         for _ in range(max_iters):
             try:
-                response = self._call_llm_sync(messages, kwargs, on_token)
+                response, buffered_chunks = self._call_llm_sync(messages, kwargs, on_token)
             except Exception as exc:
                 return RunResult(success=False, error=str(exc), runner_type=self.runner_type)
 
             clean_text, tool_calls = self._parse_response(response)
+
+            # ── Response validation ───────────────────────────────────────
+            if not tool_calls:
+                clean_text, buffered_chunks = self._validate_and_fix(
+                    clean_text, buffered_chunks, messages, kwargs
+                )
+
             final_text = clean_text
+
+            # Release tokens to the caller after validation.
+            if on_token is not None:
+                if buffered_chunks is not None:
+                    for chunk in buffered_chunks:
+                        on_token(chunk)
+                else:
+                    on_token(clean_text)
 
             if not tool_calls or self._tool_gateway is None:
                 break
@@ -190,8 +230,15 @@ class ChatRunner:
     def _call_llm_sync(
         self, messages: list[dict], kwargs: dict,
         on_token: Callable[[str], None] | None,
-    ) -> str | LLMResponse:
-        """Call the LLM synchronously, with optional streaming."""
+    ) -> tuple[str | LLMResponse, list[str] | None]:
+        """Call the LLM synchronously, with optional streaming.
+
+        Returns a tuple of ``(response, buffered_chunks)`` where
+        *buffered_chunks* holds the raw token sequence collected during
+        streaming (``None`` when not streaming).  Tokens are **never**
+        forwarded to *on_token* here — the caller must do so after the
+        response has been validated.
+        """
         if on_token is not None and hasattr(self._llm, "stream"):
             chunks: list[str] = []
             response: str | LLMResponse = ""
@@ -199,15 +246,12 @@ class ChatRunner:
                 if isinstance(item, LLMResponse):
                     response = item
                 else:
-                    on_token(item)
                     chunks.append(item)
             if not isinstance(response, LLMResponse):
                 response = "".join(chunks)
-            return response
+            return response, chunks
         response = self._llm.complete(messages, **kwargs)
-        if on_token is not None and isinstance(response, str):
-            on_token(response)
-        return response
+        return response, None
 
     @staticmethod
     def _parse_response(response: str | LLMResponse) -> tuple[str, list]:
@@ -215,6 +259,42 @@ class ChatRunner:
         if isinstance(response, LLMResponse):
             return response.content, [tc.to_tool_call() for tc in response.tool_calls]
         return parse_tool_calls(response)
+
+    def _validate_and_fix(
+        self,
+        clean_text: str,
+        buffered_chunks: list[str] | None,
+        messages: list[dict],
+        kwargs: dict,
+    ) -> tuple[str, list[str] | None]:
+        """Validate *clean_text* and retry up to ``_MAX_VALIDATION_RETRIES`` times.
+
+        If the LLM returns tool-call syntax leaked as plain text (or an empty
+        response), append a reformulation instruction and call the LLM again.
+        After all retries are exhausted the generic fallback string is used.
+
+        Returns the validated ``(clean_text, buffered_chunks)`` pair — the
+        caller is responsible for flushing *buffered_chunks* to *on_token*.
+        """
+        if is_valid_response(clean_text):
+            return clean_text, buffered_chunks
+
+        retry_messages = list(messages)
+        for _ in range(_MAX_VALIDATION_RETRIES):
+            retry_messages.append({"role": "assistant", "content": clean_text})
+            retry_messages.append({"role": "user", "content": reformulate_message()})
+            try:
+                retry_response, retry_chunks = self._call_llm_sync(retry_messages, kwargs, None)
+            except Exception:
+                break
+            clean_text, _ = self._parse_response(retry_response)
+            if is_valid_response(clean_text):
+                # Return single-chunk buffer matching the validated text
+                return clean_text, [clean_text] if buffered_chunks is not None else None
+
+        # All retries failed — use fallback
+        fb = fallback_text()
+        return fb, [fb] if buffered_chunks is not None else None
 
     @staticmethod
     def _format_assistant_with_calls(text: str, calls: list[ToolCall]) -> str:
