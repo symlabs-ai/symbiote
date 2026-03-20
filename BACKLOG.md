@@ -22,9 +22,9 @@
 | B-38 | Tool Loop — retry inteligente | 2026-03-19, dev | baixa | |
 | B-39 | Tool Loop — context compaction (Ralph-inspired) | 2026-03-19, dev | alta | |
 | B-40 | Tool Mode — refatorar tool_loop:bool para tool_mode:Literal["instant","brief","continuous"] | 2026-03-19, dev | alta | |
-| B-41 | Kimi K2 context limit — investigar limite de request via Groq e adaptar context_budget/tool index | 2026-03-20, harness | alta | |
+| B-41 | Kimi K2 context limit — plano pago resolveu o 500, mas context_length_exceeded persiste com 75+ tools no index; queries multi-step estouram. Bloqueador para tool loops complexos. Precisa de semantic loading ou redução de tags | 2026-03-20, harness | alta | monitoramento |
 | B-42 | Tool descriptions genéricas — melhorar summaries no OpenAPI do YouNews (ex: "Item Action" → "Change item status") | 2026-03-20, harness | média | cross-repo:younews |
-| B-43 | Discovery params incompletos — várias tools com "sem params" mesmo tendo request body; revisar extração | 2026-03-20, harness | média | |
+| B-43 | Discovery params incompletos — fix $ref + form-urlencoded aplicado em v0.2.14. Re-discovery rodado. Cobertura 66%→93% | 2026-03-20, harness | média | done (v0.2.14) |
 | B-44 | Validar supressão de narração intermediária no YouNews staging após deploy v0.17.31+ | 2026-03-20, harness | média | cross-repo:younews |
 | B-45 | Test harness pytest — validar tests/e2e/test_kimi_tool_loop.py (requer YouNews + SymGateway rodando) | 2026-03-20, harness | baixa | |
 
