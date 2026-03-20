@@ -133,7 +133,7 @@ class DiscoveryService:
                 op_id = op.get("operationId") or _path_to_tool_id(method, path)
                 summary = op.get("summary") or op.get("description") or f"{method.upper()} {path}"
                 parameters = _openapi_params_to_schema(
-                    op.get("parameters", []), op.get("requestBody")
+                    op.get("parameters", []), op.get("requestBody"), spec
                 )
                 tools.append(DiscoveredTool(
                     id=str(uuid4()),
@@ -198,7 +198,6 @@ class DiscoveryService:
 
         servers = spec.get("servers", [{}])
         base_url = servers[0].get("url", "") if servers else ""
-
         tools: list[DiscoveredTool] = []
         for path, methods in spec.get("paths", {}).items():
             for method, op in methods.items():
@@ -206,7 +205,7 @@ class DiscoveryService:
                     continue
                 op_id = op.get("operationId") or _path_to_tool_id(method, path)
                 summary = op.get("summary") or op.get("description") or f"{method.upper()} {path}"
-                parameters = _openapi_params_to_schema(op.get("parameters", []), op.get("requestBody"))
+                parameters = _openapi_params_to_schema(op.get("parameters", []), op.get("requestBody"), spec)
                 tools.append(DiscoveredTool(
                     id=str(uuid4()),
                     symbiote_id=symbiote_id,
@@ -361,8 +360,13 @@ def _path_to_tool_id(method: str, path: str) -> str:
 def _openapi_params_to_schema(
     params: list[dict[str, Any]],
     request_body: dict[str, Any] | None,
+    spec_root: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Convert OpenAPI parameters + requestBody to a JSON Schema object."""
+    """Convert OpenAPI parameters + requestBody to a JSON Schema object.
+
+    Resolves ``$ref`` pointers against *spec_root* (the full OpenAPI spec)
+    so that Pydantic-generated request bodies are properly extracted.
+    """
     properties: dict[str, Any] = {}
     required: list[str] = []
 
@@ -371,6 +375,7 @@ def _openapi_params_to_schema(
         if not name:
             continue
         schema = p.get("schema", {"type": "string"})
+        schema = _resolve_ref(schema, spec_root)
         properties[name] = {
             "type": schema.get("type", "string"),
             "description": p.get("description", ""),
@@ -380,15 +385,38 @@ def _openapi_params_to_schema(
 
     if request_body:
         content = request_body.get("content", {})
-        json_content = content.get("application/json", {})
-        body_schema = json_content.get("schema", {})
+        # Try JSON first, then form-urlencoded (FastAPI uses both)
+        json_content = (
+            content.get("application/json")
+            or content.get("application/x-www-form-urlencoded")
+            or {}
+        )
+        body_schema = _resolve_ref(json_content.get("schema", {}), spec_root)
         body_props = body_schema.get("properties", {})
         for name, prop in body_props.items():
-            properties[name] = prop
-        if request_body.get("required"):
+            properties[name] = _resolve_ref(prop, spec_root)
+        if request_body.get("required") or body_schema.get("required"):
             required.extend(body_schema.get("required", []))
 
     result: dict[str, Any] = {"type": "object", "properties": properties}
     if required:
         result["required"] = required
     return result
+
+
+def _resolve_ref(
+    schema: dict[str, Any],
+    spec_root: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Resolve a ``$ref`` pointer to its target in the OpenAPI spec."""
+    ref = schema.get("$ref")
+    if not ref or not spec_root:
+        return schema
+    # "#/components/schemas/MyModel" → navigate from spec root
+    parts = ref.split("/")
+    target = spec_root
+    for part in parts[1:]:  # skip leading "#"
+        target = target.get(part, {})
+        if not isinstance(target, dict):
+            return schema
+    return target
