@@ -30,13 +30,30 @@ from symbiote.environment.policies import PolicyGate
 from symbiote.environment.tools import ToolGateway
 from symbiote.memory.store import MemoryStore
 
-app = FastAPI(title="Symbiote API", version="0.2.0")
+app = FastAPI(title="Symbiote API")
 
 
 @app.get("/health")
 async def health() -> dict:
     """Health check endpoint for Docker/load balancers."""
-    return {"status": "ok"}
+    import importlib.metadata
+    import subprocess
+
+    try:
+        version = importlib.metadata.version("symbiote")
+    except importlib.metadata.PackageNotFoundError:
+        version = "dev"
+
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        ).decode().strip()
+    except Exception:
+        commit = "unknown"
+
+    return {"status": "ok", "service": "symbiote", "version": version, "commit": commit}
 
 
 @app.exception_handler(EntityNotFoundError)
