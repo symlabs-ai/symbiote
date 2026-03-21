@@ -398,6 +398,7 @@ def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
 
     def handler(params: dict) -> Any:
         import urllib.error
+        import urllib.parse
         import urllib.request
 
         from symbiote.security.network import validate_url
@@ -407,21 +408,33 @@ def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
             validate_url(url)  # SSRF protection: block private/internal IPs
 
         body_bytes: bytes | None = None
+        is_form = config.content_type == "application/x-www-form-urlencoded"
+
         if config.body_template is not None:
             import json as _json
 
             body = _build_body(config.body_template, params, config.array_params)
-            body_bytes = _json.dumps(body).encode("utf-8")
+            # Merge extra params not in the template (optional fields the LLM provided)
+            for k, v in params.items():
+                if k not in body and f"{{{k}}}" not in config.url_template:
+                    body[k] = v
+            if is_form:
+                body_bytes = urllib.parse.urlencode(body).encode("utf-8")
+            else:
+                body_bytes = _json.dumps(body).encode("utf-8")
         elif config.method in ("POST", "PUT", "PATCH"):
             import json as _json
 
-            body_bytes = _json.dumps(params).encode("utf-8")
+            if is_form:
+                body_bytes = urllib.parse.urlencode(params).encode("utf-8")
+            else:
+                body_bytes = _json.dumps(params).encode("utf-8")
 
         headers = dict(config.headers)
         if config.header_factory is not None:
             headers.update(config.header_factory())
         if body_bytes is not None and "Content-Type" not in headers:
-            headers["Content-Type"] = "application/json"
+            headers["Content-Type"] = config.content_type
 
         req = urllib.request.Request(
             url,

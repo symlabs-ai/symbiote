@@ -83,9 +83,13 @@ class DiscoveredToolLoader:
                 handler_type="http",
             )
 
+            params = tool.parameters or {}
             body_template, optional_params, array_params = _derive_http_config(
-                tool.method, url, tool.parameters or {}
+                tool.method, url, params
             )
+
+            # Detect content_type from Discovery metadata
+            content_type = params.get("_content_type", "application/json")
 
             config = HttpToolConfig(
                 method=tool.method,  # type: ignore[arg-type]
@@ -95,6 +99,7 @@ class DiscoveredToolLoader:
                 body_template=body_template,
                 optional_params=optional_params,
                 array_params=array_params,
+                content_type=content_type,
             )
             self._gateway.register_http_tool(descriptor, config)
             registered.append(tool.tool_id)
@@ -134,10 +139,12 @@ def _derive_http_config(
     ]
 
     if method in ("POST", "PUT", "PATCH"):
-        # Build body_template from non-path params
+        # Build body_template from required non-path params only.
+        # Optional params are omitted — they'll be included in the body
+        # only if the LLM explicitly provides them.
         body = {}
         for name in props:
-            if name not in path_params:
+            if name not in path_params and name in required:
                 body[name] = f"{{{name}}}"
         return (body or None), [], array_params
 

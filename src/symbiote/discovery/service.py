@@ -383,14 +383,20 @@ def _openapi_params_to_schema(
         if p.get("required"):
             required.append(name)
 
+    body_content_type = "application/json"
     if request_body:
         content = request_body.get("content", {})
-        # Try JSON first, then form-urlencoded (FastAPI uses both)
-        json_content = (
-            content.get("application/json")
-            or content.get("application/x-www-form-urlencoded")
-            or {}
-        )
+        # Try JSON first, then form variants (FastAPI uses all three)
+        if "application/json" in content:
+            json_content = content["application/json"]
+        elif "application/x-www-form-urlencoded" in content:
+            json_content = content["application/x-www-form-urlencoded"]
+            body_content_type = "application/x-www-form-urlencoded"
+        elif "multipart/form-data" in content:
+            json_content = content["multipart/form-data"]
+            body_content_type = "application/x-www-form-urlencoded"  # treat as form
+        else:
+            json_content = {}
         body_schema = _resolve_ref(json_content.get("schema", {}), spec_root)
         body_props = body_schema.get("properties", {})
         for name, prop in body_props.items():
@@ -401,6 +407,8 @@ def _openapi_params_to_schema(
     result: dict[str, Any] = {"type": "object", "properties": properties}
     if required:
         result["required"] = required
+    if body_content_type != "application/json":
+        result["_content_type"] = body_content_type
     return result
 
 

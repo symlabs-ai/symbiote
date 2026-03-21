@@ -57,6 +57,9 @@ class HttpToolConfig(BaseModel):
     """Params listed here are serialised as JSON arrays in the request body rather
     than being coerced to a plain string via ``str.format``.  Only relevant when
     ``body_template`` is set."""
+    content_type: str = "application/json"
+    """Content-Type for the request body.  Defaults to JSON; set to
+    ``application/x-www-form-urlencoded`` for endpoints that expect form data."""
 
 
 class ToolCall(BaseModel):
