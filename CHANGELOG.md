@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [v0.2.21] - 2026-03-30
+
+- feat: Hermes adaptations — SessionRecallPort, MemoryCategory, context compaction
+- docs: comprehensive update — host integration guide, architecture, changelogs
+
 ## [v0.2.20] - 2026-03-30
 
 ### Added — Nanobot Report Adaptations
