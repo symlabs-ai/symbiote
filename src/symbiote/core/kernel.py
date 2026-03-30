@@ -11,6 +11,7 @@ from symbiote.config.models import KernelConfig
 from symbiote.core.capabilities import CapabilitySurface
 from symbiote.core.context import ContextAssembler
 from symbiote.core.exceptions import EntityNotFoundError
+from symbiote.core.hooks import CompositeHook
 from symbiote.core.identity import IdentityManager
 from symbiote.core.models import Session, Symbiote
 from symbiote.core.ports import LLMPort
@@ -89,6 +90,9 @@ class SymbioteKernel:
         # Export
         self._export = ExportService(self._storage)
 
+        # Lifecycle hooks
+        self._hooks = CompositeHook()
+
         # Capability surface
         self._capabilities = CapabilitySurface(
             identity=self._identity,
@@ -105,6 +109,10 @@ class SymbioteKernel:
     @property
     def capabilities(self) -> CapabilitySurface:
         return self._capabilities
+
+    @property
+    def hooks(self) -> CompositeHook:
+        return self._hooks
 
     @property
     def tool_gateway(self) -> ToolGateway:
