@@ -28,6 +28,7 @@ class EnvironmentManager:
         tool_tags: list[str] | None = None,
         tool_loading: str | None = None,
         tool_loop: bool | None = None,
+        prompt_caching: bool | None = None,
     ) -> EnvironmentConfig:
         """Create or update an environment config for a symbiote+workspace combo."""
         existing = self._fetch_exact(symbiote_id, workspace_id)
@@ -46,12 +47,13 @@ class EnvironmentManager:
                 tool_tags=tool_tags if tool_tags is not None else existing.tool_tags,
                 tool_loading=tool_loading if tool_loading is not None else existing.tool_loading,
                 tool_loop=tool_loop if tool_loop is not None else existing.tool_loop,
+                prompt_caching=prompt_caching if prompt_caching is not None else existing.prompt_caching,
             )
             self._storage.execute(
                 "UPDATE environment_configs SET "
                 "tools_json = ?, services_json = ?, humans_json = ?, "
                 "policies_json = ?, resources_json = ?, tool_tags_json = ?, "
-                "tool_loading = ?, tool_loop = ? "
+                "tool_loading = ?, tool_loop = ?, prompt_caching = ? "
                 "WHERE id = ?",
                 (
                     json.dumps(cfg.tools),
@@ -62,6 +64,7 @@ class EnvironmentManager:
                     json.dumps(cfg.tool_tags),
                     cfg.tool_loading,
                     int(cfg.tool_loop),
+                    int(cfg.prompt_caching),
                     cfg.id,
                 ),
             )
@@ -79,13 +82,14 @@ class EnvironmentManager:
             tool_tags=tool_tags or [],
             tool_loading=tool_loading or "full",
             tool_loop=tool_loop if tool_loop is not None else True,
+            prompt_caching=prompt_caching if prompt_caching is not None else False,
         )
         self._storage.execute(
             "INSERT INTO environment_configs "
             "(id, symbiote_id, workspace_id, tools_json, services_json, "
             "humans_json, policies_json, resources_json, tool_tags_json, "
-            "tool_loading, tool_loop) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "tool_loading, tool_loop, prompt_caching) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 cfg.id,
                 cfg.symbiote_id,
@@ -98,6 +102,7 @@ class EnvironmentManager:
                 json.dumps(cfg.tool_tags),
                 cfg.tool_loading,
                 int(cfg.tool_loop),
+                int(cfg.prompt_caching),
             ),
         )
         return cfg
@@ -155,6 +160,15 @@ class EnvironmentManager:
             return True
         return cfg.tool_loop
 
+    def get_prompt_caching(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> bool:
+        """Return prompt_caching flag from config, or False if no config."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return False
+        return cfg.prompt_caching
+
     # ── private helpers ────────────────────────────────────────────────
 
     def _fetch_exact(
@@ -191,4 +205,5 @@ class EnvironmentManager:
             tool_tags=json.loads(row.get("tool_tags_json") or "[]"),
             tool_loading=row.get("tool_loading") or "full",
             tool_loop=bool(row.get("tool_loop", 1)),
+            prompt_caching=bool(row.get("prompt_caching", 0)),
         )

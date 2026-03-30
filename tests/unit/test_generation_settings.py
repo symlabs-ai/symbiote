@@ -87,3 +87,48 @@ class TestChatRunnerPassesConfig:
         runner.run(ctx)
 
         assert calls[0]["config"] is None
+
+
+class TestPromptCachingIntegration:
+    """Tests for prompt_caching flag propagation from EnvironmentConfig to LLM."""
+
+    def test_prompt_caching_in_environment_config(self) -> None:
+        from symbiote.core.models import EnvironmentConfig
+
+        cfg = EnvironmentConfig(symbiote_id="s1", prompt_caching=True)
+        assert cfg.prompt_caching is True
+
+    def test_prompt_caching_default_false(self) -> None:
+        from symbiote.core.models import EnvironmentConfig
+
+        cfg = EnvironmentConfig(symbiote_id="s1")
+        assert cfg.prompt_caching is False
+
+    def test_prompt_caching_propagated_to_llm_config(self) -> None:
+        from symbiote.runners.chat import ChatRunner
+
+        calls: list[dict] = []
+
+        class CaptureLLM:
+            def complete(self, messages, config=None):
+                calls.append({"config": config})
+                return "response"
+
+        runner = ChatRunner(CaptureLLM())
+        ctx = AssembledContext(
+            symbiote_id="s1",
+            session_id="sess-1",
+            user_input="Hello",
+            generation_settings={"prompt_caching": True},
+        )
+        runner.run(ctx)
+
+        assert calls[0]["config"] == {"prompt_caching": True}
+
+    def test_prompt_caching_not_set_when_disabled(self) -> None:
+        ctx = AssembledContext(
+            symbiote_id="s1",
+            session_id="sess-1",
+            user_input="Hello",
+        )
+        assert ctx.generation_settings is None

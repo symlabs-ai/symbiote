@@ -132,12 +132,14 @@ class ContextAssembler:
         if not effective_tags and self._environment is not None:
             effective_tags = self._environment.get_tool_tags(symbiote_id) or None
 
-        # Resolve loading mode and tool loop from EnvironmentConfig
+        # Resolve loading mode, tool loop, and prompt caching from EnvironmentConfig
         loading_mode = "full"
         loop_enabled = True
+        prompt_caching = False
         if self._environment is not None:
             loading_mode = self._environment.get_tool_loading(symbiote_id)
             loop_enabled = self._environment.get_tool_loop(symbiote_id)
+            prompt_caching = self._environment.get_prompt_caching(symbiote_id)
 
         tool_dicts: list[dict] = []
         if self._tool_gateway is not None:
@@ -155,6 +157,11 @@ class ContextAssembler:
             persona, wm_snapshot, memories_dicts, knowledge_dicts, user_input
         )
 
+        # Build generation_settings with prompt_caching if enabled
+        gen_settings: dict | None = None
+        if prompt_caching:
+            gen_settings = {"prompt_caching": True}
+
         return AssembledContext(
             symbiote_id=symbiote_id,
             session_id=session_id,
@@ -168,6 +175,7 @@ class ContextAssembler:
             extra_context=extra_context,
             user_input=user_input,
             total_tokens_estimate=total,
+            generation_settings=gen_settings,
         )
 
     def inspect(self, context: AssembledContext) -> ContextInspection:

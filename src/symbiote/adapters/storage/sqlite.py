@@ -189,6 +189,7 @@ class SQLiteAdapter:
             "ALTER TABLE environment_configs ADD COLUMN tool_tags_json TEXT DEFAULT '[]'",
             "ALTER TABLE environment_configs ADD COLUMN tool_loading TEXT DEFAULT 'full'",
             "ALTER TABLE environment_configs ADD COLUMN tool_loop INTEGER DEFAULT 1",
+            "ALTER TABLE environment_configs ADD COLUMN prompt_caching INTEGER DEFAULT 0",
         ):
             try:
                 self._conn.execute(stmt)
