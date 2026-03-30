@@ -61,6 +61,27 @@ class Message(BaseModel):
 
 # ── MemoryEntry ──────────────────────────────────────────────────────────────
 
+# Higher-level category that groups memory types for policy purposes.
+# "ephemeral" — short-lived working data, auto-expires
+# "declarative" — facts, preferences, constraints (what is/was true)
+# "procedural" — how-to knowledge, workflows, conventions
+# "meta" — summaries, reflections, notes about other memories
+MemoryCategory = Literal["ephemeral", "declarative", "procedural", "meta"]
+
+# Maps each memory type to its category for automatic classification.
+MEMORY_TYPE_CATEGORY: dict[str, MemoryCategory] = {
+    "working": "ephemeral",
+    "session_summary": "meta",
+    "relational": "declarative",
+    "preference": "declarative",
+    "constraint": "declarative",
+    "factual": "declarative",
+    "procedural": "procedural",
+    "decision": "declarative",
+    "reflection": "meta",
+    "semantic_note": "meta",
+}
+
 
 class MemoryEntry(BaseModel):
     id: str = Field(default_factory=_uuid)
@@ -78,6 +99,7 @@ class MemoryEntry(BaseModel):
         "reflection",
         "semantic_note",
     ]
+    category: MemoryCategory | None = None
     scope: Literal["global", "user", "project", "workspace", "session"]
     content: str
     tags: list[str] = Field(default_factory=list)
@@ -87,6 +109,11 @@ class MemoryEntry(BaseModel):
     created_at: datetime = Field(default_factory=_utcnow)
     last_used_at: datetime = Field(default_factory=_utcnow)
     is_active: bool = True
+
+    def model_post_init(self, __context: object) -> None:
+        """Auto-classify category from type if not explicitly set."""
+        if self.category is None:
+            self.category = MEMORY_TYPE_CATEGORY.get(self.type, "declarative")
 
 
 # ── Workspace ────────────────────────────────────────────────────────────────

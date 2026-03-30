@@ -227,7 +227,7 @@ class TestReflectSession:
         assert result.persisted_count >= 1
 
         # Verify entries exist in memory store
-        entries = store.get_by_type(symbiote_id, "reflection")
+        entries = store.get_by_type(symbiote_id, "constraint")
         assert len(entries) >= 1
         assert entries[0].source == "reflection"
         assert entries[0].session_id == session_id
@@ -294,7 +294,7 @@ class TestReflectTask:
         )
 
         assert result.persisted_count >= 1
-        entries = store.get_by_type(symbiote_id, "reflection")
+        entries = store.get_by_type(symbiote_id, "constraint")
         assert len(entries) >= 1
 
     def test_empty_session_returns_result(

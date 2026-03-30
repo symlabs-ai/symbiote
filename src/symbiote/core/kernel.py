@@ -14,7 +14,7 @@ from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.hooks import CompositeHook
 from symbiote.core.identity import IdentityManager
 from symbiote.core.models import Session, Symbiote
-from symbiote.core.ports import LLMPort
+from symbiote.core.ports import LLMPort, SessionRecallPort
 from symbiote.core.reflection import ReflectionEngine
 from symbiote.core.session import SessionManager
 from symbiote.core.session_lock import SessionLock
@@ -93,6 +93,9 @@ class SymbioteKernel:
         # Lifecycle hooks
         self._hooks = CompositeHook()
 
+        # Optional session recall (host provides implementation)
+        self._session_recall: SessionRecallPort | None = None
+
         # Capability surface
         self._capabilities = CapabilitySurface(
             identity=self._identity,
@@ -117,6 +120,14 @@ class SymbioteKernel:
     @property
     def tool_gateway(self) -> ToolGateway:
         return self._tool_gateway
+
+    @property
+    def session_recall(self) -> SessionRecallPort | None:
+        return self._session_recall
+
+    def set_session_recall(self, recall: SessionRecallPort) -> None:
+        """Inject a host-provided session recall implementation."""
+        self._session_recall = recall
 
     @property
     def environment(self) -> EnvironmentManager:
