@@ -16,6 +16,7 @@ from symbiote.core.models import Session, Symbiote
 from symbiote.core.ports import LLMPort
 from symbiote.core.reflection import ReflectionEngine
 from symbiote.core.session import SessionManager
+from symbiote.core.session_lock import SessionLock
 from symbiote.discovery.loader import DiscoveredToolLoader
 from symbiote.discovery.repository import DiscoveredToolRepository
 from symbiote.environment.manager import EnvironmentManager
@@ -81,6 +82,9 @@ class SymbioteKernel:
         # Subagent spawning
         self._subagent = SubagentManager(self)
         self._subagent.register()
+
+        # Per-session concurrency control
+        self._session_lock = SessionLock()
 
         # Export
         self._export = ExportService(self._storage)
@@ -162,8 +166,20 @@ class SymbioteKernel:
         content: str,
         extra_context: dict | None = None,
     ) -> str:
-        """Add user message, run chat capability, add assistant message, return response."""
-        # Look up symbiote_id from the session
+        """Add user message, run chat capability, add assistant message, return response.
+
+        Uses per-session locking: concurrent requests on the same session are
+        serialized, while different sessions process in parallel.
+        """
+        with self._session_lock.acquire(session_id):
+            return self._message_inner(session_id, content, extra_context)
+
+    def _message_inner(
+        self,
+        session_id: str,
+        content: str,
+        extra_context: dict | None = None,
+    ) -> str:
         row = self._storage.fetch_one(
             "SELECT symbiote_id FROM sessions WHERE id = ?", (session_id,)
         )
@@ -171,21 +187,17 @@ class SymbioteKernel:
             raise EntityNotFoundError("Session", session_id)
         symbiote_id = row["symbiote_id"]
 
-        # Add user message
         self._sessions.add_message(session_id, "user", content)
 
-        # Chat via capabilities
         response = self._capabilities.chat(
             symbiote_id, session_id, content, extra_context=extra_context
         )
 
-        # Normalize response to string for message storage
         if isinstance(response, dict):
             text = response.get("text", str(response))
         else:
             text = response
 
-        # Add assistant message
         self._sessions.add_message(session_id, "assistant", text)
 
         return response
@@ -199,23 +211,21 @@ class SymbioteKernel:
     ) -> str:
         """Async variant of message() — supports async tool handlers and on_token streaming.
 
-        Args:
-            session_id: Active session ID.
-            content: User message text.
-            extra_context: Optional extra context injected into the system prompt.
-            on_token: Optional callback invoked with each generated token.  If the
-                LLM adapter exposes ``stream()``, tokens arrive incrementally;
-                otherwise the callback is called once with the full response text.
-
-        Example::
-
-            async def sse_handler(request):
-                async def send(token: str):
-                    await queue.put(token)
-
-                await kernel.message_async(session_id, user_input, on_token=send)
+        Uses per-session async locking: concurrent requests on the same session
+        are serialized, while different sessions process in parallel.
         """
+        async with self._session_lock.acquire_async(session_id):
+            return await self._message_async_inner(
+                session_id, content, extra_context, on_token
+            )
 
+    async def _message_async_inner(
+        self,
+        session_id: str,
+        content: str,
+        extra_context: dict | None = None,
+        on_token: Callable[[str], None] | None = None,
+    ) -> str:
         row = self._storage.fetch_one(
             "SELECT symbiote_id FROM sessions WHERE id = ?", (session_id,)
         )
