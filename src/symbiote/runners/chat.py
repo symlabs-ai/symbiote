@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 _HANDLED_INTENTS = frozenset({"chat", "ask", "question", "talk"})
 _MAX_TOOL_ITERATIONS = 10
 _MAX_VALIDATION_RETRIES = 2
+_COMPACTION_THRESHOLD = 4  # compact after this many loop-added message pairs
+_CHARS_PER_TOKEN = 4  # rough estimate for token counting
 
 _TOOL_INSTRUCTIONS = """\
 You are an autonomous agent that EXECUTES actions via tools. Rules:
@@ -102,6 +104,7 @@ class ChatRunner:
         messages = self._build_messages(context)
         kwargs = self._build_llm_kwargs(context)
         max_iters = _MAX_TOOL_ITERATIONS if context.tool_loop else 1
+        initial_msg_count = len(messages)
 
         all_tool_results: list[ToolCallResult] = []
         final_text = ""
@@ -149,6 +152,9 @@ class ChatRunner:
             messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
             messages.append({"role": "user", "content": self._format_tool_results(results)})
 
+            # Compact old loop messages to prevent context growth
+            self._compact_loop_messages(messages, initial_msg_count)
+
         # Save only the final response to working memory
         if self._working_memory is not None:
             self._working_memory.update_message(
@@ -172,6 +178,7 @@ class ChatRunner:
         messages = self._build_messages(context)
         kwargs = self._build_llm_kwargs(context)
         max_iters = _MAX_TOOL_ITERATIONS if context.tool_loop else 1
+        initial_msg_count = len(messages)
 
         all_tool_results: list[ToolCallResult] = []
         trace = LoopTrace()
@@ -232,6 +239,9 @@ class ChatRunner:
 
             messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
             messages.append({"role": "user", "content": self._format_tool_results(results)})
+
+            # Compact old loop messages to prevent context growth
+            self._compact_loop_messages(messages, initial_msg_count)
 
         trace.total_iterations = iteration + 1 if context.tool_loop else 0
         trace.total_tool_calls = len(trace.steps)
@@ -343,6 +353,60 @@ class ChatRunner:
         # All retries failed — use fallback
         fb = fallback_text()
         return fb, [fb] if buffered_chunks is not None else None
+
+    @staticmethod
+    def _compact_loop_messages(
+        messages: list[dict], initial_count: int
+    ) -> None:
+        """Replace old tool-loop message pairs with a compact summary.
+
+        Only compacts messages added during the tool loop (after
+        ``initial_count``).  Keeps the most recent pair intact so the LLM
+        sees the latest tool result.  Older pairs are replaced by a single
+        summary message.
+
+        Modifies *messages* in-place.
+        """
+        loop_messages = messages[initial_count:]
+        # Each iteration adds 2 messages (assistant + user/tool_result)
+        # Keep the last pair, compact the rest
+        if len(loop_messages) < _COMPACTION_THRESHOLD * 2:
+            return  # not enough to compact
+
+        pairs_to_compact = loop_messages[:-2]  # all except last pair
+        if not pairs_to_compact:
+            return
+
+        # Build compact summary from the pairs
+        steps: list[str] = []
+        for step_num, i in enumerate(range(0, len(pairs_to_compact), 2), 1):
+            tool_result_msg = pairs_to_compact[i + 1]["content"] if i + 1 < len(pairs_to_compact) else ""
+
+            # Extract tool_id from tool_result format "[Tool result: xxx]"
+            tool_id = "unknown"
+            if "[Tool result: " in tool_result_msg:
+                tool_id = tool_result_msg.split("[Tool result: ")[1].split("]")[0]
+            elif "[Tool error: " in tool_result_msg:
+                tool_id = tool_result_msg.split("[Tool error: ")[1].split("]")[0]
+
+            # Truncate large results
+            result_preview = tool_result_msg[:200]
+            if len(tool_result_msg) > 200:
+                result_preview += "... (truncated)"
+
+            steps.append(f"{step_num}) {tool_id} → {result_preview}")
+
+        summary = (
+            "[Context compacted — previous tool loop steps summarized]\n"
+            "Steps completed so far:\n" + "\n".join(steps) + "\n"
+            "Continue from here."
+        )
+
+        # Replace compacted pairs with single summary message
+        last_pair = messages[-2:]
+        del messages[initial_count:]
+        messages.append({"role": "user", "content": summary})
+        messages.extend(last_pair)
 
     @staticmethod
     def _format_assistant_with_calls(text: str, calls: list[ToolCall]) -> str:

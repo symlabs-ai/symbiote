@@ -82,10 +82,15 @@ class ReflectionEngine:
 
         persisted_count = 0
         for fact in facts:
+            # Use the fact type directly when it matches a MemoryEntry type,
+            # otherwise fall back to "reflection"
+            mem_type = fact["type"] if fact["type"] in (
+                "preference", "constraint", "procedural", "factual", "decision",
+            ) else "reflection"
             entry = MemoryEntry(
                 symbiote_id=symbiote_id,
                 session_id=session_id,
-                type="reflection",
+                type=mem_type,
                 scope="global",
                 content=fact["content"],
                 tags=[fact["type"]],
@@ -120,10 +125,13 @@ class ReflectionEngine:
 
         persisted_count = 0
         for fact in facts:
+            mem_type = fact["type"] if fact["type"] in (
+                "preference", "constraint", "procedural", "factual", "decision",
+            ) else "reflection"
             entry = MemoryEntry(
                 symbiote_id=symbiote_id,
                 session_id=session_id,
-                type="reflection",
+                type=mem_type,
                 scope="global",
                 content=fact["content"],
                 tags=[fact["type"], "task"],

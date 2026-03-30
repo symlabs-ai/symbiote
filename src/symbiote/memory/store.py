@@ -22,15 +22,16 @@ class MemoryStore:
         """Persist a memory entry and return its ID."""
         self._storage.execute(
             "INSERT INTO memory_entries "
-            "(id, symbiote_id, session_id, type, scope, content, "
+            "(id, symbiote_id, session_id, type, category, scope, content, "
             "tags_json, importance, source, confidence, "
             "created_at, last_used_at, is_active) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 entry.id,
                 entry.symbiote_id,
                 entry.session_id,
                 entry.type,
+                entry.category,
                 entry.scope,
                 entry.content,
                 json.dumps(entry.tags),
@@ -149,6 +150,18 @@ class MemoryStore:
         )
         return [self._row_to_entry(r) for r in rows]
 
+    def get_by_category(
+        self, symbiote_id: str, category: str, limit: int = 20
+    ) -> list[MemoryEntry]:
+        """Return active entries filtered by symbiote and memory category."""
+        rows = self._storage.fetch_all(
+            "SELECT * FROM memory_entries "
+            "WHERE is_active = 1 AND symbiote_id = ? AND category = ? "
+            "ORDER BY importance DESC, created_at DESC LIMIT ?",
+            (symbiote_id, category, limit),
+        )
+        return [self._row_to_entry(r) for r in rows]
+
     def deactivate(self, memory_id: str) -> None:
         """Set is_active=False. Raises EntityNotFoundError if not found."""
         existing = self._storage.fetch_one(
@@ -181,6 +194,7 @@ class MemoryStore:
             symbiote_id=row["symbiote_id"],
             session_id=row.get("session_id"),
             type=row["type"],
+            category=row.get("category"),
             scope=row["scope"],
             content=row["content"],
             tags=tags,

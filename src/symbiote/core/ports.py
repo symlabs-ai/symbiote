@@ -69,3 +69,47 @@ class KnowledgePort(Protocol):
     """Structural interface for knowledge operations."""
 
     def query(self, symbiote_id: str, theme: str, limit: int = 10) -> list: ...
+
+
+class SessionRecallPort(Protocol):
+    """Port for searching past session transcripts.
+
+    The kernel defines this contract; the host decides the implementation
+    (FTS5, Elasticsearch, embedding search, etc.).  This keeps the kernel
+    free of search-engine opinions while enabling persistent recall.
+
+    Usage by the host::
+
+        class MySessionRecall:
+            def search_messages(self, query, **kwargs):
+                # FTS5 / embedding / whatever
+                return results
+
+        kernel.set_session_recall(MySessionRecall())
+    """
+
+    def search_messages(
+        self,
+        query: str,
+        symbiote_id: str | None = None,
+        session_id: str | None = None,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Search past messages across sessions.
+
+        Returns dicts with at least: session_id, role, content, timestamp.
+        Hosts may include additional fields (score, highlights, etc.).
+        """
+        ...
+
+    def search_sessions(
+        self,
+        query: str,
+        symbiote_id: str | None = None,
+        limit: int = 5,
+    ) -> list[dict]:
+        """Search sessions by goal, summary, or content.
+
+        Returns dicts with at least: session_id, goal, summary, started_at.
+        """
+        ...
