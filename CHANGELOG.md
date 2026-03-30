@@ -3,6 +3,20 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [0.2.20] — 2026-03-30
+
+### Added — Nanobot Report Adaptations
+
+- [B-46] Prompt cache integration — `EnvironmentConfig.prompt_caching` flag propagates `prompt_caching=True` to forge_llm, enabling Anthropic cache breakpoints (~90% token saving)
+- [B-47] Message retry with exponential backoff — `MessageBus` retries handler failures up to `max_retries` (default 3) with backoff (1s, 2s, 4s); `respond()` retries on QueueFull
+- [B-48] Per-session locks — `SessionLock` provides sync/async per-session locking in `kernel.message()`; different sessions run in parallel, same session serializes
+- [B-50] CompositeHook — composable lifecycle hooks (`before_tool`, `after_tool`, `before_turn`, `after_turn`) with error isolation per-hook
+- [B-51] Delta streaming — `StreamDelta` event + `send_delta()`/`receive_delta()` in MessageBus for progressive token delivery to channels
+
+### Changed
+
+- [B-49] `HttpToolConfig.allow_internal` excluded from serialization (`model_dump()`) — can only be set programmatically in code, never from config/API/DB. Added audit log warning when SSRF bypass is active
+
 ## [0.2.5] — 2026-03-19
 
 ### Added — Tool Loop (agentic multi-step execution)

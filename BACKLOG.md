@@ -66,6 +66,12 @@
 
 | # | Descrição | Implementada em | Versão |
 |---|-----------|-----------------|--------|
+| B-46 | Prompt Cache Integration — forge_llm prompt_caching=True via EnvironmentConfig | 2026-03-30 | 0.2.20 |
+| B-47 | Message Retry + Backoff — exponential backoff no MessageBus handler e respond() | 2026-03-30 | 0.2.20 |
+| B-48 | Per-Session Locks — SessionLock sync/async no kernel.message() | 2026-03-30 | 0.2.20 |
+| B-49 | Hardened allow_internal — exclude from serialization + audit log | 2026-03-30 | 0.2.20 |
+| B-50 | CompositeHook — lifecycle hooks composáveis com error isolation | 2026-03-30 | 0.2.20 |
+| B-51 | Delta Streaming — StreamDelta no MessageBus para canais real-time | 2026-03-30 | 0.2.20 |
 | 23 | Deploy Hosted — porta 8008, symbiote.service, nginx + SSL em symbiote.symlabs.ai, CI/CD Gitea Actions | 2026-03-18 | 0.2.4 |
 | 7 | MCP Integration — McpToolProvider bridges forge_llm ToolRegistry → ToolGateway; kernel.load_mcp_tools(registry, symbiote_id) | 2026-03-18 | 0.2.4 |
 | 24 | DiscoveredToolLoader — bridge entre discovered_tools aprovadas e ToolGateway: kernel.load_discovered_tools() carrega tools com status=approved, registra como HttpTool e autoriza via EnvironmentManager | 2026-03-18 | 0.2.4 |

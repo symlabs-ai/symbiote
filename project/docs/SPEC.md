@@ -76,6 +76,17 @@ Symbiote é um kernel Python para construir entidades cognitivas persistentes. M
 | Multi-tenant Isolation — owner_id enforcement, tenant scoping em endpoints | B-21 | ✅ Entregue | hosted-sprint |
 | Python SDK — SymbioteClient thin HTTP client com httpx | B-22 | ✅ Entregue | hosted-sprint |
 
+### Pós-MVP (Sprint Nanobot Adaptations — 2026-03-30)
+
+| Feature | Backlog | Status | Sprint |
+|---------|---------|--------|--------|
+| Prompt Cache Integration — forge_llm prompt_caching via EnvironmentConfig | B-46 | ✅ Entregue | nanobot-sprint |
+| Message Retry + Backoff — exponential backoff no MessageBus | B-47 | ✅ Entregue | nanobot-sprint |
+| Per-Session Locks — SessionLock sync/async no kernel | B-48 | ✅ Entregue | nanobot-sprint |
+| Hardened allow_internal — exclude from serialization + audit log | B-49 | ✅ Entregue | nanobot-sprint |
+| CompositeHook — lifecycle hooks composáveis com error isolation | B-50 | ✅ Entregue | nanobot-sprint |
+| Delta Streaming — StreamDelta no MessageBus para canais real-time | B-51 | ✅ Entregue | nanobot-sprint |
+
 ### O que está fora do escopo
 
 - Multi-tenant completo
