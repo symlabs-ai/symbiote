@@ -3,7 +3,7 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
-## [0.2.20] — 2026-03-30
+## [v0.2.20] - 2026-03-30
 
 ### Added — Nanobot Report Adaptations
 
