@@ -8,7 +8,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from symbiote.bus.events import InboundMessage, OutboundMessage
+from symbiote.bus.events import InboundMessage, OutboundMessage, StreamDelta
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,7 @@ class MessageBus:
     ) -> None:
         self._inbound: asyncio.Queue[InboundMessage] = asyncio.Queue(maxsize=maxsize)
         self._outbound: asyncio.Queue[OutboundMessage] = asyncio.Queue(maxsize=maxsize)
+        self._deltas: asyncio.Queue[StreamDelta] = asyncio.Queue(maxsize=maxsize * 10)
         self._handler: Callable[[InboundMessage], Any] | None = None
         self._running = False
         self._task: asyncio.Task | None = None
@@ -70,6 +71,21 @@ class MessageBus:
                     self._outbound.get(), timeout=timeout
                 )
             return await self._outbound.get()
+        except TimeoutError:
+            return None
+
+    async def receive_delta(self, timeout: float | None = None) -> StreamDelta | None:
+        """Receive a streaming delta (from kernel to channel).
+
+        Channels that support progressive rendering should consume deltas
+        in a loop until ``delta.is_final`` is True.  Returns None on timeout.
+        """
+        try:
+            if timeout is not None:
+                return await asyncio.wait_for(
+                    self._deltas.get(), timeout=timeout
+                )
+            return await self._deltas.get()
         except TimeoutError:
             return None
 
@@ -102,6 +118,22 @@ class MessageBus:
                 )
                 await asyncio.sleep(delay)
 
+    async def send_delta(self, delta: StreamDelta) -> None:
+        """Publish a streaming delta (from kernel to channels).
+
+        Non-blocking: if the delta queue is full, the oldest delta is
+        discarded to prevent blocking the LLM streaming loop.
+        """
+        try:
+            self._deltas.put_nowait(delta)
+        except asyncio.QueueFull:
+            # Drop oldest delta to make room — streaming UX prefers
+            # losing a token over blocking the generation loop.
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self._deltas.get_nowait()
+            with contextlib.suppress(asyncio.QueueFull):
+                self._deltas.put_nowait(delta)
+
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -131,6 +163,10 @@ class MessageBus:
     @property
     def outbound_size(self) -> int:
         return self._outbound.qsize()
+
+    @property
+    def delta_size(self) -> int:
+        return self._deltas.qsize()
 
     # ── Internal ──────────────────────────────────────────────────────────
 
