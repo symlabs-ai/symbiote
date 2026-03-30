@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -13,6 +14,8 @@ from symbiote.environment.descriptors import (
     ToolDescriptor,
 )
 from symbiote.environment.policies import PolicyGate, ToolResult
+
+logger = logging.getLogger(__name__)
 
 # ── Built-in descriptors ─────────────────────────────────────────────────────
 
@@ -404,7 +407,12 @@ def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
         from symbiote.security.network import validate_url
 
         url = _build_url(config.url_template, params, config.optional_params)
-        if not config.allow_internal:
+        if config.allow_internal:
+            logger.warning(
+                "SSRF bypass: allow_internal=True for %s %s",
+                config.method, url,
+            )
+        else:
             validate_url(url)  # SSRF protection: block private/internal IPs
 
         body_bytes: bytes | None = None
