@@ -32,3 +32,18 @@ class OutboundMessage(BaseModel):
     in_reply_to: str | None = None  # InboundMessage.id
     metadata: dict = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=_utcnow)
+
+
+class StreamDelta(BaseModel):
+    """An incremental token delta streamed from the kernel to channels.
+
+    Channels that support progressive rendering (SSE, WebSocket, Telegram
+    edit-message) can consume deltas for real-time UX.  Channels without
+    streaming support ignore deltas and wait for the final OutboundMessage.
+    """
+
+    channel: str
+    chat_id: str
+    delta: str  # the token text
+    in_reply_to: str | None = None  # InboundMessage.id
+    is_final: bool = False  # True on the last delta (stream complete)
