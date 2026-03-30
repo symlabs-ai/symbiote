@@ -194,3 +194,103 @@ class TestMessageBusIntegration:
         assert outbound is not None
         assert outbound.content == "Echo: Hello kernel"
         assert outbound.in_reply_to == inbound.id
+
+
+@pytest.mark.asyncio
+class TestMessageBusRetry:
+    """Tests for retry with exponential backoff."""
+
+    async def test_handler_retried_on_failure(self) -> None:
+        """Handler is retried up to max_retries times before dropping."""
+        bus = MessageBus(max_retries=2, base_delay=0.01)
+        call_count = 0
+
+        def failing_then_ok(msg: InboundMessage) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise ValueError("transient error")
+
+        bus.on_inbound(failing_then_ok)
+        await bus.start()
+        await bus.publish(_make_inbound(content="retry-me"))
+        await asyncio.sleep(0.5)
+        await bus.stop()
+
+        assert call_count == 3  # 1 initial + 2 retries
+
+    async def test_handler_dropped_after_max_retries(self) -> None:
+        """Message is dropped after all retries exhausted."""
+        bus = MessageBus(max_retries=2, base_delay=0.01)
+        call_count = 0
+
+        def always_fail(msg: InboundMessage) -> None:
+            nonlocal call_count
+            call_count += 1
+            raise ValueError("permanent error")
+
+        bus.on_inbound(always_fail)
+        await bus.start()
+        await bus.publish(_make_inbound(content="fail"))
+        await asyncio.sleep(0.5)
+        await bus.stop()
+
+        assert call_count == 3  # 1 initial + 2 retries
+        assert bus.is_running is False  # stopped gracefully
+
+    async def test_respond_retries_on_queue_full(self) -> None:
+        """respond() retries with backoff when outbound queue is full."""
+        bus = MessageBus(maxsize=1, max_retries=2, base_delay=0.01)
+
+        # Fill the queue
+        await bus.respond(OutboundMessage(channel="t", chat_id="c", content="first"))
+        assert bus.outbound_size == 1
+
+        # Start a consumer that drains after a short delay
+        async def drain():
+            await asyncio.sleep(0.02)
+            await bus.receive(timeout=1.0)
+
+        asyncio.create_task(drain())
+
+        # This should retry and succeed after drain
+        msg = OutboundMessage(channel="t", chat_id="c", content="second")
+        await bus.respond(msg)
+        # If we get here without exception, retry worked
+
+    async def test_respond_raises_after_max_retries(self) -> None:
+        """respond() raises QueueFull after all retries exhausted."""
+        bus = MessageBus(maxsize=1, max_retries=1, base_delay=0.01)
+
+        # Fill the queue
+        await bus.respond(OutboundMessage(channel="t", chat_id="c", content="first"))
+
+        with pytest.raises(asyncio.QueueFull):
+            await bus.respond(
+                OutboundMessage(channel="t", chat_id="c", content="overflow")
+            )
+
+    async def test_bus_continues_after_handler_exhausts_retries(self) -> None:
+        """Bus keeps processing subsequent messages after one is dropped."""
+        bus = MessageBus(max_retries=1, base_delay=0.01)
+        results: list[str] = []
+        call_count = 0
+
+        def sometimes_fail(msg: InboundMessage) -> None:
+            nonlocal call_count
+            call_count += 1
+            if msg.content == "fail":
+                raise ValueError("boom")
+            results.append(msg.content)
+
+        bus.on_inbound(sometimes_fail)
+        await bus.start()
+
+        await bus.publish(_make_inbound(content="fail"))
+        await asyncio.sleep(0.3)
+        await bus.publish(_make_inbound(content="ok"))
+        await asyncio.sleep(0.3)
+        await bus.stop()
+
+        assert "ok" in results
+        assert bus.is_running is False
