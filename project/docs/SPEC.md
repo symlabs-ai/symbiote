@@ -87,6 +87,14 @@ Symbiote é um kernel Python para construir entidades cognitivas persistentes. M
 | CompositeHook — lifecycle hooks composáveis com error isolation | B-50 | ✅ Entregue | nanobot-sprint |
 | Delta Streaming — StreamDelta no MessageBus para canais real-time | B-51 | ✅ Entregue | nanobot-sprint |
 
+### Pós-MVP (Sprint Hermes Adaptations — 2026-03-30)
+
+| Feature | Backlog | Status | Sprint |
+|---------|---------|--------|--------|
+| SessionRecallPort — protocol para busca host-provided em sessões | B-52 | ✅ Entregue | hermes-sprint |
+| MemoryCategory — auto-classificação ephemeral/declarative/procedural/meta | B-53 | ✅ Entregue | hermes-sprint |
+| Context Compaction — compactação mid-loop do tool loop | B-54 | ✅ Entregue | hermes-sprint |
+
 ### O que está fora do escopo
 
 - Multi-tenant completo

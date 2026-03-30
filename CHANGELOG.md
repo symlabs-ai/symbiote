@@ -13,9 +13,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - [B-50] CompositeHook — composable lifecycle hooks (`before_tool`, `after_tool`, `before_turn`, `after_turn`) with error isolation per-hook
 - [B-51] Delta streaming — `StreamDelta` event + `send_delta()`/`receive_delta()` in MessageBus for progressive token delivery to channels
 
+### Added — Hermes Report Adaptations
+
+- [B-52] SessionRecallPort — protocol for host-provided session search; kernel defines contract, host implements (FTS5, embeddings, etc.)
+- [B-53] MemoryCategory — auto-classification of memories (ephemeral, declarative, procedural, meta) with `MEMORY_TYPE_CATEGORY` mapping; `get_by_category()` query method
+- [B-54] Context compaction mid-loop — replaces old tool-loop message pairs with compact summary after 4+ iterations; prevents context growth during multi-step execution
+
 ### Changed
 
 - [B-49] `HttpToolConfig.allow_internal` excluded from serialization (`model_dump()`) — can only be set programmatically in code, never from config/API/DB. Added audit log warning when SSRF bypass is active
+- [B-53] ReflectionEngine now stores extracted facts with their actual type (preference, constraint, procedural) instead of generic "reflection"
 
 ## [0.2.5] — 2026-03-19
 

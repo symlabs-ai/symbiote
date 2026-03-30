@@ -6,18 +6,33 @@ Symbiote is the runtime infrastructure for AI-powered assistants ("Symbiotas") t
 
 ## Features
 
+### Core
 - **Identity & Persona** — each Symbiota has a name, role, and configurable persona with audit trail
 - **4-layer Memory Stack** — working memory, session summaries, long-term relational, semantic recall
+- **Memory Categories** — automatic classification into ephemeral, declarative, procedural, meta
 - **Context Assembly** — token-budget-aware pipeline that ranks and assembles context for LLM calls
-- **Tool System** — register tools with JSON Schema descriptors, execute through deny-by-default PolicyGate with full audit log
-- **HTTP Tools** — declarative HTTP tool definitions (method + URL template) — no code required
-- **Tool Call Parser** — LLM responses with `tool_call` blocks are automatically parsed and executed
-- **Extra Context Injection** — host applications can inject page context, user state, etc. into the LLM prompt
-- **Session External Keys** — map external identifiers (e.g. `user_id:page_url`) to sessions for easy integration
 - **6 Capabilities** — Learn, Teach, Chat, Work, Show, Reflect as explicit operations
 - **3 Interfaces** — Python library, CLI (Typer + Rich), HTTP API (FastAPI)
+
+### Tools & Execution
+- **Tool System** — register tools with JSON Schema descriptors, execute through deny-by-default PolicyGate with full audit log
+- **HTTP Tools** — declarative HTTP tool definitions (method + URL template) — no code required
+- **Tool Loop** — agentic multi-step execution with automatic context compaction
+- **Tool Call Parser** — LLM responses with `tool_call` blocks are automatically parsed and executed
+- **Lifecycle Hooks** — composable pre/post hooks for tool execution and chat turns (audit, metrics, rate-limiting)
+
+### Integration
+- **Extra Context Injection** — host applications can inject page context, user state, etc. into the LLM prompt
+- **Session External Keys** — map external identifiers (e.g. `user_id:page_url`) to sessions for easy integration
+- **Session Recall Port** — pluggable search interface for host-provided transcript search
+- **Message Bus** — async inbound/outbound queues with retry, backoff, and delta streaming
+- **Prompt Caching** — optional Anthropic prompt cache optimization via `EnvironmentConfig`
+
+### Reliability
+- **Per-session Locks** — concurrent requests on the same session are serialized; different sessions run in parallel
+- **SSRF Protection** — URL validation blocks private/internal IPs; `allow_internal` hardened against config injection
 - **Process Engine** — declarative step-by-step workflows
-- **Reflection Engine** — automatic fact extraction and session summarization
+- **Reflection Engine** — automatic fact extraction with semantic type classification
 
 ## Quick Start
 
@@ -112,10 +127,89 @@ See [QUICKSTART.md](QUICKSTART.md) for the full guide.
 │  ├─ ContextAssembler   ├─ RunnerRegistry         │
 │  ├─ ToolGateway        ├─ PolicyGate             │
 │  ├─ ReflectionEngine   ├─ ProcessEngine          │
-│  └─ ExportService      └─ WorkspaceManager       │
+│  ├─ CompositeHook      ├─ SessionLock            │
+│  ├─ MessageBus         ├─ ExportService          │
+│  └─ WorkspaceManager   └─ SessionRecallPort*     │
 ├──────────────────────────────────────────────────┤
-│  Adapters: SQLite │ LLM (Mock/Anthropic/OpenAI)  │
+│  Adapters: SQLite │ LLM (forge_llm)             │
 └──────────────────────────────────────────────────┘
+  * SessionRecallPort: host provides implementation
+```
+
+## Host Integration Guide
+
+The kernel provides ports and hooks for hosts to extend behavior without modifying core code.
+
+### Session Recall (search past conversations)
+
+```python
+class MySessionRecall:
+    """Host-provided search over past sessions. Use FTS5, embeddings, etc."""
+
+    def search_messages(self, query, symbiote_id=None, session_id=None, limit=10):
+        # Your search logic here — FTS5, Elasticsearch, embedding similarity, etc.
+        return [{"session_id": "...", "role": "user", "content": "...", "timestamp": "..."}]
+
+    def search_sessions(self, query, symbiote_id=None, limit=5):
+        return [{"session_id": "...", "goal": "...", "summary": "..."}]
+
+kernel.set_session_recall(MySessionRecall())
+```
+
+### Lifecycle Hooks (audit, metrics, approval gates)
+
+```python
+from symbiote.core.hooks import BaseHook
+
+class AuditHook(BaseHook):
+    async def before_tool(self, tool_id, params):
+        log.info(f"Tool call: {tool_id}")
+
+    async def after_tool(self, tool_id, params, result):
+        log.info(f"Tool result: {tool_id} -> {result}")
+
+kernel.hooks.add(AuditHook())
+```
+
+### Prompt Caching (Anthropic ~90% token saving)
+
+```python
+kernel.environment.configure(symbiote_id=bot.id, prompt_caching=True)
+```
+
+### Message Bus (channel integration with streaming)
+
+```python
+from symbiote.bus.message_bus import MessageBus
+from symbiote.bus.events import StreamDelta
+
+bus = MessageBus()
+
+# Consume streaming deltas for real-time UX
+async def stream_to_websocket(ws):
+    while True:
+        delta = await bus.receive_delta(timeout=30.0)
+        if delta is None:
+            break
+        await ws.send(delta.delta)
+        if delta.is_final:
+            break
+```
+
+### Memory Categories
+
+Memories are auto-classified into categories for policy and retrieval:
+
+| Category | Types | Purpose |
+|----------|-------|---------|
+| `ephemeral` | working | Short-lived, auto-expires |
+| `declarative` | preference, constraint, factual, decision, relational | Facts about the world |
+| `procedural` | procedural | How-to knowledge, workflows |
+| `meta` | session_summary, reflection, semantic_note | About other memories |
+
+```python
+# Query by category
+procedural = store.get_by_category(symbiote_id, "procedural")
 ```
 
 ## Documentation
