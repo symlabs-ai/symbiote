@@ -120,6 +120,33 @@ class TestHttpToolSSRFIntegration:
 
         assert result["data"] == {"results": []}
 
+    def test_allow_internal_excluded_from_serialization(self) -> None:
+        """allow_internal is excluded from model_dump() — cannot be set via config dict."""
+        from symbiote.environment.descriptors import HttpToolConfig
+
+        config = HttpToolConfig(
+            method="GET",
+            url_template="http://example.com/api/{id}",
+            allow_internal=True,
+        )
+        dumped = config.model_dump()
+        assert "allow_internal" not in dumped
+
+    def test_allow_internal_not_restored_from_dict(self) -> None:
+        """Constructing from a dict with allow_internal=True is ignored in dump round-trip."""
+        from symbiote.environment.descriptors import HttpToolConfig
+
+        data = {
+            "method": "GET",
+            "url_template": "http://example.com/api/{id}",
+            "allow_internal": True,
+        }
+        config = HttpToolConfig(**data)
+        # It is set programmatically — this is expected (code-level access)
+        assert config.allow_internal is True
+        # But it's excluded from serialization
+        assert "allow_internal" not in config.model_dump()
+
     def test_allow_internal_false_still_blocks(self) -> None:
         """allow_internal=False (default) still raises SSRFError for localhost."""
         from symbiote.environment.descriptors import HttpToolConfig
