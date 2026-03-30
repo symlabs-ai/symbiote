@@ -129,6 +129,7 @@ class EnvironmentConfig(BaseModel):
     tool_tags: list[str] = Field(default_factory=list)
     tool_loading: Literal["full", "index", "semantic"] = "full"
     tool_loop: bool = True
+    prompt_caching: bool = False
 
 
 # ── Decision ─────────────────────────────────────────────────────────────────

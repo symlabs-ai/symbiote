@@ -308,3 +308,26 @@ class TestToolLoading:
         assert cfg.tools == ["git"]
         assert cfg.tool_tags == ["Items"]
         assert cfg.tool_loading == "index"
+
+
+class TestPromptCaching:
+    """Tests for prompt_caching flag in EnvironmentManager."""
+
+    def test_prompt_caching_default_false(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        manager.configure(symbiote_id=symbiote_id, tools=["git"])
+        cfg = manager.get_config(symbiote_id)
+        assert cfg is not None
+        assert cfg.prompt_caching is False
+
+    def test_get_prompt_caching(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        manager.configure(symbiote_id=symbiote_id, prompt_caching=True)
+        assert manager.get_prompt_caching(symbiote_id) is True
+
+    def test_get_prompt_caching_no_config_returns_false(
+        self, manager: EnvironmentManager
+    ) -> None:
+        assert manager.get_prompt_caching("no-such-symbiote") is False
