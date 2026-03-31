@@ -239,7 +239,9 @@ class TestContextCompaction:
                 nonlocal call_count
                 call_count += 1
                 if call_count <= 6:
-                    return '```tool_call\n{"tool": "test_tool", "params": {}}\n```'
+                    # Use different params each time to avoid stagnation detection
+                    import json
+                    return f'```tool_call\n{json.dumps({"tool": "test_tool", "params": {"step": call_count}})}\n```'
                 return "Done!"
 
         class MockGateway:

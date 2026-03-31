@@ -16,6 +16,7 @@ from symbiote.environment.parser import parse_tool_calls
 from symbiote.environment.runtime_context import inject_runtime_context
 from symbiote.memory.working import WorkingMemory
 from symbiote.runners.base import LoopStep, LoopTrace, RunResult
+from symbiote.runners.loop_control import LoopController
 from symbiote.runners.response_validator import (
     fallback_text,
     is_valid_response,
@@ -105,6 +106,7 @@ class ChatRunner:
         kwargs = self._build_llm_kwargs(context)
         max_iters = _MAX_TOOL_ITERATIONS if context.tool_loop else 1
         initial_msg_count = len(messages)
+        controller = LoopController(max_iterations=max_iters)
 
         all_tool_results: list[ToolCallResult] = []
         final_text = ""
@@ -148,6 +150,32 @@ class ChatRunner:
             )
             all_tool_results.extend(results)
 
+            # Record each tool call in the loop controller
+            for tc, tr in zip(tool_calls, results, strict=False):
+                controller.record(tc.tool_id, tc.params, tr.success)
+
+            # Check loop health — stop early on stagnation or circuit breaker
+            should_stop, stop_reason = controller.should_stop()
+            if should_stop:
+                injection = controller.get_injection_message()
+                if injection:
+                    messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
+                    messages.append({"role": "user", "content": self._format_tool_results(results)})
+                    messages.append({"role": "user", "content": injection})
+                    try:
+                        inj_response, inj_chunks = self._call_llm_sync(messages, kwargs, on_token)
+                        inj_text, _ = self._parse_response(inj_response)
+                        final_text = inj_text
+                        if on_token is not None:
+                            if inj_chunks is not None:
+                                for chunk in inj_chunks:
+                                    on_token(chunk)
+                            else:
+                                on_token(inj_text)
+                    except Exception:
+                        pass  # keep the last final_text
+                break
+
             # Feed results back for the next iteration
             messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
             messages.append({"role": "user", "content": self._format_tool_results(results)})
@@ -179,6 +207,7 @@ class ChatRunner:
         kwargs = self._build_llm_kwargs(context)
         max_iters = _MAX_TOOL_ITERATIONS if context.tool_loop else 1
         initial_msg_count = len(messages)
+        controller = LoopController(max_iterations=max_iters)
 
         all_tool_results: list[ToolCallResult] = []
         trace = LoopTrace()
@@ -237,6 +266,32 @@ class ChatRunner:
                     iteration + 1, tc.tool_id, tr.success, step_elapsed,
                 )
 
+                # Record in loop controller
+                controller.record(tc.tool_id, tc.params, tr.success)
+
+            # Check loop health — stop early on stagnation or circuit breaker
+            should_stop, stop_reason = controller.should_stop()
+            if should_stop:
+                trace.stop_reason = stop_reason
+                injection = controller.get_injection_message()
+                if injection:
+                    messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
+                    messages.append({"role": "user", "content": self._format_tool_results(results)})
+                    messages.append({"role": "user", "content": injection})
+                    try:
+                        inj_response, inj_chunks = self._call_llm_sync(messages, kwargs, on_token)
+                        inj_text, _ = self._parse_response(inj_response)
+                        final_text = inj_text
+                        if on_token is not None:
+                            if inj_chunks is not None:
+                                for chunk in inj_chunks:
+                                    on_token(chunk)
+                            else:
+                                on_token(inj_text)
+                    except Exception:
+                        pass  # keep the last final_text
+                break
+
             messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
             messages.append({"role": "user", "content": self._format_tool_results(results)})
 
@@ -246,6 +301,8 @@ class ChatRunner:
         trace.total_iterations = iteration + 1 if context.tool_loop else 0
         trace.total_tool_calls = len(trace.steps)
         trace.total_elapsed_ms = int((time.monotonic() - loop_start) * 1000)
+        if trace.stop_reason is None:
+            trace.stop_reason = "end_turn" if trace.total_iterations > 0 else None
 
         if self._working_memory is not None:
             self._working_memory.update_message(

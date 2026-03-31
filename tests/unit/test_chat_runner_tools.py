@@ -371,11 +371,13 @@ class TestToolLoop:
     def test_loop_respects_max_iterations(
         self, symbiote_id, tool_gateway, env_manager,
     ) -> None:
-        """Loop stops at _MAX_TOOL_ITERATIONS even if LLM keeps calling tools."""
+        """Loop stops early due to stagnation when LLM keeps calling the same tool."""
         tool_gateway.register_tool("echo", lambda p: "ok")
         env_manager.configure(symbiote_id=symbiote_id, tools=["echo"])
 
-        # LLM always returns a tool call
+        # LLM always returns the same tool call — LoopController detects
+        # stagnation on the 2nd identical call and injects a stop message,
+        # triggering one final LLM call for a clean user response.
         infinite_response = '```tool_call\n{"tool": "echo", "params": {}}\n```'
         llm = MultiStepMockLLM([infinite_response] * 20)
         runner = ChatRunner(llm, tool_gateway=tool_gateway)
@@ -383,8 +385,8 @@ class TestToolLoop:
         result = runner.run(context)
 
         assert result.success is True
-        from symbiote.runners.chat import _MAX_TOOL_ITERATIONS
-        assert llm.call_count == _MAX_TOOL_ITERATIONS
+        # 2 tool-call iterations + 1 injection response = 3 LLM calls
+        assert llm.call_count == 3
 
     def test_loop_feeds_results_in_messages(
         self, symbiote_id, tool_gateway, env_manager,
