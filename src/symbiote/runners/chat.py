@@ -34,6 +34,9 @@ _MAX_TOOL_ITERATIONS = 10
 _MAX_VALIDATION_RETRIES = 2
 _COMPACTION_THRESHOLD = 4  # compact after this many loop-added message pairs
 _CHARS_PER_TOKEN = 4  # rough estimate for token counting
+_MAX_LLM_RETRIES = 3
+_LLM_RETRY_BASE = 1  # seconds
+_LLM_RETRY_MULTIPLIER = 2
 
 _TOOL_INSTRUCTIONS = """\
 You are an autonomous agent that EXECUTES actions via tools. Rules:
@@ -113,7 +116,7 @@ class ChatRunner:
 
         for _ in range(max_iters):
             try:
-                response, buffered_chunks = self._call_llm_sync(messages, kwargs, on_token)
+                response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
             except Exception as exc:
                 return RunResult(success=False, error=str(exc), runner_type=self.runner_type)
 
@@ -367,6 +370,40 @@ class ChatRunner:
             return response, chunks
         response = self._llm.complete(messages, **kwargs)
         return response, None
+
+    @staticmethod
+    def _is_retryable_error(exc: Exception) -> bool:
+        """Return True if *exc* is a transient error worth retrying."""
+        if isinstance(exc, ValueError | TypeError | KeyError):
+            return False
+        if isinstance(exc, ConnectionError | TimeoutError | OSError):
+            return True
+        msg = str(exc).lower()
+        return any(kw in msg for kw in ("rate limit", "429", "503", "502", "timeout"))
+
+    def _call_llm_with_retry(
+        self,
+        messages: list[dict],
+        kwargs: dict,
+        on_token: Callable[[str], None] | None,
+    ) -> tuple[str | LLMResponse, list[str] | None]:
+        """Wrap ``_call_llm_sync`` with exponential-backoff retry logic."""
+        last_exc: Exception | None = None
+        for attempt in range(1, _MAX_LLM_RETRIES + 1):
+            try:
+                return self._call_llm_sync(messages, kwargs, on_token)
+            except Exception as exc:
+                if not self._is_retryable_error(exc) or attempt == _MAX_LLM_RETRIES:
+                    raise
+                last_exc = exc
+                delay = _LLM_RETRY_BASE * (_LLM_RETRY_MULTIPLIER ** (attempt - 1))
+                logger.warning(
+                    "[llm-retry] attempt %d/%d after %s: %s",
+                    attempt, _MAX_LLM_RETRIES, type(exc).__name__, exc,
+                )
+                time.sleep(delay)
+        # Should never reach here, but satisfy type checker
+        raise last_exc  # type: ignore[misc]
 
     @staticmethod
     def _parse_response(response: str | LLMResponse) -> tuple[str, list]:
