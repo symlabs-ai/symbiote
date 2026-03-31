@@ -66,6 +66,13 @@
 
 | # | Descrição | Implementada em | Versão |
 |---|-----------|-----------------|--------|
+| B-55 | Parallel tool execution — asyncio.gather (async) + ThreadPoolExecutor (sync) com max_workers=4 | 2026-03-31 | 0.2.22 |
+| B-56 | LLM retry with exponential backoff — 3 retries, 1s/2s/4s, only transient errors | 2026-03-31 | 0.2.22 |
+| B-57 | Diminishing returns detection + circuit breaker — LoopController com duplicate/failure detection | 2026-03-31 | 0.2.22 |
+| B-58 | 3-layer compaction — microcompact + loop compact + autocompact (token-budget-aware) | 2026-03-31 | 0.2.22 |
+
+| # | Descrição | Implementada em | Versão |
+|---|-----------|-----------------|--------|
 | B-46 | Prompt Cache Integration — forge_llm prompt_caching=True via EnvironmentConfig | 2026-03-30 | 0.2.20 |
 | B-47 | Message Retry + Backoff — exponential backoff no MessageBus handler e respond() | 2026-03-30 | 0.2.20 |
 | B-48 | Per-Session Locks — SessionLock sync/async no kernel.message() | 2026-03-30 | 0.2.20 |

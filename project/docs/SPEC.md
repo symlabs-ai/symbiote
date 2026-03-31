@@ -95,6 +95,15 @@ Symbiote é um kernel Python para construir entidades cognitivas persistentes. M
 | MemoryCategory — auto-classificação ephemeral/declarative/procedural/meta | B-53 | ✅ Entregue | hermes-sprint |
 | Context Compaction — compactação mid-loop do tool loop | B-54 | ✅ Entregue | hermes-sprint |
 
+### Pós-MVP (Sprint Agent Loop Resilience — 2026-03-31)
+
+| Feature | Backlog | Status | Sprint |
+|---------|---------|--------|--------|
+| Parallel tool execution — asyncio.gather + ThreadPoolExecutor | B-55 | ✅ Entregue | resilience-sprint |
+| LLM retry with exponential backoff — 3 retries, 1s/2s/4s | B-56 | ✅ Entregue | resilience-sprint |
+| Diminishing returns detection + circuit breaker — LoopController | B-57 | ✅ Entregue | resilience-sprint |
+| 3-layer compaction — microcompact + loop compact + autocompact | B-58 | ✅ Entregue | resilience-sprint |
+
 ### O que está fora do escopo
 
 - Multi-tenant completo

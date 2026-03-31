@@ -3,6 +3,21 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [v0.2.22] - 2026-03-31
+
+### Added — Agent Loop Resilience Sprint
+
+- [B-55] Parallel tool execution — `ToolGateway.execute_tool_calls()` uses `ThreadPoolExecutor(max_workers=4)` for sync, `asyncio.gather()` for async; one failing tool does not block others (`environment/tools.py`)
+- [B-56] LLM retry with exponential backoff — `ChatRunner._call_llm_with_retry()` retries transient errors (ConnectionError, TimeoutError, rate limits, 5xx) up to 3 times with 1s/2s/4s delays (`runners/chat.py`)
+- [B-57] Diminishing returns detection + circuit breaker — `LoopController` monitors duplicate calls (same tool+params 2x), circuit breaker (same tool fails 3x), and injects stop message for clean LLM exit (`runners/loop_control.py`)
+- [B-58] 3-layer compaction — Layer 1: microcompact (truncate tool results >2000 chars); Layer 2: loop compaction (summarize old pairs after 4 iterations); Layer 3: autocompact (aggressive compact when tokens >80% of context budget) (`runners/chat.py`)
+
+### Changed
+
+- [B-57] `LoopTrace` gains `stop_reason` field (end_turn, max_iterations, stagnation, circuit_breaker) (`runners/base.py`)
+- [B-58] `ChatRunner` gains `context_budget` parameter (default 16000 tokens) for autocompact threshold
+- [B-58] `_format_tool_results()` now applies microcompact to each individual result before injection
+
 ## [v0.2.21] - 2026-03-30
 
 - feat: Hermes adaptations — SessionRecallPort, MemoryCategory, context compaction
