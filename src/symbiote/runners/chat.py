@@ -34,6 +34,9 @@ _MAX_TOOL_ITERATIONS = 10
 _MAX_VALIDATION_RETRIES = 2
 _COMPACTION_THRESHOLD = 4  # compact after this many loop-added message pairs
 _CHARS_PER_TOKEN = 4  # rough estimate for token counting
+_MICROCOMPACT_MAX_CHARS = 2000  # truncate individual tool results beyond this
+_AUTOCOMPACT_THRESHOLD = 0.80  # trigger autocompact at 80% of context budget
+_DEFAULT_CONTEXT_BUDGET = 16000  # tokens; overridden by context.total_tokens_estimate
 _MAX_LLM_RETRIES = 3
 _LLM_RETRY_BASE = 1  # seconds
 _LLM_RETRY_MULTIPLIER = 2
@@ -84,12 +87,14 @@ class ChatRunner:
         consolidator: MemoryConsolidator | None = None,
         *,
         native_tools: bool = False,
+        context_budget: int = _DEFAULT_CONTEXT_BUDGET,
     ) -> None:
         self._llm = llm
         self._working_memory = working_memory
         self._tool_gateway = tool_gateway
         self._consolidator = consolidator
         self._native_tools = native_tools
+        self._context_budget = context_budget
 
     def can_handle(self, intent: str) -> bool:
         return intent in _HANDLED_INTENTS
@@ -183,8 +188,10 @@ class ChatRunner:
             messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
             messages.append({"role": "user", "content": self._format_tool_results(results)})
 
-            # Compact old loop messages to prevent context growth
+            # Layer 2: compact old loop messages to prevent context growth
             self._compact_loop_messages(messages, initial_msg_count)
+            # Layer 3: aggressive autocompact if approaching context budget
+            self._autocompact_if_needed(messages, initial_msg_count)
 
         # Save only the final response to working memory
         if self._working_memory is not None:
@@ -298,8 +305,10 @@ class ChatRunner:
             messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
             messages.append({"role": "user", "content": self._format_tool_results(results)})
 
-            # Compact old loop messages to prevent context growth
+            # Layer 2: compact old loop messages to prevent context growth
             self._compact_loop_messages(messages, initial_msg_count)
+            # Layer 3: aggressive autocompact if approaching context budget
+            self._autocompact_if_needed(messages, initial_msg_count)
 
         trace.total_iterations = iteration + 1 if context.tool_loop else 0
         trace.total_tool_calls = len(trace.steps)
@@ -503,6 +512,75 @@ class ChatRunner:
         messages.extend(last_pair)
 
     @staticmethod
+    def _microcompact_tool_result(result_text: str) -> str:
+        """Truncate a single tool result if it exceeds the size threshold.
+
+        Layer 1 of the 3-layer compaction system.  Applied to each tool
+        result *before* it is injected into the message list, preventing
+        large JSON payloads from consuming the context window.
+        """
+        if len(result_text) <= _MICROCOMPACT_MAX_CHARS:
+            return result_text
+        # Keep first portion + tail marker
+        truncated = result_text[:_MICROCOMPACT_MAX_CHARS]
+        remaining = len(result_text) - _MICROCOMPACT_MAX_CHARS
+        return f"{truncated}\n... ({remaining} chars truncated)"
+
+    def _autocompact_if_needed(
+        self, messages: list[dict], initial_count: int
+    ) -> bool:
+        """Aggressively compact when total tokens approach context budget.
+
+        Layer 3 of the 3-layer compaction system.  Estimates the total
+        token count of all messages and, when it exceeds
+        ``_AUTOCOMPACT_THRESHOLD`` of the budget, replaces ALL loop
+        messages (not just old ones) with a single summary.
+
+        Returns True if compaction was performed.
+        """
+        total_chars = sum(len(m.get("content", "")) for m in messages)
+        estimated_tokens = total_chars // _CHARS_PER_TOKEN
+        threshold = int(self._context_budget * _AUTOCOMPACT_THRESHOLD)
+
+        if estimated_tokens <= threshold:
+            return False
+
+        loop_messages = messages[initial_count:]
+        if len(loop_messages) < 2:
+            return False
+
+        logger.info(
+            "[autocompact] tokens ~%d exceed threshold %d; compacting %d loop messages",
+            estimated_tokens, threshold, len(loop_messages),
+        )
+
+        # Build aggressive summary — keep only tool_id and success/error
+        steps: list[str] = []
+        for step_num, i in enumerate(range(0, len(loop_messages), 2), 1):
+            tool_result_msg = loop_messages[i + 1]["content"] if i + 1 < len(loop_messages) else ""
+
+            tool_id = "unknown"
+            status = "ok"
+            if "[Tool result: " in tool_result_msg:
+                tool_id = tool_result_msg.split("[Tool result: ")[1].split("]")[0]
+            elif "[Tool error: " in tool_result_msg:
+                tool_id = tool_result_msg.split("[Tool error: ")[1].split("]")[0]
+                status = "error"
+
+            # Ultra-compact: just tool_id and status, no content
+            steps.append(f"{step_num}) {tool_id} → {status}")
+
+        summary = (
+            "[Autocompact — context budget pressure, all loop steps summarized]\n"
+            "Steps completed:\n" + "\n".join(steps) + "\n"
+            "Continue from here. Do not repeat completed steps."
+        )
+
+        del messages[initial_count:]
+        messages.append({"role": "user", "content": summary})
+        return True
+
+    @staticmethod
     def _format_assistant_with_calls(text: str, calls: list[ToolCall]) -> str:
         """Format assistant message including tool_call blocks for the loop context."""
         parts = []
@@ -513,15 +591,19 @@ class ChatRunner:
             parts.append(f"```tool_call\n{block}\n```")
         return "\n".join(parts)
 
-    @staticmethod
-    def _format_tool_results(results: list[ToolCallResult]) -> str:
-        """Format tool results as a user message for the next LLM turn."""
+    @classmethod
+    def _format_tool_results(cls, results: list[ToolCallResult]) -> str:
+        """Format tool results as a user message for the next LLM turn.
+
+        Applies Layer 1 microcompaction to each individual result.
+        """
         parts = []
         for r in results:
             if r.success:
-                parts.append(f"[Tool result: {r.tool_id}]\n{json.dumps(r.output, default=str, ensure_ascii=False)}")
+                raw = f"[Tool result: {r.tool_id}]\n{json.dumps(r.output, default=str, ensure_ascii=False)}"
             else:
-                parts.append(f"[Tool error: {r.tool_id}]\n{r.error}")
+                raw = f"[Tool error: {r.tool_id}]\n{r.error}"
+            parts.append(cls._microcompact_tool_result(raw))
         return "\n\n".join(parts)
 
     def _build_messages(self, context: AssembledContext) -> list[dict]:
