@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -132,30 +134,52 @@ class ToolGateway:
         calls: list,
         workspace_id: str | None = None,
     ) -> list[ToolCallResult]:
-        """Async variant of execute_tool_calls() — supports coroutine tool handlers."""
-        results: list[ToolCallResult] = []
-        for call in calls:
-            result = await self.execute_async(
+        """Async variant of execute_tool_calls() — runs calls concurrently via asyncio.gather."""
+        if not calls:
+            return []
+
+        tasks = [
+            self.execute_async(
                 symbiote_id=symbiote_id,
                 session_id=session_id,
                 tool_id=call.tool_id,
                 params=call.params,
                 workspace_id=workspace_id,
             )
-            error_with_hint = result.error
-            if not result.success and result.error:
-                error_with_hint = (
-                    f"{result.error}\n"
+            for call in calls
+        ]
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        results: list[ToolCallResult] = []
+        for call, raw in zip(calls, raw_results, strict=False):
+            if isinstance(raw, BaseException):
+                error_msg = (
+                    f"{type(raw).__name__}: {raw}\n"
                     "[Hint: Analyze the error above and try a different approach.]"
                 )
-            results.append(
-                ToolCallResult(
-                    tool_id=call.tool_id,
-                    success=result.success,
-                    output=result.output,
-                    error=error_with_hint,
+                results.append(
+                    ToolCallResult(
+                        tool_id=call.tool_id,
+                        success=False,
+                        output=None,
+                        error=error_msg,
+                    )
                 )
-            )
+            else:
+                error_with_hint = raw.error
+                if not raw.success and raw.error:
+                    error_with_hint = (
+                        f"{raw.error}\n"
+                        "[Hint: Analyze the error above and try a different approach.]"
+                    )
+                results.append(
+                    ToolCallResult(
+                        tool_id=call.tool_id,
+                        success=raw.success,
+                        output=raw.output,
+                        error=error_with_hint,
+                    )
+                )
         return results
 
     def unregister_tool(self, tool_id: str) -> bool:
@@ -198,30 +222,111 @@ class ToolGateway:
         calls: list,
         workspace_id: str | None = None,
     ) -> list[ToolCallResult]:
-        """Execute a list of ToolCall objects, return results."""
-        results: list[ToolCallResult] = []
-        for call in calls:
-            result = self.execute(
-                symbiote_id=symbiote_id,
-                session_id=session_id,
-                tool_id=call.tool_id,
-                params=call.params,
-                workspace_id=workspace_id,
-            )
+        """Execute a list of ToolCall objects in parallel via ThreadPoolExecutor.
+
+        Single calls run on the calling thread.  Multiple calls dispatch
+        their tool handlers to a thread pool (max 4 workers) while policy
+        checks and audit writes are serialised on the calling thread to
+        avoid SQLite thread-safety issues.
+        """
+        if not calls:
+            return []
+
+        def _to_call_result(call, result: ToolResult) -> ToolCallResult:  # noqa: ANN001
             error_with_hint = result.error
             if not result.success and result.error:
                 error_with_hint = (
                     f"{result.error}\n"
                     "[Hint: Analyze the error above and try a different approach.]"
                 )
-            results.append(
-                ToolCallResult(
-                    tool_id=call.tool_id,
-                    success=result.success,
-                    output=result.output,
-                    error=error_with_hint,
-                )
+            return ToolCallResult(
+                tool_id=call.tool_id,
+                success=result.success,
+                output=result.output,
+                error=error_with_hint,
             )
+
+        # Single call: run entirely on the calling thread
+        if len(calls) == 1:
+            result = self.execute(
+                symbiote_id=symbiote_id,
+                session_id=session_id,
+                tool_id=calls[0].tool_id,
+                params=calls[0].params,
+                workspace_id=workspace_id,
+            )
+            return [_to_call_result(calls[0], result)]
+
+        # Multiple calls: run tool handlers in parallel, policy on calling thread
+        #
+        # 1. Check policies (main thread — touches storage)
+        # 2. Run authorised handlers in the thread pool
+        # 3. Write audit logs (main thread — touches storage)
+        handler_fns: list[Callable | None] = []
+        pre_results: list[ToolResult | None] = []
+        for call in calls:
+            if call.tool_id not in self._registry:
+                pre_results.append(
+                    ToolResult(success=False, tool_id=call.tool_id, error="Tool not registered"),
+                )
+                handler_fns.append(None)
+                continue
+            policy = self._gate.check(symbiote_id, call.tool_id, workspace_id)
+            if not policy.allowed:
+                self._gate._write_audit(
+                    symbiote_id=symbiote_id, session_id=session_id,
+                    tool_id=call.tool_id, action="blocked",
+                    params=call.params, result="blocked",
+                )
+                pre_results.append(
+                    ToolResult(
+                        success=False, tool_id=call.tool_id,
+                        error=f"Tool '{call.tool_id}' blocked: {policy.reason}",
+                    ),
+                )
+                handler_fns.append(None)
+            else:
+                pre_results.append(None)  # placeholder — will run in pool
+                handler_fns.append(self._registry[call.tool_id])
+
+        # Dispatch authorised handlers to the pool
+        max_workers = min(sum(1 for h in handler_fns if h is not None), 4)
+        futures: dict[int, Any] = {}
+        if max_workers > 0:
+            pool = ThreadPoolExecutor(max_workers=max_workers)
+            for idx, (call, fn) in enumerate(zip(calls, handler_fns, strict=False)):
+                if fn is not None:
+                    futures[idx] = pool.submit(fn, call.params)
+            pool.shutdown(wait=True)
+
+        # Collect results and write audit logs (main thread)
+        results: list[ToolCallResult] = []
+        for idx, call in enumerate(calls):
+            if pre_results[idx] is not None:
+                results.append(_to_call_result(call, pre_results[idx]))
+                continue
+
+            fut = futures[idx]
+            try:
+                output = fut.result()
+                self._gate._write_audit(
+                    symbiote_id=symbiote_id, session_id=session_id,
+                    tool_id=call.tool_id, action="execute",
+                    params=call.params, result="success",
+                )
+                results.append(_to_call_result(call, ToolResult(
+                    success=True, tool_id=call.tool_id, output=output,
+                )))
+            except Exception as exc:
+                self._gate._write_audit(
+                    symbiote_id=symbiote_id, session_id=session_id,
+                    tool_id=call.tool_id, action="execute",
+                    params=call.params, result=f"error:{type(exc).__name__}",
+                )
+                results.append(_to_call_result(call, ToolResult(
+                    success=False, tool_id=call.tool_id,
+                    error=f"{type(exc).__name__}: {exc}",
+                )))
         return results
 
     def list_tools(self) -> list[str]:
