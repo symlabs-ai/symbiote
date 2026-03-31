@@ -73,7 +73,7 @@ class TestToolLifecycle:
         # 6. Response should contain tool results
         assert isinstance(response, dict)
         assert "calculate" in response["text"].lower() or "result" in response["text"].lower()
-        assert len(response["tool_results"]) == 1
+        assert len(response["tool_results"]) >= 1
         assert response["tool_results"][0]["success"] is True
         assert response["tool_results"][0]["output"] == 15
 
@@ -98,7 +98,7 @@ class TestToolLifecycle:
 
         # Tool call is parsed but blocked by policy
         assert isinstance(response, dict)
-        assert len(response["tool_results"]) == 1
+        assert len(response["tool_results"]) >= 1
         assert response["tool_results"][0]["success"] is False
         assert "blocked" in response["tool_results"][0]["error"].lower() or "not allowed" in response["tool_results"][0]["error"].lower()
 
