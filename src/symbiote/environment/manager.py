@@ -36,6 +36,12 @@ class EnvironmentManager:
         tool_call_timeout: float | None = None,
         loop_timeout: float | None = None,
         context_mode: str | None = None,
+        # Long-run mode fields
+        planner_prompt: str | None = None,
+        evaluator_prompt: str | None = None,
+        evaluator_criteria: list[dict] | None = None,
+        context_strategy: str | None = None,
+        max_blocks: int | None = None,
     ) -> EnvironmentConfig:
         """Create or update an environment config for a symbiote+workspace combo."""
         existing = self._fetch_exact(symbiote_id, workspace_id)
@@ -69,6 +75,11 @@ class EnvironmentManager:
                 tool_call_timeout=tool_call_timeout if tool_call_timeout is not None else existing.tool_call_timeout,
                 loop_timeout=loop_timeout if loop_timeout is not None else existing.loop_timeout,
                 context_mode=context_mode if context_mode is not None else existing.context_mode,
+                planner_prompt=planner_prompt if planner_prompt is not None else existing.planner_prompt,
+                evaluator_prompt=evaluator_prompt if evaluator_prompt is not None else existing.evaluator_prompt,
+                evaluator_criteria=evaluator_criteria if evaluator_criteria is not None else existing.evaluator_criteria,
+                context_strategy=context_strategy if context_strategy is not None else existing.context_strategy,
+                max_blocks=max_blocks if max_blocks is not None else existing.max_blocks,
             )
             self._storage.execute(
                 "UPDATE environment_configs SET "
@@ -76,7 +87,9 @@ class EnvironmentManager:
                 "policies_json = ?, resources_json = ?, tool_tags_json = ?, "
                 "tool_loading = ?, tool_loop = ?, prompt_caching = ?, "
                 "memory_share = ?, knowledge_share = ?, max_tool_iterations = ?, "
-                "tool_call_timeout = ?, loop_timeout = ?, tool_mode = ?, context_mode = ? "
+                "tool_call_timeout = ?, loop_timeout = ?, tool_mode = ?, context_mode = ?, "
+                "planner_prompt = ?, evaluator_prompt = ?, evaluator_criteria_json = ?, "
+                "context_strategy = ?, max_blocks = ? "
                 "WHERE id = ?",
                 (
                     json.dumps(cfg.tools),
@@ -95,6 +108,11 @@ class EnvironmentManager:
                     cfg.loop_timeout,
                     cfg.tool_mode,
                     cfg.context_mode,
+                    cfg.planner_prompt,
+                    cfg.evaluator_prompt,
+                    json.dumps(cfg.evaluator_criteria) if cfg.evaluator_criteria else None,
+                    cfg.context_strategy,
+                    cfg.max_blocks,
                     cfg.id,
                 ),
             )
@@ -120,14 +138,20 @@ class EnvironmentManager:
             tool_call_timeout=tool_call_timeout if tool_call_timeout is not None else 30.0,
             loop_timeout=loop_timeout if loop_timeout is not None else 300.0,
             context_mode=context_mode or "packed",
+            planner_prompt=planner_prompt,
+            evaluator_prompt=evaluator_prompt,
+            evaluator_criteria=evaluator_criteria,
+            context_strategy=context_strategy or "hybrid",
+            max_blocks=max_blocks if max_blocks is not None else 20,
         )
         self._storage.execute(
             "INSERT INTO environment_configs "
             "(id, symbiote_id, workspace_id, tools_json, services_json, "
             "humans_json, policies_json, resources_json, tool_tags_json, "
             "tool_loading, tool_loop, prompt_caching, memory_share, knowledge_share, "
-            "max_tool_iterations, tool_call_timeout, loop_timeout, tool_mode, context_mode) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "max_tool_iterations, tool_call_timeout, loop_timeout, tool_mode, context_mode, "
+            "planner_prompt, evaluator_prompt, evaluator_criteria_json, context_strategy, max_blocks) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 cfg.id,
                 cfg.symbiote_id,
@@ -148,6 +172,11 @@ class EnvironmentManager:
                 cfg.loop_timeout,
                 cfg.tool_mode,
                 cfg.context_mode,
+                cfg.planner_prompt,
+                cfg.evaluator_prompt,
+                json.dumps(cfg.evaluator_criteria) if cfg.evaluator_criteria else None,
+                cfg.context_strategy,
+                cfg.max_blocks,
             ),
         )
         return cfg
@@ -336,4 +365,9 @@ class EnvironmentManager:
             tool_call_timeout=float(row.get("tool_call_timeout", 30.0) or 30.0),
             loop_timeout=float(row.get("loop_timeout", 300.0) or 300.0),
             context_mode=row.get("context_mode") or "packed",
+            planner_prompt=row.get("planner_prompt"),
+            evaluator_prompt=row.get("evaluator_prompt"),
+            evaluator_criteria=json.loads(row["evaluator_criteria_json"]) if row.get("evaluator_criteria_json") else None,
+            context_strategy=row.get("context_strategy") or "hybrid",
+            max_blocks=int(row.get("max_blocks", 20) or 20),
         )

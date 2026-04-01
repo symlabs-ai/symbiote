@@ -200,6 +200,11 @@ class SQLiteAdapter:
             "ALTER TABLE environment_configs ADD COLUMN tool_mode TEXT DEFAULT 'brief'",
             "ALTER TABLE environment_configs ADD COLUMN context_mode TEXT DEFAULT 'packed'",
             "ALTER TABLE execution_traces ADD COLUMN tool_mode TEXT DEFAULT 'brief'",
+            "ALTER TABLE environment_configs ADD COLUMN planner_prompt TEXT DEFAULT NULL",
+            "ALTER TABLE environment_configs ADD COLUMN evaluator_prompt TEXT DEFAULT NULL",
+            "ALTER TABLE environment_configs ADD COLUMN evaluator_criteria_json TEXT DEFAULT NULL",
+            "ALTER TABLE environment_configs ADD COLUMN context_strategy TEXT DEFAULT 'hybrid'",
+            "ALTER TABLE environment_configs ADD COLUMN max_blocks INTEGER DEFAULT 20",
         ):
             try:
                 self._conn.execute(stmt)

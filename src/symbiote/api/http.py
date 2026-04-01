@@ -171,7 +171,50 @@ class ToolExecResponse(BaseModel):
 class ToolTagsRequest(BaseModel):
     tags: list[str]
     loading: str = "full"  # "full" | "index" | "semantic"
-    loop: bool = True  # enable tool execution loop
+    loop: bool = True  # deprecated — use tool_mode in ConfigRequest
+    tool_mode: str | None = None  # "instant" | "brief" | "long_run" | "continuous"
+
+
+class ConfigRequest(BaseModel):
+    """Full environment configuration for a symbiote."""
+
+    tool_mode: str | None = None  # "instant" | "brief" | "long_run" | "continuous"
+    tool_loading: str | None = None  # "full" | "index" | "semantic"
+    tool_tags: list[str] | None = None
+    max_tool_iterations: int | None = None
+    tool_call_timeout: float | None = None
+    loop_timeout: float | None = None
+    memory_share: float | None = None
+    knowledge_share: float | None = None
+    context_mode: str | None = None  # "packed" | "on_demand"
+    prompt_caching: bool | None = None
+    # Long-run mode
+    planner_prompt: str | None = None
+    evaluator_prompt: str | None = None
+    evaluator_criteria: list[dict] | None = None
+    context_strategy: str | None = None  # "compaction" | "reset" | "hybrid"
+    max_blocks: int | None = None
+
+
+class ConfigResponse(BaseModel):
+    """Current environment configuration."""
+
+    tool_mode: str = "brief"
+    tool_loading: str = "full"
+    tool_tags: list[str] = []
+    tool_loop: bool = True
+    max_tool_iterations: int = 10
+    tool_call_timeout: float = 30.0
+    loop_timeout: float = 300.0
+    memory_share: float = 0.40
+    knowledge_share: float = 0.25
+    context_mode: str = "packed"
+    prompt_caching: bool = False
+    planner_prompt: str | None = None
+    evaluator_prompt: str | None = None
+    evaluator_criteria: list[dict] | None = None
+    context_strategy: str = "hybrid"
+    max_blocks: int = 20
 
 
 class DiscoverRequest(BaseModel):
@@ -779,8 +822,12 @@ def set_tool_tags(
     if sym.owner_id and sym.owner_id != auth.tenant_id and not auth.is_admin:
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    env.configure(symbiote_id=symbiote_id, tool_tags=body.tags, tool_loading=body.loading, tool_loop=body.loop)
-    return {"tags": body.tags, "loading": body.loading, "loop": body.loop}
+    kwargs: dict[str, Any] = {"tool_tags": body.tags, "tool_loading": body.loading, "tool_loop": body.loop}
+    if body.tool_mode is not None:
+        kwargs["tool_mode"] = body.tool_mode
+    env.configure(symbiote_id=symbiote_id, **kwargs)
+    mode = env.get_tool_mode(symbiote_id)
+    return {"tags": body.tags, "loading": body.loading, "loop": body.loop, "tool_mode": mode}
 
 
 @app.get("/symbiotes/{symbiote_id}/tool-tags")
@@ -800,7 +847,104 @@ def get_tool_tags(
     tags = env.get_tool_tags(symbiote_id)
     loading = env.get_tool_loading(symbiote_id)
     loop = env.get_tool_loop(symbiote_id)
-    return {"tags": tags, "loading": loading, "loop": loop}
+    mode = env.get_tool_mode(symbiote_id)
+    return {"tags": tags, "loading": loading, "loop": loop, "tool_mode": mode}
+
+
+# ── Symbiote Config endpoints ────────────────────────────────────────────
+
+
+@app.put("/symbiotes/{symbiote_id}/config", response_model=ConfigResponse)
+def set_config(
+    symbiote_id: str,
+    body: ConfigRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    identity: Annotated[IdentityManager, Depends(get_identity_manager)],
+    env: Annotated[EnvironmentManager, Depends(get_env_manager)],
+) -> ConfigResponse:
+    """Set environment configuration for a symbiote.
+
+    All fields are optional — only provided fields are updated.
+    Supports tool_mode (instant/brief/long_run/continuous), timeouts,
+    memory/knowledge shares, context mode, and long-run config
+    (planner_prompt, evaluator_prompt, evaluator_criteria, etc.).
+    """
+    sym = identity.get(symbiote_id)
+    if sym is None:
+        raise HTTPException(status_code=404, detail="Symbiote not found")
+    if sym.owner_id and sym.owner_id != auth.tenant_id and not auth.is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    # Build kwargs from non-None fields
+    kwargs: dict[str, Any] = {}
+    for field_name in (
+        "tool_mode", "tool_loading", "tool_tags", "max_tool_iterations",
+        "tool_call_timeout", "loop_timeout", "memory_share", "knowledge_share",
+        "context_mode", "prompt_caching",
+    ):
+        val = getattr(body, field_name, None)
+        if val is not None:
+            kwargs[field_name] = val
+
+    if kwargs:
+        env.configure(symbiote_id=symbiote_id, **kwargs)
+
+    # Long-run fields are stored directly on the config model
+    # (they pass through configure via the model fields)
+    lr_fields = {}
+    for field_name in ("planner_prompt", "evaluator_prompt", "evaluator_criteria",
+                       "context_strategy", "max_blocks"):
+        val = getattr(body, field_name, None)
+        if val is not None:
+            lr_fields[field_name] = val
+    if lr_fields:
+        env.configure(symbiote_id=symbiote_id, **lr_fields)
+
+    return _build_config_response(env, symbiote_id)
+
+
+@app.get("/symbiotes/{symbiote_id}/config", response_model=ConfigResponse)
+def get_config(
+    symbiote_id: str,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    identity: Annotated[IdentityManager, Depends(get_identity_manager)],
+    env: Annotated[EnvironmentManager, Depends(get_env_manager)],
+) -> ConfigResponse:
+    """Get full environment configuration for a symbiote."""
+    sym = identity.get(symbiote_id)
+    if sym is None:
+        raise HTTPException(status_code=404, detail="Symbiote not found")
+    if sym.owner_id and sym.owner_id != auth.tenant_id and not auth.is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    return _build_config_response(env, symbiote_id)
+
+
+def _build_config_response(env: EnvironmentManager, symbiote_id: str) -> ConfigResponse:
+    """Build a ConfigResponse from the current EnvironmentConfig."""
+    cfg = env.get_config(symbiote_id)
+    if cfg is None:
+        return ConfigResponse()
+
+    lr_cfg = env.get_long_run_config(symbiote_id)
+    return ConfigResponse(
+        tool_mode=cfg.tool_mode,
+        tool_loading=cfg.tool_loading,
+        tool_tags=cfg.tool_tags,
+        tool_loop=cfg.tool_loop,
+        max_tool_iterations=cfg.max_tool_iterations,
+        tool_call_timeout=cfg.tool_call_timeout,
+        loop_timeout=cfg.loop_timeout,
+        memory_share=cfg.memory_share,
+        knowledge_share=cfg.knowledge_share,
+        context_mode=cfg.context_mode,
+        prompt_caching=cfg.prompt_caching,
+        planner_prompt=lr_cfg.get("planner_prompt"),
+        evaluator_prompt=lr_cfg.get("evaluator_prompt"),
+        evaluator_criteria=lr_cfg.get("evaluator_criteria"),
+        context_strategy=lr_cfg.get("context_strategy", "hybrid"),
+        max_blocks=lr_cfg.get("max_blocks", 20),
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════
