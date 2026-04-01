@@ -88,6 +88,7 @@ class ChatRunner:
         *,
         native_tools: bool = False,
         context_budget: int = _DEFAULT_CONTEXT_BUDGET,
+        on_before_tool_call: Callable[[str, dict, str], bool] | None = None,
     ) -> None:
         self._llm = llm
         self._working_memory = working_memory
@@ -95,6 +96,7 @@ class ChatRunner:
         self._consolidator = consolidator
         self._native_tools = native_tools
         self._context_budget = context_budget
+        self._on_before_tool_call = on_before_tool_call
 
     def can_handle(self, intent: str) -> bool:
         return intent in _HANDLED_INTENTS
@@ -162,13 +164,20 @@ class ChatRunner:
             if not tool_calls or self._tool_gateway is None:
                 break
 
-            results = self._tool_gateway.execute_tool_calls(
-                symbiote_id=context.symbiote_id,
-                session_id=context.session_id,
-                calls=tool_calls,
-                timeout=context.tool_call_timeout,
-            )
-            all_tool_results.extend(results)
+            # Approval gate: check high-risk tools before execution
+            approved_calls, denial_results = self._check_approval(tool_calls)
+            all_tool_results.extend(denial_results)
+
+            results: list[ToolCallResult] = list(denial_results)
+            if approved_calls:
+                exec_results = self._tool_gateway.execute_tool_calls(
+                    symbiote_id=context.symbiote_id,
+                    session_id=context.session_id,
+                    calls=approved_calls,
+                    timeout=context.tool_call_timeout,
+                )
+                results.extend(exec_results)
+                all_tool_results.extend(exec_results)
 
             # Record each tool call in the loop controller
             for tc, tr in zip(tool_calls, results, strict=False):
@@ -274,15 +283,22 @@ class ChatRunner:
             if not tool_calls or self._tool_gateway is None:
                 break
 
+            # Approval gate: check high-risk tools before execution
+            approved_calls, denial_results = self._check_approval(tool_calls)
+            all_tool_results.extend(denial_results)
+
             step_start = time.monotonic()
-            results = await self._tool_gateway.execute_tool_calls_async(
-                symbiote_id=context.symbiote_id,
-                session_id=context.session_id,
-                calls=tool_calls,
-                timeout=context.tool_call_timeout,
-            )
+            results: list[ToolCallResult] = list(denial_results)
+            if approved_calls:
+                exec_results = await self._tool_gateway.execute_tool_calls_async(
+                    symbiote_id=context.symbiote_id,
+                    session_id=context.session_id,
+                    calls=approved_calls,
+                    timeout=context.tool_call_timeout,
+                )
+                results.extend(exec_results)
+                all_tool_results.extend(exec_results)
             step_elapsed = int((time.monotonic() - step_start) * 1000)
-            all_tool_results.extend(results)
 
             # Record trace for each tool call
             for tc, tr in zip(tool_calls, results, strict=False):
@@ -361,6 +377,36 @@ class ChatRunner:
             success=True, output=output, runner_type=self.runner_type,
             loop_trace=trace if trace.steps else None,
         )
+
+    def _check_approval(
+        self,
+        calls: list[ToolCall],
+    ) -> tuple[list[ToolCall], list[ToolCallResult]]:
+        """Check approval for tool calls based on risk_level.
+
+        Returns a tuple of (approved_calls, denial_results).
+        High-risk tools require approval via the on_before_tool_call callback.
+        If the callback is None, all tools are auto-approved (backward compat).
+        """
+        if self._on_before_tool_call is None or self._tool_gateway is None:
+            return calls, []
+
+        approved: list[ToolCall] = []
+        denied: list[ToolCallResult] = []
+
+        for call in calls:
+            risk = self._tool_gateway.get_risk_level(call.tool_id)
+            if risk == "high" and not self._on_before_tool_call(call.tool_id, call.params, risk):
+                denied.append(ToolCallResult(
+                    tool_id=call.tool_id,
+                    success=False,
+                    error="Tool call denied by approval callback",
+                    risk_level=risk,
+                ))
+                continue
+            approved.append(call)
+
+        return approved, denied
 
     # ── internal ─────────────────────────────────────────────────────────
 

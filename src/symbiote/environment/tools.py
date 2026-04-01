@@ -426,6 +426,13 @@ class ToolGateway:
 
         self.register_descriptor(descriptor, _get_tool_schema)
 
+    def get_risk_level(self, tool_id: str) -> str:
+        """Return the risk_level for a tool, defaulting to 'low'."""
+        desc = self._descriptors.get(tool_id)
+        if desc is not None:
+            return desc.risk_level
+        return "low"
+
     def get_http_config(self, tool_id: str) -> HttpToolConfig | None:
         """Return the HTTP config for a tool, or None."""
         return self._http_configs.get(tool_id)
