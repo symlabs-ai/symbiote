@@ -3,6 +3,57 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [v0.3.0] - 2026-04-01
+
+### Novas funcionalidades
+
+- **Self-Evolving Harness**: Complete Meta-Harness system inspired by Stanford/CMU paper. SessionScore auto-computes quality from LoopTrace (stop_reason + iterations + failure rate). FeedbackPort lets hosts report user satisfaction. ParameterTuner auto-calibrates harness parameters with tiered activation (Tier 0-3). HarnessEvolver uses a proposer LLM to evolve prompt texts with guard rails and auto-rollback. Three evolvable components: tool_instructions, injection_stagnation, injection_circuit_breaker.
+- **Harness Versioning**: harness_versions table tracks text variants per symbiote with score tracking, rollback chain, and version history. ChatRunner resolves active versions via ContextAssembler.
+- **Agent Loop Resilience**: Parallel tool execution (asyncio.gather + ThreadPoolExecutor), LLM retry with exponential backoff (3 retries, 1s/2s/4s), diminishing returns detection (stagnation + circuit breaker via LoopController), 3-layer compaction (microcompact + loop compact + autocompact).
+- **Timeout System**: Per-tool timeout (default 30s) and loop timeout (default 300s), both configurable per symbiote via EnvironmentConfig.
+- **Human-in-the-Loop**: risk_level (low/medium/high) on ToolDescriptor, on_before_tool_call approval callback on ChatRunner. High-risk tools require explicit approval when callback is set.
+- **Tool Mode**: tool_mode (instant/brief/continuous) replaces binary tool_loop. Instant = single-shot, brief = configurable loop (default), continuous = placeholder for future autonomous agents.
+- **Streaming Mid-Loop**: on_progress(event, iteration, total) and on_stream(text, iteration) callbacks for real-time loop visibility. on_token behavior unchanged (final response only).
+- **Working Memory Summary**: Loop execution summary prepended to WorkingMemory after tool calls, enabling multi-turn awareness of previous tool steps.
+- **Memory On-Demand**: context_mode (packed/on_demand) per symbiote. search_memories and search_knowledge as builtin tools. On-demand mode skips pre-packed context injection.
+- **Index Mode Cache**: Loop-local schema cache avoids redundant get_tool_schema calls in index mode, reducing iterations by ~50%.
+- **Benchmark Suite**: BenchmarkRunner with task grading (tool_called, param_match, custom). Automated evaluation of symbiote performance.
+- **Structural Evolution**: StructuralEvolver with pluggable strategy registry for code-level harness changes.
+- **Cross-Symbiote Learning**: CrossSymbioteLearner detects tool overlap between symbiotes and transfers harness versions.
+- **Multi-Model Test Matrix**: E2E test infrastructure with 3 scenarios across multiple models, collecting iteration/success/elapsed metrics.
+- **MemoryEntry de Falha**: Deterministic procedural memory generated when tool loop fails (circuit_breaker, stagnation, max_iterations). Zero LLM cost.
+- **Configurable Context Splits**: memory_share and knowledge_share per symbiote via EnvironmentConfig (defaults 0.40/0.25).
+- **LoopTrace Persistence**: execution_traces table stores full trace (steps, stop_reason, timing) for observability and harness evolution.
+
+### Melhorias
+
+- **ContextAssembler**: Resolves evolvable text overrides from harness_versions, configurable memory/knowledge splits, context_mode support, timeout/tool_mode propagation
+- **ChatRunner**: Accepts on_progress, on_stream, on_before_tool_call callbacks; uses _resolve_max_iters for tool_mode; integrates schema cache, approval gate, and timeout
+- **LoopController**: Accepts custom stagnation and circuit_breaker messages for prompt evolution
+- **EnvironmentConfig**: 16 configurable fields including tool_mode, context_mode, timeouts, splits, max_tool_iterations
+- **ToolGateway**: register_memory_tools(), get_risk_level(), timeout support in execute/execute_async
+
+### Correções
+
+- run_async() now uses _call_llm_with_retry (was bypassing retry logic)
+- E2E tool_results assertions relaxed for loop-aware behavior
+
+### Documentação
+
+- Complete QUICKSTART.md rewrite for v0.3.0
+- New docs/HARNESS_EVOLUTION.md developer guide
+- New docs/HOST_INTEGRATION.md for host developers
+- Updated docs/README.md with architecture, API reference, config reference
+- Updated SPEC.md with Execution Layer + Harness Layer in architecture diagram
+
+### Outros
+
+- 1184 tests (up from ~900), including 130+ new tests for harness features
+- Multi-model E2E test infrastructure (skipable via SYMBIOTE_E2E_LLM=1)
+- harness/ package: versions.py, tuner.py, evolver.py, benchmark.py, structural.py, cross_learning.py
+
+---
+
 ## [v0.2.27] - 2026-04-01
 
 ### Added — Final Horizon Sprint
