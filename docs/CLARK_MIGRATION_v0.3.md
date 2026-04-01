@@ -1,15 +1,29 @@
-# Guia de Migração Clark → Symbiote v0.3.0
+# Guia de Migração Clark → Symbiote v0.3.x
 
 > Para: equipe YouNews (Clark integration)
 > De: Symbiote kernel team
 > Data: 2026-04-01
-> Versão: v0.3.0 "Self-Evolving Harness"
+> Atualizado: 2026-04-01 (v0.3.3 — 4 modos de execução)
+> Versão: v0.3.3 "Execution Modes"
 
 ---
 
 ## Contexto
 
-O Symbiote v0.3.0 traz 24 features novas focadas em resiliência do loop agêntico e auto-evolução do harness. **Nenhuma é breaking change** — o Clark atualiza e continua funcionando identicamente. Todas as features novas são opt-in.
+O Symbiote v0.3.x traz 24+ features focadas em resiliência, auto-evolução e **4 modos de execução** para diferentes complexidades de tarefa. **Nenhuma é breaking change** — o Clark atualiza e continua funcionando identicamente. Todas as features novas são opt-in.
+
+### Novidade v0.3.1-v0.3.3: Modos de Execução
+
+O Symbiote agora tem 4 modos que o Clark pode usar conforme a tarefa:
+
+| Modo | Para que serve | Exemplo no Clark |
+|------|---------------|-----------------|
+| **instant** | Perguntas simples, 0-1 tool call | "Quantas matérias publicamos hoje?" |
+| **brief** | Tarefas compostas, 3-10 steps | "Publique a matéria + envie newsletter + poste nas redes" |
+| **long_run** | Projetos grandes, plano + execução + avaliação | "Crie uma edição especial: pesquise 5 temas, redija, revise, publique" |
+| **continuous** | Agente always-on (futuro) | Clark monitorando, sugerindo pautas, publicando proativamente |
+
+O Clark já funciona em **brief** (default). A novidade é que tarefas simples podem usar **instant** (mais rápido, mais barato) e tarefas complexas podem usar **long_run** (com plano estruturado e avaliação de qualidade).
 
 Este guia apresenta a migração em 5 níveis, do mais simples (zero código) ao mais avançado (harness auto-evolutivo). Cada nível é independente — você pode parar em qualquer um e colher os benefícios daquele nível.
 
@@ -173,26 +187,133 @@ runner = ChatRunner(
 
 **Risco**: Adiciona latência (espera a confirmação do usuário). Para workflows automatizados (publicação em batch), não usar. Para uso interativo, é safety net essencial.
 
-### 2.3 — Tool mode por contexto
+### 2.3 — Execution mode por contexto
 
-Nem toda mensagem precisa de tool loop. Perguntas simples ("o que é SEO?") não precisam buscar nada.
+O Clark pode usar diferentes modos conforme a complexidade da tarefa.
 
 ```python
-# Para symbiotes que fazem tanto chat quanto ações:
-# Default "brief" para tudo, mas o host pode override por sessão
+# Default: brief para tarefas compostas (publicar + newsletter)
 kernel.environment.configure(
     symbiote_id=clark_id,
-    tool_mode="brief",  # default — loop habilitado
+    tool_mode="brief",
 )
 
-# Para um symbiote que é só Q&A (sem tools):
+# Para um symbiote de FAQ que só responde perguntas:
 kernel.environment.configure(
     symbiote_id=faq_bot_id,
-    tool_mode="instant",  # sem loop — resposta direta
+    tool_mode="instant",  # fast-path: 1 LLM call, mais rápido e barato
+)
+
+# Para edições especiais (pesquisa + redação + revisão + publicação):
+kernel.environment.configure(
+    symbiote_id=clark_editorial_id,
+    tool_mode="long_run",
+    planner_prompt=(
+        "Você é um editor-chefe. Decomponha a pauta em blocos de trabalho: "
+        "pesquisa, redação, revisão, publicação. "
+        "Retorne um JSON array com name, description, success_criteria."
+    ),
+    evaluator_prompt=(
+        "Você é um revisor editorial exigente. Avalie: "
+        "precisão factual, qualidade da escrita, SEO, e completude."
+    ),
+    evaluator_criteria=[
+        {"name": "precisao", "weight": 1.0, "threshold": 0.8,
+         "description": "Fatos verificáveis e fontes citadas"},
+        {"name": "qualidade", "weight": 0.8, "threshold": 0.7,
+         "description": "Escrita clara, sem erros, tom adequado"},
+        {"name": "completude", "weight": 0.6, "threshold": 0.6,
+         "description": "Todos os aspectos da pauta cobertos"},
+    ],
+    context_strategy="hybrid",
+    max_blocks=8,
 )
 ```
 
-**Benefício**: Sessões que não precisam de tools são mais rápidas (1 LLM call em vez de 2+). Custo menor.
+**Benefício**: Tarefas simples (instant) são rápidas e baratas. Tarefas compostas (brief) funcionam como antes. Projetos editoriais (long_run) ganham planejamento estruturado e revisão automática de qualidade — o Clark decompõe a pauta, executa bloco a bloco, e um "revisor" avalia cada bloco antes de prosseguir.
+
+**Sobre o long_run**: O planner e o evaluator são **opcionais**. Se não configurar `planner_prompt`, o Clark pula o planejamento. Se não configurar `evaluator_prompt`, pula a avaliação. Comece simples e adicione conforme necessidade.
+
+---
+
+### 2.4 — Roteamento inteligente de modos
+
+O Symbiote nao decide qual modo usar — o host decide. Hoje o Clark trata toda mensagem da mesma forma (brief). Isso significa que "quantas materias temos?" gasta o mesmo setup de loop que "publique, envie newsletter e poste nas redes". O roteamento de modos resolve isso.
+
+**Abordagem 1: Regras simples (recomendado para comecar)**
+
+```python
+# No handler de mensagens do Clark, ANTES de chamar kernel.message()
+def choose_mode(user_input: str, has_tools: bool) -> str:
+    """Decide o modo de execução baseado na mensagem."""
+    # Sem tools = sempre instant (Q&A puro)
+    if not has_tools:
+        return "instant"
+
+    # Heurísticas de complexidade
+    input_lower = user_input.lower()
+
+    # Palavras que indicam projeto complexo (long_run)
+    long_run_signals = ["crie uma edição", "pesquise e redija", "monte um especial",
+                        "faça uma cobertura completa", "produza um relatório"]
+    if any(signal in input_lower for signal in long_run_signals):
+        return "long_run"
+
+    # Palavras que indicam multi-step (brief)
+    brief_signals = ["publique", "envie", "agende", "mova", "atualize",
+                     "crie", "delete", "e também", "depois"]
+    if any(signal in input_lower for signal in brief_signals):
+        return "brief"
+
+    # Default: perguntas e consultas = instant
+    return "instant"
+
+# Uso:
+mode = choose_mode(user_input, has_tools=True)
+kernel.environment.configure(symbiote_id=clark_id, tool_mode=mode)
+response = kernel.message(session_id, user_input)
+```
+
+**Abordagem 2: LLM classifica (mais preciso, custo extra)**
+
+```python
+# Usar um modelo barato para classificar a complexidade
+CLASSIFIER_PROMPT = """Classifique a mensagem do usuário em um dos modos:
+- instant: pergunta simples, consulta, informação (0-1 ações)
+- brief: tarefa composta, 2-5 ações sequenciais
+- long_run: projeto complexo que precisa de planejamento
+
+Responda APENAS com: instant, brief, ou long_run
+
+Mensagem: {user_input}"""
+
+def classify_mode(user_input: str) -> str:
+    response = cheap_llm.complete([
+        {"role": "user", "content": CLASSIFIER_PROMPT.format(user_input=user_input)}
+    ])
+    mode = response.strip().lower()
+    if mode in ("instant", "brief", "long_run"):
+        return mode
+    return "brief"  # fallback seguro
+```
+
+**Abordagem 3: Baseada no histórico (mais sofisticada)**
+
+```python
+# Usar o SessionRecallPort para ver como mensagens similares foram tratadas
+# Se mensagens parecidas tiveram score alto em instant, usar instant
+# Se tiveram score baixo (precisavam de mais steps), usar brief
+```
+
+**Impacto esperado no Clark:**
+
+| Sem roteamento (hoje) | Com roteamento |
+|---|---|
+| "Quantas matérias?" → brief (2+ LLM calls, setup de loop) | → instant (1 LLM call, fast-path) |
+| "Publique a matéria" → brief (ok, é o modo certo) | → brief (sem mudança) |
+| "Monte edição especial de fim de ano" → brief (tenta fazer tudo de uma vez, pode falhar) | → long_run (planeja, executa em blocos, avalia) |
+
+**Recomendação**: Começar com Abordagem 1 (regras). É simples, zero custo extra, e já captura 80% dos casos. Evoluir para Abordagem 2 se as regras não forem suficientes.
 
 ---
 
@@ -403,7 +524,7 @@ if candidates:
 |-------|---------|-------|---------------------|
 | **0** | Zero | 5 min | Resiliência (retry, circuit breaker, stagnation, compaction) |
 | **1** | ~10 linhas | 30 min | Configuração otimizada + feedback começando a acumular |
-| **2** | ~30 linhas | 2h | UX (streaming) + segurança (approval) + custo (tool mode) |
+| **2** | ~30 linhas | 2h | UX (streaming) + segurança (approval) + execution modes (instant/brief/long_run) |
 | **3** | ~20 linhas + cron | 1h | Auto-calibração de parâmetros baseada em dados reais |
 | **4** | ~40 linhas + cron + Haiku | 2h | Instruções de tools evoluem sozinhas. Benchmark para medir |
 | **5** | ~15 linhas | 30 min | Transferência de aprendizados entre symbiotes |
