@@ -14,8 +14,24 @@ class LoopController:
     3. Circuit breaker: same tool_id failed 3+ times consecutively
     """
 
-    def __init__(self, max_iterations: int = 10) -> None:
+    _DEFAULT_STAGNATION_MSG = (
+        "You are repeating the same action. "
+        "The task may already be complete. Respond to the user."
+    )
+    _DEFAULT_CIRCUIT_BREAKER_MSG = (
+        "Tool '{tool_id}' is unavailable (failed {count} times). "
+        "Do not retry it. Respond to the user with what you have."
+    )
+
+    def __init__(
+        self,
+        max_iterations: int = 10,
+        stagnation_msg: str | None = None,
+        circuit_breaker_msg: str | None = None,
+    ) -> None:
         self._max_iterations = max_iterations
+        self._stagnation_msg = stagnation_msg or self._DEFAULT_STAGNATION_MSG
+        self._circuit_breaker_msg = circuit_breaker_msg or self._DEFAULT_CIRCUIT_BREAKER_MSG
         self._history: list[tuple[str, str, bool]] = []  # (tool_id, params_key, success)
         self._failure_counts: dict[str, int] = {}  # tool_id -> consecutive failures
         self._iteration = 0
@@ -67,18 +83,14 @@ class LoopController:
             return None
 
         if reason == "stagnation":
-            return (
-                "You are repeating the same action. "
-                "The task may already be complete. Respond to the user."
-            )
+            return self._stagnation_msg
 
         if reason == "circuit_breaker":
             # Find the tool that triggered the breaker
             for tool_id, count in self._failure_counts.items():
                 if count >= 3:
-                    return (
-                        f"Tool '{tool_id}' is unavailable (failed {count} times). "
-                        "Do not retry it. Respond to the user with what you have."
+                    return self._circuit_breaker_msg.format(
+                        tool_id=tool_id, count=count,
                     )
 
         # max_iterations — no special injection needed

@@ -24,6 +24,7 @@ from symbiote.discovery.repository import DiscoveredToolRepository
 from symbiote.environment.manager import EnvironmentManager
 from symbiote.environment.policies import PolicyGate
 from symbiote.environment.tools import ToolGateway
+from symbiote.harness.versions import HarnessVersionRepository
 from symbiote.knowledge.service import KnowledgeService
 from symbiote.memory.store import MemoryStore
 from symbiote.process.engine import ProcessEngine
@@ -57,6 +58,9 @@ class SymbioteKernel:
         self._policy_gate = PolicyGate(self._environment, self._storage)
         self._tool_gateway = ToolGateway(self._policy_gate)
 
+        # Harness versioning
+        self._harness_versions = HarnessVersionRepository(self._storage)
+
         # Context assembler (with tool gateway + environment for auto tag filtering)
         self._context_assembler = ContextAssembler(
             identity=self._identity,
@@ -65,6 +69,7 @@ class SymbioteKernel:
             context_budget=config.context_budget,
             tool_gateway=self._tool_gateway,
             environment=self._environment,
+            harness_versions=self._harness_versions,
         )
 
         # Runners
@@ -101,6 +106,9 @@ class SymbioteKernel:
         self._last_trace: LoopTrace | None = None
         self._last_trace_session: str | None = None
 
+        # Optional evolver LLM (host provides, can be different from main LLM)
+        self._evolver_llm: LLMPort | None = None
+
         # Capability surface
         self._capabilities = CapabilitySurface(
             identity=self._identity,
@@ -133,6 +141,19 @@ class SymbioteKernel:
     def set_session_recall(self, recall: SessionRecallPort) -> None:
         """Inject a host-provided session recall implementation."""
         self._session_recall = recall
+
+    @property
+    def harness_versions(self) -> HarnessVersionRepository:
+        return self._harness_versions
+
+    def set_evolver_llm(self, llm: LLMPort) -> None:
+        """Inject an LLM for harness evolution (can differ from main LLM).
+
+        If not set, the evolver uses the kernel's main LLM as fallback.
+        Using a different model avoids blind spots (the proposer has different
+        strengths/weaknesses than the model being optimized for).
+        """
+        self._evolver_llm = llm
 
     @property
     def environment(self) -> EnvironmentManager:
@@ -435,6 +456,41 @@ class SymbioteKernel:
         """
         self._context_assembler._semantic_llm = llm
 
+    # ── Harness evolution ───────────────────────────────────────────
+
+    def evolve_harness(
+        self, symbiote_id: str, component: str, default_text: str, *, days: int = 7
+    ):
+        """Run one evolution cycle for a harness component.
+
+        Uses the evolver LLM (or main LLM as fallback) to propose an
+        improved version of the specified text component.
+
+        Returns an EvolutionResult from HarnessEvolver.
+        """
+        from symbiote.harness.evolver import HarnessEvolver
+
+        llm = self._evolver_llm or self._llm
+        evolver = HarnessEvolver(
+            storage=self._storage,
+            versions=self._harness_versions,
+            proposer_llm=llm,
+        )
+        return evolver.evolve(symbiote_id, component, default_text, days=days)
+
+    def check_harness_rollback(self, symbiote_id: str, component: str) -> bool:
+        """Check and auto-rollback a harness version if it underperforms.
+
+        Returns True if rollback was performed.
+        """
+        from symbiote.harness.evolver import HarnessEvolver
+
+        evolver = HarnessEvolver(
+            storage=self._storage,
+            versions=self._harness_versions,
+        )
+        return evolver.auto_rollback_if_needed(symbiote_id, component)
+
     # ── Harness foundations (trace, score, failure memory) ───────────
 
     def _persist_trace(
@@ -489,6 +545,11 @@ class SymbioteKernel:
                 datetime.now(tz=UTC).isoformat(),
             ),
         )
+
+        # Track score per active harness version (for evolution rollback)
+        from symbiote.harness.evolver import EVOLVABLE_COMPONENTS
+        for component in EVOLVABLE_COMPONENTS:
+            self._harness_versions.update_score(symbiote_id, component, final)
 
     def _generate_failure_memory(
         self, session_id: str, symbiote_id: str, trace: LoopTrace | None

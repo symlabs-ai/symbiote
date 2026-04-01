@@ -114,7 +114,11 @@ class ChatRunner:
         kwargs = self._build_llm_kwargs(context)
         max_iters = context.max_tool_iterations if context.tool_loop else 1
         initial_msg_count = len(messages)
-        controller = LoopController(max_iterations=max_iters)
+        controller = LoopController(
+            max_iterations=max_iters,
+            stagnation_msg=context.injection_stagnation_override,
+            circuit_breaker_msg=context.injection_circuit_breaker_override,
+        )
 
         all_tool_results: list[ToolCallResult] = []
         final_text = ""
@@ -217,7 +221,11 @@ class ChatRunner:
         kwargs = self._build_llm_kwargs(context)
         max_iters = context.max_tool_iterations if context.tool_loop else 1
         initial_msg_count = len(messages)
-        controller = LoopController(max_iterations=max_iters)
+        controller = LoopController(
+            max_iterations=max_iters,
+            stagnation_msg=context.injection_stagnation_override,
+            circuit_breaker_msg=context.injection_circuit_breaker_override,
+        )
 
         all_tool_results: list[ToolCallResult] = []
         trace = LoopTrace()
@@ -689,9 +697,10 @@ class ChatRunner:
 
         # Available tools (text-based instructions only when NOT using native tools)
         if context.available_tools and not self._native_tools:
+            effective_tool_instructions = context.tool_instructions_override or _TOOL_INSTRUCTIONS
             if context.tool_loading == "index":
                 parts.append("## Available Tools (Index)")
-                parts.append(_TOOL_INSTRUCTIONS)
+                parts.append(effective_tool_instructions)
                 parts.append(_INDEX_INSTRUCTIONS)
                 for tool in context.available_tools:
                     tool_id = tool.get("tool_id", "")
@@ -708,7 +717,7 @@ class ChatRunner:
                         parts.append(f"- **{tool_id}** — {name}: {desc}")
             else:
                 parts.append("## Available Tools")
-                parts.append(_TOOL_INSTRUCTIONS)
+                parts.append(effective_tool_instructions)
                 for tool in context.available_tools:
                     tool_id = tool.get("tool_id", "")
                     name = tool.get("name", "")

@@ -31,6 +31,10 @@ class AssembledContext(BaseModel):
     tool_loading: str = "full"
     tool_loop: bool = True
     max_tool_iterations: int = 10
+    # Evolvable text overrides (resolved by ContextAssembler from harness_versions)
+    tool_instructions_override: str | None = None
+    injection_stagnation_override: str | None = None
+    injection_circuit_breaker_override: str | None = None
     extra_context: dict | None = None
     generation_settings: dict | None = None  # from GenerationSettings.to_config_dict()
     user_input: str
@@ -66,6 +70,7 @@ class ContextAssembler:
         tool_gateway: ToolGateway | None = None,
         environment: EnvironmentManager | None = None,
         semantic_llm: LLMPort | None = None,
+        harness_versions: object | None = None,
     ) -> None:
         self._identity = identity
         self._memory = memory
@@ -74,6 +79,7 @@ class ContextAssembler:
         self._tool_gateway = tool_gateway
         self._environment = environment
         self._semantic_llm = semantic_llm
+        self._harness_versions = harness_versions
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -170,6 +176,17 @@ class ContextAssembler:
         if prompt_caching:
             gen_settings = {"prompt_caching": True}
 
+        # 8. Resolve evolvable text overrides from harness_versions
+        tool_instr_override = None
+        stag_override = None
+        cb_override = None
+        if self._harness_versions is not None:
+            get_active = getattr(self._harness_versions, "get_active", None)
+            if get_active is not None:
+                tool_instr_override = get_active(symbiote_id, "tool_instructions")
+                stag_override = get_active(symbiote_id, "injection_stagnation")
+                cb_override = get_active(symbiote_id, "injection_circuit_breaker")
+
         return AssembledContext(
             symbiote_id=symbiote_id,
             session_id=session_id,
@@ -181,6 +198,9 @@ class ContextAssembler:
             tool_loading=loading_mode,
             tool_loop=loop_enabled,
             max_tool_iterations=max_tool_iterations,
+            tool_instructions_override=tool_instr_override,
+            injection_stagnation_override=stag_override,
+            injection_circuit_breaker_override=cb_override,
             extra_context=extra_context,
             user_input=user_input,
             total_tokens_estimate=total,
