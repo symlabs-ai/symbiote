@@ -31,6 +31,7 @@ class EnvironmentManager:
         prompt_caching: bool | None = None,
         memory_share: float | None = None,
         knowledge_share: float | None = None,
+        max_tool_iterations: int | None = None,
     ) -> EnvironmentConfig:
         """Create or update an environment config for a symbiote+workspace combo."""
         existing = self._fetch_exact(symbiote_id, workspace_id)
@@ -52,13 +53,14 @@ class EnvironmentManager:
                 prompt_caching=prompt_caching if prompt_caching is not None else existing.prompt_caching,
                 memory_share=memory_share if memory_share is not None else existing.memory_share,
                 knowledge_share=knowledge_share if knowledge_share is not None else existing.knowledge_share,
+                max_tool_iterations=max_tool_iterations if max_tool_iterations is not None else existing.max_tool_iterations,
             )
             self._storage.execute(
                 "UPDATE environment_configs SET "
                 "tools_json = ?, services_json = ?, humans_json = ?, "
                 "policies_json = ?, resources_json = ?, tool_tags_json = ?, "
                 "tool_loading = ?, tool_loop = ?, prompt_caching = ?, "
-                "memory_share = ?, knowledge_share = ? "
+                "memory_share = ?, knowledge_share = ?, max_tool_iterations = ? "
                 "WHERE id = ?",
                 (
                     json.dumps(cfg.tools),
@@ -72,6 +74,7 @@ class EnvironmentManager:
                     int(cfg.prompt_caching),
                     cfg.memory_share,
                     cfg.knowledge_share,
+                    cfg.max_tool_iterations,
                     cfg.id,
                 ),
             )
@@ -92,13 +95,14 @@ class EnvironmentManager:
             prompt_caching=prompt_caching if prompt_caching is not None else False,
             memory_share=memory_share if memory_share is not None else 0.40,
             knowledge_share=knowledge_share if knowledge_share is not None else 0.25,
+            max_tool_iterations=max_tool_iterations if max_tool_iterations is not None else 10,
         )
         self._storage.execute(
             "INSERT INTO environment_configs "
             "(id, symbiote_id, workspace_id, tools_json, services_json, "
             "humans_json, policies_json, resources_json, tool_tags_json, "
-            "tool_loading, tool_loop, prompt_caching, memory_share, knowledge_share) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "tool_loading, tool_loop, prompt_caching, memory_share, knowledge_share, max_tool_iterations) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 cfg.id,
                 cfg.symbiote_id,
@@ -114,6 +118,7 @@ class EnvironmentManager:
                 int(cfg.prompt_caching),
                 cfg.memory_share,
                 cfg.knowledge_share,
+                cfg.max_tool_iterations,
             ),
         )
         return cfg
@@ -198,6 +203,15 @@ class EnvironmentManager:
             return 0.25
         return cfg.knowledge_share
 
+    def get_max_tool_iterations(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> int:
+        """Return max_tool_iterations from config, or 10 if no config."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return 10
+        return cfg.max_tool_iterations
+
     # ── private helpers ────────────────────────────────────────────────
 
     def _fetch_exact(
@@ -237,4 +251,5 @@ class EnvironmentManager:
             prompt_caching=bool(row.get("prompt_caching", 0)),
             memory_share=float(row.get("memory_share", 0.40) or 0.40),
             knowledge_share=float(row.get("knowledge_share", 0.25) or 0.25),
+            max_tool_iterations=int(row.get("max_tool_iterations", 10) or 10),
         )

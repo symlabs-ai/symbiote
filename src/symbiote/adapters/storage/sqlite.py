@@ -193,6 +193,7 @@ class SQLiteAdapter:
             "ALTER TABLE memory_entries ADD COLUMN category TEXT DEFAULT NULL",
             "ALTER TABLE environment_configs ADD COLUMN memory_share REAL DEFAULT 0.40",
             "ALTER TABLE environment_configs ADD COLUMN knowledge_share REAL DEFAULT 0.25",
+            "ALTER TABLE environment_configs ADD COLUMN max_tool_iterations INTEGER DEFAULT 10",
         ):
             try:
                 self._conn.execute(stmt)
@@ -228,6 +229,20 @@ class SQLiteAdapter:
             )""",
             "CREATE INDEX IF NOT EXISTS idx_scores_symbiote ON session_scores(symbiote_id, computed_at)",
             "CREATE INDEX IF NOT EXISTS idx_scores_session ON session_scores(session_id)",
+            """CREATE TABLE IF NOT EXISTS harness_versions (
+                id TEXT PRIMARY KEY,
+                symbiote_id TEXT NOT NULL,
+                component TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                avg_score REAL DEFAULT 0.0,
+                session_count INTEGER DEFAULT 0,
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL,
+                parent_version INTEGER,
+                UNIQUE(symbiote_id, component, version)
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_hv_active ON harness_versions(symbiote_id, component, is_active)",
         ):
             try:
                 self._conn.execute(stmt)

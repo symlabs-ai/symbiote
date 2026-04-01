@@ -112,7 +112,7 @@ class ChatRunner:
         """
         messages = self._build_messages(context)
         kwargs = self._build_llm_kwargs(context)
-        max_iters = _MAX_TOOL_ITERATIONS if context.tool_loop else 1
+        max_iters = context.max_tool_iterations if context.tool_loop else 1
         initial_msg_count = len(messages)
         controller = LoopController(max_iterations=max_iters)
 
@@ -215,7 +215,7 @@ class ChatRunner:
         """Async variant of run() with tool-loop support."""
         messages = self._build_messages(context)
         kwargs = self._build_llm_kwargs(context)
-        max_iters = _MAX_TOOL_ITERATIONS if context.tool_loop else 1
+        max_iters = context.max_tool_iterations if context.tool_loop else 1
         initial_msg_count = len(messages)
         controller = LoopController(max_iterations=max_iters)
 

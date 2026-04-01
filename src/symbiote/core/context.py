@@ -30,6 +30,7 @@ class AssembledContext(BaseModel):
     available_tools: list[dict] = Field(default_factory=list)
     tool_loading: str = "full"
     tool_loop: bool = True
+    max_tool_iterations: int = 10
     extra_context: dict | None = None
     generation_settings: dict | None = None  # from GenerationSettings.to_config_dict()
     user_input: str
@@ -138,12 +139,14 @@ class ContextAssembler:
         prompt_caching = False
         memory_share = _MEMORIES_SHARE
         knowledge_share = _KNOWLEDGE_SHARE
+        max_tool_iterations = 10
         if self._environment is not None:
             loading_mode = self._environment.get_tool_loading(symbiote_id)
             loop_enabled = self._environment.get_tool_loop(symbiote_id)
             prompt_caching = self._environment.get_prompt_caching(symbiote_id)
             memory_share = self._environment.get_memory_share(symbiote_id)
             knowledge_share = self._environment.get_knowledge_share(symbiote_id)
+            max_tool_iterations = self._environment.get_max_tool_iterations(symbiote_id)
 
         tool_dicts: list[dict] = []
         if self._tool_gateway is not None:
@@ -177,6 +180,7 @@ class ContextAssembler:
             available_tools=tool_dicts,
             tool_loading=loading_mode,
             tool_loop=loop_enabled,
+            max_tool_iterations=max_tool_iterations,
             extra_context=extra_context,
             user_input=user_input,
             total_tokens_estimate=total,
