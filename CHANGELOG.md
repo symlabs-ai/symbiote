@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [v0.3.1] - 2026-04-01
+
+- feat: instant mode — mode-aware harness for single-shot execution
+- docs: revise harness_plan.md — mark phases 1-4 as implemented, add future work from Anthropic article
+- docs: Clark migration guide for v0.3.0 — 5 adoption levels
+
+---
+
 ## [v0.3.0] - 2026-04-01
 
 ### Novas funcionalidades
