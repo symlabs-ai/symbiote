@@ -50,13 +50,14 @@ class TestInstantScoring:
         trace = LoopTrace(steps=[], total_iterations=1, stop_reason="end_turn", tool_mode="instant")
         assert compute_auto_score(trace, tool_mode="instant", has_tools=False) == 0.9
 
-    def test_brief_mode_unchanged(self):
+    def test_brief_mode_calibrated(self):
+        """Brief mode: 3 iterations = no penalty (multi-step is normal)."""
         trace = LoopTrace(
             steps=[LoopStep(iteration=1, tool_id="x", success=True)],
             total_iterations=3, total_tool_calls=3,
             stop_reason="end_turn", tool_mode="brief",
         )
-        assert compute_auto_score(trace, tool_mode="brief", has_tools=True) == 0.7
+        assert compute_auto_score(trace, tool_mode="brief", has_tools=True) == 1.0
 
     def test_continuous_relaxed_iterations(self):
         trace = LoopTrace(

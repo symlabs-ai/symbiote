@@ -95,13 +95,16 @@ def compute_auto_score(
             else:
                 iter_factor = 0.6
         else:
-            # Brief: standard penalty
-            if trace.total_iterations <= 2:
+            # Brief: calibrated for multi-step tasks (3-10 iterations
+            # are normal for "list + email + WhatsApp" type tasks)
+            if trace.total_iterations <= 3:
                 iter_factor = 1.0
-            elif trace.total_iterations <= 4:
+            elif trace.total_iterations <= 7:
+                iter_factor = 0.85
+            elif trace.total_iterations <= 10:
                 iter_factor = 0.7
             else:
-                iter_factor = 0.4
+                iter_factor = 0.5
         base *= iter_factor
 
     # Penalize by tool failure rate

@@ -82,19 +82,21 @@ class TestComputeAutoScore:
         )
         assert compute_auto_score(trace) == 1.0  # <= 2 iters = 1.0
 
-    def test_end_turn_3_iterations_penalized(self) -> None:
+    def test_end_turn_3_iterations_no_penalty(self) -> None:
+        """3 iterations in brief mode = no penalty (multi-step is normal)."""
         trace = LoopTrace(
             steps=[LoopStep(iteration=i, tool_id="t", success=True) for i in range(1, 4)],
             total_iterations=3, total_tool_calls=3, stop_reason="end_turn",
         )
-        assert compute_auto_score(trace) == 0.7
+        assert compute_auto_score(trace) == 1.0
 
-    def test_end_turn_6_iterations_heavy_penalty(self) -> None:
+    def test_end_turn_6_iterations_moderate_penalty(self) -> None:
+        """6 iterations in brief mode = moderate penalty (0.85 factor)."""
         trace = LoopTrace(
             steps=[LoopStep(iteration=i, tool_id="t", success=True) for i in range(1, 7)],
             total_iterations=6, total_tool_calls=6, stop_reason="end_turn",
         )
-        assert compute_auto_score(trace) == 0.4
+        assert compute_auto_score(trace) == 0.85
 
     def test_stagnation(self) -> None:
         trace = LoopTrace(

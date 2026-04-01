@@ -61,6 +61,11 @@ against the original request. If the result does not match, DO NOT \
 present it as a success. Instead, tell the user honestly that you tried \
 but could not fulfill the request. Never fabricate or assume a result \
 is correct — if it doesn't match, it doesn't match.
+- CRITICAL — After completing a tool call and receiving its result, \
+evaluate whether the user's FULL request has been satisfied. If the \
+request involves multiple steps (e.g. "list X and then email Y"), \
+continue executing the remaining steps. Only provide your final \
+response when ALL parts of the request have been addressed.
 
 To call a tool:
 
@@ -249,14 +254,18 @@ class ChatRunner:
 
         all_tool_results: list[ToolCallResult] = []
         schema_cache: dict[str, dict] = {}  # loop-local cache for index mode
+        trace = LoopTrace(tool_mode=context.tool_mode)
         final_text = ""
         loop_start = time.monotonic()
         loop_timeout = context.loop_timeout
+        last_iteration = 0
 
         for iteration in range(max_iters):
+            last_iteration = iteration
             # Check loop timeout before each iteration
             if time.monotonic() - loop_start > loop_timeout:
                 logger.info("[tool-loop] loop timeout exceeded (%.1fs)", loop_timeout)
+                trace.stop_reason = "timeout"
                 break
 
             if self._on_progress is not None:
@@ -265,7 +274,7 @@ class ChatRunner:
             try:
                 response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
             except Exception as exc:
-                return RunResult(success=False, error=str(exc), runner_type=self.runner_type)
+                return RunResult(success=False, error=str(exc), runner_type=self.runner_type, loop_trace=trace)
 
             clean_text, tool_calls = self._parse_response(response)
 
@@ -312,6 +321,7 @@ class ChatRunner:
             if self._on_progress is not None:
                 self._on_progress("tool_start", iteration + 1, max_iters)
 
+            step_start = time.monotonic()
             gateway_results: list[ToolCallResult] = list(denial_results)
             if approved_calls:
                 exec_results = self._tool_gateway.execute_tool_calls(
@@ -322,6 +332,7 @@ class ChatRunner:
                 )
                 gateway_results.extend(exec_results)
                 all_tool_results.extend(exec_results)
+            step_elapsed = int((time.monotonic() - step_start) * 1000)
 
             if self._on_progress is not None:
                 self._on_progress("tool_end", iteration + 1, max_iters)
@@ -332,13 +343,22 @@ class ChatRunner:
             # Merge cached + gateway results in original order
             results = self._merge_tool_results(tool_calls, cached_results, gateway_results)
 
-            # Record each tool call in the loop controller
+            # Record each tool call in trace and loop controller
             for tc, tr in zip(tool_calls, results, strict=False):
+                trace.steps.append(LoopStep(
+                    iteration=iteration + 1,
+                    tool_id=tc.tool_id,
+                    params=tc.params,
+                    success=tr.success,
+                    error=tr.error,
+                    elapsed_ms=step_elapsed,
+                ))
                 controller.record(tc.tool_id, tc.params, tr.success)
 
             # Check loop health — stop early on stagnation or circuit breaker
             should_stop, stop_reason = controller.should_stop()
             if should_stop:
+                trace.stop_reason = stop_reason
                 injection = controller.get_injection_message()
                 if injection:
                     messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
@@ -370,6 +390,13 @@ class ChatRunner:
             if self._on_progress is not None:
                 self._on_progress("iteration_end", iteration + 1, max_iters)
 
+        # Finalize trace
+        trace.total_iterations = last_iteration + 1 if context.tool_loop else 0
+        trace.total_tool_calls = len(trace.steps)
+        trace.total_elapsed_ms = int((time.monotonic() - loop_start) * 1000)
+        if trace.stop_reason is None:
+            trace.stop_reason = "end_turn" if trace.total_iterations > 0 else None
+
         # Save final response (with loop summary) to working memory
         if self._working_memory is not None:
             if all_tool_results:
@@ -387,7 +414,16 @@ class ChatRunner:
         if all_tool_results:
             output = {"text": final_text, "tool_results": [r.model_dump() for r in all_tool_results]}
 
-        return RunResult(success=True, output=output, runner_type=self.runner_type)
+        if trace.steps:
+            logger.info(
+                "[tool-loop] completed: %d iterations, %d tool calls, %dms total",
+                trace.total_iterations, trace.total_tool_calls, trace.total_elapsed_ms,
+            )
+
+        return RunResult(
+            success=True, output=output, runner_type=self.runner_type,
+            loop_trace=trace if trace.steps else None,
+        )
 
     async def run_async(
         self,
