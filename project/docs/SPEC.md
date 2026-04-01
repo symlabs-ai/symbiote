@@ -1,8 +1,8 @@
 # SPEC.md — Symbiote
 
-> Versão: 0.1.8
+> Versão: 0.2.27
 > MVP entregue em: 2026-03-16
-> Última atualização: 2026-03-17
+> Última atualização: 2026-04-01
 > Status: maintenance
 
 ---
@@ -226,12 +226,14 @@ Sessões, memórias e decisões exportáveis em Markdown legível.
 | Linguagem | Python 3.12+ | Ecossistema AI, tipagem, async |
 | Framework base | ForgeBase (Clean/Hex) | Arquitetura, UseCaseRunner, Pulse |
 | Modelos | Pydantic v2 | Validação, serialização, config |
-| Persistência | SQLite (stdlib) | Local-first, zero infra, 12 tabelas |
+| Persistência | SQLite (stdlib) | Local-first, zero infra, 15+ tabelas |
 | CLI | Typer + Rich | Type hints nativos, formatação Rich |
 | HTTP | FastAPI + Uvicorn | Async, Pydantic integration, OpenAPI |
 | LLM | LLMPort + ForgeLLM/Mock | Abstração fina, sem acoplamento |
+| MCP | McpToolProvider + forge_llm | Model Context Protocol tool bridging |
+| Harness Evolution | ParameterTuner + HarnessEvolver | Auto-calibração tiered + evolução de prompt via LLM |
 | Observabilidade | structlog | Logs JSON estruturados |
-| Testes | pytest (393 testes) | TDD, cobertura ~96% |
+| Testes | pytest (900+ testes) | TDD, cobertura ~85% |
 
 > Detalhes completos: `project/docs/tech_stack.md`
 
@@ -240,31 +242,41 @@ Sessões, memórias e decisões exportáveis em Markdown legível.
 ## Arquitetura
 
 ```
-CLI / HTTP API / Python Library / MessageBus
-        │
+CLI / HTTP API / Python Library / SDK / MessageBus
+        |
     SymbioteKernel (orchestrator)
-        │
+        |
     CapabilitySurface (learn, teach, chat, work, show, reflect)
-        │
-    ┌───┴───────────────────────────────────────┐
-    │  ContextAssembler    RunnerRegistry        │  Cognitive Layer
-    │  ReflectionEngine    ProcessEngine         │
-    │  MemoryConsolidator  SubagentManager       │
-    │  SkillsLoader        RuntimeContext        │
-    └───┬───────────────────────────────────────┘
-    ┌───┴───────────────────────────────────────┐
-    │  IdentityManager     SessionManager       │
-    │  MemoryStore         KnowledgeService      │  State Layer
-    │  WorkspaceManager    EnvironmentMgr        │
-    │  SemanticRecallProvider  MessageRepository │
-    └───┬───────────────────────────────────────┘
-    ┌───┴───────────────────────────────────────┐
-    │  SQLiteAdapter  ForgeLLMAdapter           │  Adapter Layer
-    │  ExportService  ToolGateway               │
-    └───┬───────────────────────────────────────┘
-    ┌───┴───────────────────────────────────────┐
-    │  SQLite DB  ·  Filesystem  ·  Docker      │  Persistence
-    └───────────────────────────────────────────┘
+        |
+    +-----------------------------------------------+
+    |  ContextAssembler    RunnerRegistry            |
+    |  ReflectionEngine    ProcessEngine             |  Cognitive Layer
+    |  MemoryConsolidator  SubagentManager           |
+    |  SkillsLoader        RuntimeContext            |
+    +---+-------------------------------------------+
+    +---+-------------------------------------------+
+    |  IdentityManager     SessionManager            |
+    |  MemoryStore         KnowledgeService          |  State Layer
+    |  WorkspaceManager    EnvironmentManager         |
+    |  SemanticRecallProvider  MessageRepository      |
+    +---+-------------------------------------------+
+    +---+-------------------------------------------+
+    |  ToolGateway         PolicyGate                |
+    |  LoopController      ChatRunner                |  Execution Layer
+    |  SessionLock         CompositeHook             |
+    +---+-------------------------------------------+
+    +---+-------------------------------------------+
+    |  ParameterTuner      HarnessEvolver            |
+    |  HarnessVersionRepo  BenchmarkRunner           |  Harness Layer
+    |  StructuralEvolver   CrossSymbioteLearner      |
+    +---+-------------------------------------------+
+    +---+-------------------------------------------+
+    |  SQLiteAdapter       ForgeLLMAdapter           |  Adapter Layer
+    |  ExportService       McpToolProvider           |
+    +---+-------------------------------------------+
+    +---+-------------------------------------------+
+    |  SQLite DB  .  Filesystem  .  Docker           |  Persistence
+    +-----------------------------------------------+
 ```
 
 > Diagramas: `project/docs/diagrams/` (class, components, database, architecture)
