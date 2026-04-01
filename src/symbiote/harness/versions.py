@@ -22,8 +22,28 @@ class HarnessVersionRepository:
     def __init__(self, storage: StoragePort) -> None:
         self._storage = storage
 
-    def get_active(self, symbiote_id: str, component: str) -> str | None:
-        """Return the active version's content, or None if no custom version exists."""
+    def get_active(
+        self, symbiote_id: str, component: str, tool_mode: str | None = None,
+    ) -> str | None:
+        """Return the active version's content, or None if no custom version exists.
+
+        When *tool_mode* is provided, looks up a mode-specific variant first
+        (e.g. ``tool_instructions:instant``).  Falls back to the generic
+        component key if no mode-specific version exists.  This enables
+        independent evolution of harness texts per execution mode.
+        """
+        if tool_mode is not None:
+            mode_key = f"{component}:{tool_mode}"
+            row = self._storage.fetch_one(
+                "SELECT content FROM harness_versions "
+                "WHERE symbiote_id = ? AND component = ? AND is_active = 1 "
+                "ORDER BY version DESC LIMIT 1",
+                (symbiote_id, mode_key),
+            )
+            if row:
+                return row["content"]
+
+        # Fallback: generic component
         row = self._storage.fetch_one(
             "SELECT content FROM harness_versions "
             "WHERE symbiote_id = ? AND component = ? AND is_active = 1 "

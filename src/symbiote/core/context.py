@@ -171,6 +171,17 @@ class ContextAssembler:
             memories_dicts = []
             knowledge_dicts = []
 
+        # Instant mode: precision > recall — cap memory share and prioritize
+        # procedural memories (how-to) over declarative (facts/history)
+        if tool_mode == "instant":
+            memory_share = min(memory_share, 0.25)
+            memories_dicts.sort(
+                key=lambda d: (
+                    0 if d.get("type") == "procedural" else 1,
+                    -(d.get("importance", 0)),
+                ),
+            )
+
         tool_dicts: list[dict] = []
         if self._tool_gateway is not None:
             tool_dicts = self._build_tool_dicts(
@@ -194,15 +205,17 @@ class ContextAssembler:
             gen_settings = {"prompt_caching": True}
 
         # 8. Resolve evolvable text overrides from harness_versions
+        #    Mode-specific lookup: tries e.g. "tool_instructions:instant" first,
+        #    falls back to generic "tool_instructions" if not found.
         tool_instr_override = None
         stag_override = None
         cb_override = None
         if self._harness_versions is not None:
             get_active = getattr(self._harness_versions, "get_active", None)
             if get_active is not None:
-                tool_instr_override = get_active(symbiote_id, "tool_instructions")
-                stag_override = get_active(symbiote_id, "injection_stagnation")
-                cb_override = get_active(symbiote_id, "injection_circuit_breaker")
+                tool_instr_override = get_active(symbiote_id, "tool_instructions", tool_mode)
+                stag_override = get_active(symbiote_id, "injection_stagnation", tool_mode)
+                cb_override = get_active(symbiote_id, "injection_circuit_breaker", tool_mode)
 
         return AssembledContext(
             symbiote_id=symbiote_id,

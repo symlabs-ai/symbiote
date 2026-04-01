@@ -507,8 +507,8 @@ class SymbioteKernel:
         self._storage.execute(
             "INSERT INTO execution_traces "
             "(id, session_id, symbiote_id, total_iterations, total_tool_calls, "
-            "total_elapsed_ms, stop_reason, steps_json, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "total_elapsed_ms, stop_reason, steps_json, tool_mode, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 str(uuid4()),
                 session_id,
@@ -518,6 +518,7 @@ class SymbioteKernel:
                 trace.total_elapsed_ms,
                 trace.stop_reason,
                 json.dumps([s.model_dump() for s in trace.steps]),
+                trace.tool_mode,
                 datetime.now(tz=UTC).isoformat(),
             ),
         )
@@ -529,7 +530,10 @@ class SymbioteKernel:
         from datetime import UTC, datetime
         from uuid import uuid4
 
-        auto = compute_auto_score(trace)
+        # Derive tool_mode and has_tools for mode-aware scoring
+        tool_mode = trace.tool_mode if trace else "brief"
+        has_tools = bool(self._tool_gateway and self._tool_gateway.list_tools())
+        auto = compute_auto_score(trace, tool_mode=tool_mode, has_tools=has_tools)
         final = compute_final_score(auto)
         self._storage.execute(
             "INSERT OR REPLACE INTO session_scores "

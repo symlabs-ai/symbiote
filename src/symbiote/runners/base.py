@@ -30,6 +30,7 @@ class LoopTrace(BaseModel):
     total_tool_calls: int = 0
     total_elapsed_ms: int = 0
     stop_reason: str | None = None
+    tool_mode: str = "brief"
 
 
 class RunResult(BaseModel):

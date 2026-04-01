@@ -115,7 +115,128 @@ class ChatRunner:
         When ``context.tool_loop`` is True (default), the runner feeds tool
         results back to the LLM and re-invokes it until the LLM responds
         without tool calls or ``_MAX_TOOL_ITERATIONS`` is reached.
+
+        When ``context.tool_mode == "instant"``, a streamlined fast-path is
+        used: single LLM call, optional single tool execution, no loop
+        controller, no compaction, no progress callbacks.
         """
+        if context.tool_mode == "instant":
+            return self._run_instant(context, on_token)
+        return self._run_loop(context, on_token)
+
+    def _run_instant(
+        self,
+        context: AssembledContext,
+        on_token: Callable[[str], None] | None = None,
+    ) -> RunResult:
+        """Fast-path for instant mode: single LLM call + optional tool exec.
+
+        Skips: LoopController, schema cache, compaction (all 3 layers),
+        loop summary in working memory, on_progress callbacks.
+        Keeps: LLM retry, tool execution, approval gate, response
+        validation, on_stream, on_token.
+        """
+        messages = self._build_messages(context)
+        kwargs = self._build_llm_kwargs(context)
+        loop_start = time.monotonic()
+
+        # Single LLM call with retry
+        try:
+            response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
+        except Exception as exc:
+            return RunResult(success=False, error=str(exc), runner_type=self.runner_type)
+
+        clean_text, tool_calls = self._parse_response(response)
+
+        if not tool_calls:
+            clean_text, buffered_chunks = self._validate_and_fix(
+                clean_text, buffered_chunks, messages, kwargs
+            )
+
+        # Emit via on_stream
+        if self._on_stream is not None and clean_text:
+            self._on_stream(clean_text, 1)
+
+        all_tool_results: list[ToolCallResult] = []
+
+        # Execute tool calls if any (at most 1 iteration worth)
+        if tool_calls and self._tool_gateway is not None:
+            # Approval gate (kept — a single tool call can still be high-risk)
+            approved_calls, denial_results = self._check_approval(tool_calls)
+            all_tool_results.extend(denial_results)
+
+            gateway_results: list[ToolCallResult] = list(denial_results)
+            if approved_calls:
+                exec_results = self._tool_gateway.execute_tool_calls(
+                    symbiote_id=context.symbiote_id,
+                    session_id=context.session_id,
+                    calls=approved_calls,
+                    timeout=context.tool_call_timeout,
+                )
+                gateway_results.extend(exec_results)
+                all_tool_results.extend(exec_results)
+
+            # Feed results back for a final LLM response
+            messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
+            results = self._merge_tool_results(tool_calls, {}, gateway_results)
+            messages.append({"role": "user", "content": self._format_tool_results(results)})
+
+            try:
+                final_response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
+                clean_text, _ = self._parse_response(final_response)
+            except Exception:
+                pass  # keep the tool-call text as final
+
+        # Release tokens — no suppression since there's no next iteration
+        if on_token is not None:
+            if buffered_chunks is not None:
+                for chunk in buffered_chunks:
+                    on_token(chunk)
+            else:
+                on_token(clean_text)
+
+        # Save to working memory (no loop summary — nothing to summarize)
+        if self._working_memory is not None:
+            self._working_memory.update_message(
+                Message(session_id=context.session_id, role="assistant", content=clean_text)
+            )
+            if self._consolidator is not None:
+                self._consolidator.consolidate_if_needed(self._working_memory, context.symbiote_id)
+
+        # Build trace for scoring/persistence
+        elapsed_ms = int((time.monotonic() - loop_start) * 1000)
+        trace_steps = [
+            LoopStep(
+                iteration=1,
+                tool_id=tc.tool_id,
+                params=tc.params,
+                success=tr.success,
+                error=tr.error,
+                elapsed_ms=tr.elapsed_ms if hasattr(tr, "elapsed_ms") else 0,
+            )
+            for tc, tr in zip(tool_calls, all_tool_results, strict=False)
+        ] if tool_calls else []
+        trace = LoopTrace(
+            steps=trace_steps,
+            total_iterations=1,
+            total_tool_calls=len(all_tool_results),
+            total_elapsed_ms=elapsed_ms,
+            stop_reason="end_turn",
+            tool_mode="instant",
+        )
+
+        output = clean_text
+        if all_tool_results:
+            output = {"text": clean_text, "tool_results": [r.model_dump() for r in all_tool_results]}
+
+        return RunResult(success=True, output=output, runner_type=self.runner_type, loop_trace=trace)
+
+    def _run_loop(
+        self,
+        context: AssembledContext,
+        on_token: Callable[[str], None] | None = None,
+    ) -> RunResult:
+        """Full loop execution for brief/continuous modes."""
         messages = self._build_messages(context)
         kwargs = self._build_llm_kwargs(context)
         max_iters = self._resolve_max_iters(context)
@@ -274,6 +395,10 @@ class ChatRunner:
         on_token: Callable[[str], None] | None = None,
     ) -> RunResult:
         """Async variant of run() with tool-loop support."""
+        # Instant mode uses sync fast-path (no async tool execution needed
+        # for a single call) — avoids duplicating the instant logic.
+        if context.tool_mode == "instant":
+            return self._run_instant(context, on_token)
         messages = self._build_messages(context)
         kwargs = self._build_llm_kwargs(context)
         max_iters = self._resolve_max_iters(context)
@@ -286,7 +411,7 @@ class ChatRunner:
 
         all_tool_results: list[ToolCallResult] = []
         schema_cache: dict[str, dict] = {}  # loop-local cache for index mode
-        trace = LoopTrace()
+        trace = LoopTrace(tool_mode=context.tool_mode)
         final_text = ""
         loop_start = time.monotonic()
         loop_timeout = context.loop_timeout

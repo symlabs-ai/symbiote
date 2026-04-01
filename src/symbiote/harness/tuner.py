@@ -68,10 +68,17 @@ class ParameterTuner:
         """Analyze recent sessions and compute recommended adjustments.
 
         Does NOT apply changes — call ``apply()`` with the result to persist.
+
+        Instant-mode sessions are excluded from iteration/compaction rules
+        (they always have 1 iteration — no signal).  They ARE included in
+        memory/knowledge share analysis (Tier 3) since context quality
+        matters even more in single-shot mode.
         """
         traces = self._get_recent_traces(symbiote_id, days)
         scores = self._get_recent_scores(symbiote_id, days)
-        count = len(traces)
+        # Separate instant traces — they have no iteration signal
+        loop_traces = [t for t in traces if t.get("tool_mode", "brief") != "instant"]
+        count = len(loop_traces)
         tier = self._compute_tier(count)
 
         result = TuningResult(
@@ -87,15 +94,18 @@ class ParameterTuner:
         current = self._get_current_config(symbiote_id)
 
         # ── Tier 1+ rules (safe adjustments) ─────────────────────────
+        # Use loop_traces (excluding instant) for iteration-based rules
         if tier >= 1:
-            self._rule_max_iterations_too_low(result, traces, current)
-            self._rule_max_iterations_too_high(result, traces, current)
+            self._rule_max_iterations_too_low(result, loop_traces, current)
+            self._rule_max_iterations_too_high(result, loop_traces, current)
 
         # ── Tier 2+ rules (statistical adjustments) ──────────────────
         if tier >= 2:
-            self._rule_compaction_threshold(result, traces, current)
+            self._rule_compaction_threshold(result, loop_traces, current)
 
         # ── Tier 3+ rules (fine tuning) ──────────────────────────────
+        # memory/knowledge share uses ALL scores (instant included —
+        # context quality matters even more in single-shot mode)
         if tier >= 3:
             self._rule_memory_knowledge_share(result, scores, traces, current)
 
