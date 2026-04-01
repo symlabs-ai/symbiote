@@ -19,13 +19,8 @@
 | B-42 | Tool descriptions genéricas — melhorar summaries no OpenAPI do YouNews (ex: "Item Action" → "Change item status") | 2026-03-20, harness | média | cross-repo:younews |
 | B-44 | Validar supressão de narração intermediária no YouNews staging após deploy v0.17.31+ | 2026-03-20, harness | média | cross-repo:younews |
 | B-45 | Test harness pytest — validar tests/e2e/test_kimi_tool_loop.py (requer YouNews + SymGateway rodando) | 2026-03-20, harness | baixa | |
-| B-60 | SessionScore — feedback signal automático (auto_score de LoopTrace + user_score via FeedbackPort) | 2026-04-01, meta-harness | alta | |
-| B-61 | FeedbackPort — protocol para host reportar sucesso/falha de sessões | 2026-04-01, meta-harness | alta | |
-| B-62 | MemoryEntry de falha determinística — gerar fato procedural quando loop falha | 2026-04-01, meta-harness | alta | |
-| B-63 | Context splits configuráveis — memory_share/knowledge_share no EnvironmentConfig | 2026-04-01, meta-harness | média | |
 | B-64 | harness_versions — versionamento de textos evolvable por symbiote | 2026-04-01, meta-harness | média | |
 | B-65 | Nível 1 Parameter Tuning — auto-calibração de parâmetros baseada em scores | 2026-04-01, meta-harness | média | |
-| B-66 | LoopTrace persistence — persistir execution traces no SQLite | 2026-04-01, meta-harness | alta | |
 | B-67 | Nível 2 HarnessEvolver — proposer LLM evolui _TOOL_INSTRUCTIONS offline | 2026-04-01, meta-harness | alta | |
 | B-68 | Memory/Knowledge on-demand — search_memories como tool em vez de pre-packed | 2026-04-01, meta-harness | média | |
 
@@ -57,6 +52,11 @@ Documentação completa em `~/dev/kb/engenharia/meta_harness.md`, seção 4 (Bac
 
 | # | Descrição | Implementada em | Versão |
 |---|-----------|-----------------|--------|
+| B-60 | SessionScore — auto_score from LoopTrace + user feedback composition | 2026-04-01 | 0.2.24 |
+| B-61 | FeedbackPort — protocol para host reportar qualidade de sessão | 2026-04-01 | 0.2.24 |
+| B-62 | MemoryEntry de falha — fato procedural determinístico quando loop falha | 2026-04-01 | 0.2.24 |
+| B-63 | Context splits configuráveis — memory_share/knowledge_share per symbiote | 2026-04-01 | 0.2.24 |
+| B-66 | LoopTrace persistence — execution_traces table no SQLite | 2026-04-01 | 0.2.24 |
 | B-55 | Parallel tool execution — asyncio.gather (async) + ThreadPoolExecutor (sync) com max_workers=4 | 2026-03-31 | 0.2.22 |
 | B-56 | LLM retry with exponential backoff — 3 retries, 1s/2s/4s, only transient errors | 2026-03-31 | 0.2.22 |
 | B-57 | Diminishing returns detection + circuit breaker — LoopController com duplicate/failure detection. Cobre B-25 (LLM não sabe parar), B-28 (observability/LoopTrace), B-31 (circuit breaker) | 2026-03-31 | 0.2.22 |

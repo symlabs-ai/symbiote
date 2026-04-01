@@ -3,6 +3,23 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [v0.2.24] - 2026-04-01
+
+### Added — Harness Foundations (Meta-Harness Fase 1)
+
+- [B-60] SessionScore — `compute_auto_score(trace)` computes 0.0-1.0 score from LoopTrace (stop_reason + iterations + failure rate); persisted in `session_scores` table on `close_session()` (`core/scoring.py`)
+- [B-61] FeedbackPort — protocol for host to report session quality; `kernel.report_feedback(session_id, score, source)` updates `final_score = auto * 0.6 + user * 0.4` (`core/ports.py`, `core/kernel.py`)
+- [B-62] MemoryEntry de falha — deterministic procedural memory generated when loop fails (circuit_breaker, stagnation, max_iterations); zero LLM cost, tagged `[harness_failure]` (`core/kernel.py`)
+- [B-63] Context splits configuráveis — `memory_share` and `knowledge_share` per symbiote via EnvironmentConfig; defaults 0.40/0.25 preserved (`environment/manager.py`, `core/context.py`)
+- [B-66] LoopTrace persistence — `execution_traces` table stores full trace (steps, stop_reason, timing); `CapabilitySurface` captures `last_loop_trace` from RunResult (`adapters/storage/sqlite.py`, `core/capabilities.py`)
+
+### Changed
+
+- `CapabilitySurface.chat()` and `chat_async()` now capture `loop_trace` from RunResult
+- `kernel._message_inner()` persists trace to `execution_traces` after each chat call
+- `kernel.close_session()` computes SessionScore + generates failure MemoryEntry before reflection
+- `ContextAssembler._trim_to_budget()` uses per-symbiote memory/knowledge shares
+
 ## [v0.2.23] - 2026-04-01
 
 - docs: clean up BACKLOG — remove 8 implemented items (B-25/26/28/31/37/38/39/43), add 9 Meta-Harness items (B-60 to B-68)

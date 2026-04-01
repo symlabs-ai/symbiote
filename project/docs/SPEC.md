@@ -104,6 +104,16 @@ Symbiote é um kernel Python para construir entidades cognitivas persistentes. M
 | Diminishing returns detection + circuit breaker — LoopController | B-57 | ✅ Entregue | resilience-sprint |
 | 3-layer compaction — microcompact + loop compact + autocompact | B-58 | ✅ Entregue | resilience-sprint |
 
+### Pós-MVP (Sprint Harness Foundations — 2026-04-01)
+
+| Feature | Backlog | Status | Sprint |
+|---------|---------|--------|--------|
+| SessionScore — auto_score from LoopTrace + user feedback composition | B-60 | ✅ Entregue | harness-foundations |
+| FeedbackPort — protocol para host reportar qualidade de sessão | B-61 | ✅ Entregue | harness-foundations |
+| MemoryEntry de falha — fato procedural determinístico quando loop falha | B-62 | ✅ Entregue | harness-foundations |
+| Context splits configuráveis — memory_share/knowledge_share per symbiote | B-63 | ✅ Entregue | harness-foundations |
+| LoopTrace persistence — execution_traces table no SQLite | B-66 | ✅ Entregue | harness-foundations |
+
 ### O que está fora do escopo
 
 - Multi-tenant completo
