@@ -5,7 +5,7 @@
 | Ambiente | Onde roda | Acesso |
 |---|---|---|
 | **Local** | Sua máquina de dev | `systemd user` symbios.service — `http://localhost:8003` |
-| **Staging** | linux-ci (10.10.10.10) — systemd | `http://10.10.10.10:8008` (sem URL pública) |
+| **Staging** | linux-ci (10.10.10.10) — Docker (`staging-symbiote`) | `http://10.10.10.10:8008` (sem URL pública) |
 | **Produção** | VPS 72.60.246.51 — systemd `symbiote` | `https://symbiote.symlabs.ai` |
 
 ## Produção
@@ -17,10 +17,13 @@
 - **Logs:** `sudo journalctl -u symbiote -f`
 
 ## Staging
+- **Container:** `staging-symbiote` no docker-compose do linux-ci (`~/staging/docker-compose.yml`)
+- **Porta:** 8008
 - **Sem URL pública** — acesso interno apenas
 - **Health interno:** `curl http://10.10.10.10:8008/health`
-- **Trigger:** push na `main` → Gitea CI
-- **Verificar:** `/stage`
+- **Trigger:** push na `main` → Gitea Actions rebuild + redeploy
+- **Logs:** `ssh linux-ci "cd ~/staging && docker compose logs -f symbiote"`
+- **Restart manual:** `ssh linux-ci "cd ~/staging && docker compose restart symbiote"`
 
 ## Deploy
 ```bash

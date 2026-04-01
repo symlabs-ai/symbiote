@@ -46,11 +46,14 @@ class TestIsRetryableError:
     def test_os_error_is_retryable(self):
         assert ChatRunner._is_retryable_error(OSError("network down"))
 
-    def test_rate_limit_string_is_retryable(self):
-        assert ChatRunner._is_retryable_error(Exception("rate limit exceeded"))
+    def test_rate_limit_string_not_retryable(self):
+        # 429/rate-limit errors must NOT be retried at the runner layer —
+        # the OpenAI SDK already retries them internally, double-retrying
+        # amplifies the problem instead of solving it.
+        assert not ChatRunner._is_retryable_error(Exception("rate limit exceeded"))
 
-    def test_429_string_is_retryable(self):
-        assert ChatRunner._is_retryable_error(Exception("HTTP 429 Too Many Requests"))
+    def test_429_string_not_retryable(self):
+        assert not ChatRunner._is_retryable_error(Exception("HTTP 429 Too Many Requests"))
 
     def test_503_string_is_retryable(self):
         assert ChatRunner._is_retryable_error(Exception("503 Service Unavailable"))
@@ -176,14 +179,20 @@ class TestCallLLMWithRetry:
         assert isinstance(result, str)
 
     @patch("symbiote.runners.chat.time.sleep")
-    def test_rate_limit_exception_is_retried(self, mock_sleep):
-        """Exceptions with 'rate limit' in message are retried."""
+    def test_rate_limit_exception_not_retried(self, mock_sleep):
+        """429/rate-limit exceptions must NOT be retried at the runner layer.
+
+        The OpenAI SDK already handles 429 retries internally. Retrying here
+        too causes a cascade of 9 requests (3 outer × 3 inner) that makes
+        the rate-limit situation worse instead of better.
+        """
         llm = MockLLM([Exception("rate limit exceeded"), "ok"])
         runner = _make_runner(llm)
 
-        result, _ = runner._call_llm_with_retry(
-            [{"role": "user", "content": "hi"}], {"config": None}, None,
-        )
+        with pytest.raises(Exception, match="rate limit"):
+            runner._call_llm_with_retry(
+                [{"role": "user", "content": "hi"}], {"config": None}, None,
+            )
 
-        assert result == "ok"
-        assert llm.call_count == 2
+        assert llm.call_count == 1  # no retry — raised immediately
+        mock_sleep.assert_not_called()

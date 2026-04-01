@@ -4,603 +4,1412 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Symbiote Console</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        bg: '#0a0a0f',
+        'bg-card': '#111118',
+        'bg-hover': '#1a1a24',
+        border: '#1e1e2e',
+        'border-bright': '#2a2a3e',
+        text: '#c8c8d4',
+        'text-dim': '#5a5a72',
+        'text-bright': '#e8e8f0',
+        accent: '#00e5a0',
+        'accent-dim': 'rgba(0,229,160,0.12)',
+        amber: '#f0b429',
+        red: '#f05365',
+        blue: '#5c7cfa',
+        purple: '#b197fc',
+      },
+      fontFamily: {
+        mono: ['"JetBrains Mono"', '"Fira Code"', 'monospace'],
+        sans: ['"Space Grotesk"', 'system-ui', 'sans-serif'],
+      },
+    },
+  },
+}
+</script>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600&display=swap');
-
-:root {
-  --bg: #0a0a0f;
-  --bg-card: #111118;
-  --bg-hover: #1a1a24;
-  --border: #1e1e2e;
-  --border-bright: #2a2a3e;
-  --text: #c8c8d4;
-  --text-dim: #5a5a72;
-  --text-bright: #e8e8f0;
-  --accent: #00e5a0;
-  --accent-dim: #00e5a020;
-  --amber: #f0b429;
-  --red: #f05365;
-  --blue: #5c7cfa;
-  --purple: #b197fc;
-  --mono: 'JetBrains Mono', 'Fira Code', monospace;
-  --sans: 'Space Grotesk', system-ui, sans-serif;
-}
-
-* { margin: 0; padding: 0; box-sizing: border-box; }
-
-body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 13px;
-  line-height: 1.5;
-  min-height: 100vh;
-}
-
-/* ── Scanline overlay ── */
 body::after {
   content: '';
   position: fixed;
   inset: 0;
-  background: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 2px,
-    rgba(0,0,0,0.03) 2px,
-    rgba(0,0,0,0.03) 4px
-  );
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);
   pointer-events: none;
   z-index: 9999;
 }
-
-/* ── Header ── */
-header {
-  border-bottom: 1px solid var(--border);
-  padding: 16px 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: var(--bg-card);
-}
-
-.logo {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.logo-mark {
-  width: 28px;
-  height: 28px;
-  border: 2px solid var(--accent);
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  color: var(--accent);
-  font-weight: 700;
-}
-
-.logo h1 {
-  font-family: var(--sans);
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-bright);
-  letter-spacing: -0.3px;
-}
-
-.logo span {
-  font-size: 11px;
-  color: var(--text-dim);
-  font-weight: 400;
-  margin-left: 8px;
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-}
-
-.status-pill {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--text-dim);
-}
-
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--text-dim);
-  animation: pulse 2s infinite;
-}
-
-.status-dot.online { background: var(--accent); }
-.status-dot.offline { background: var(--red); animation: none; }
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-
-/* ── Stats bar ── */
-.stats-bar {
-  display: flex;
-  gap: 1px;
-  background: var(--border);
-  border-bottom: 1px solid var(--border);
-}
-
-.stat {
-  flex: 1;
-  background: var(--bg-card);
-  padding: 14px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.stat-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 1.2px;
-  color: var(--text-dim);
-}
-
-.stat-value {
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--text-bright);
-  font-variant-numeric: tabular-nums;
-}
-
-.stat-value .unit {
-  font-size: 11px;
-  color: var(--text-dim);
-  font-weight: 400;
-  margin-left: 2px;
-}
-
-/* ── Main grid ── */
-main {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1px;
-  background: var(--border);
-  min-height: calc(100vh - 120px);
-}
-
-/* ── Section ── */
-section {
-  background: var(--bg);
-  padding: 0;
-  overflow: hidden;
-}
-
-.section-header {
-  padding: 12px 20px;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: var(--bg-card);
-}
-
-.section-title {
-  font-family: var(--sans);
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: var(--text-dim);
-}
-
-.section-count {
-  font-size: 11px;
-  color: var(--accent);
-  background: var(--accent-dim);
-  padding: 1px 8px;
-  border-radius: 3px;
-  font-weight: 500;
-}
-
-/* ── Table ── */
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-th {
-  text-align: left;
-  padding: 8px 20px;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: var(--text-dim);
-  font-weight: 500;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-card);
-  position: sticky;
-  top: 0;
-}
-
-td {
-  padding: 8px 20px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 200px;
-}
-
-tr:hover td {
-  background: var(--bg-hover);
-}
-
-.table-scroll {
-  max-height: calc(50vh - 90px);
-  overflow-y: auto;
-}
-
-.table-scroll::-webkit-scrollbar { width: 4px; }
-.table-scroll::-webkit-scrollbar-track { background: var(--bg); }
-.table-scroll::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 2px; }
-
-/* ── Badges ── */
-.badge {
-  display: inline-block;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.3px;
-}
-
-.badge-active { background: #00e5a015; color: var(--accent); border: 1px solid #00e5a030; }
-.badge-closed { background: #5a5a7215; color: var(--text-dim); border: 1px solid var(--border); }
-.badge-role { background: #5c7cfa15; color: var(--blue); border: 1px solid #5c7cfa30; }
-
-/* ── Tenant cards ── */
-.tenant-list {
-  padding: 16px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.tenant-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-}
-
-.tenant-name {
-  font-size: 12px;
-  color: var(--text-bright);
-}
-
-.tenant-keys {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--amber);
-  font-variant-numeric: tabular-nums;
-}
-
-.tenant-keys .label {
-  font-size: 10px;
-  color: var(--text-dim);
-  font-weight: 400;
-  margin-left: 4px;
-}
-
-/* ── Timestamp ── */
-.ts {
-  color: var(--text-dim);
-  font-size: 11px;
-}
-
-/* ── Empty state ── */
-.empty {
-  padding: 40px 20px;
-  text-align: center;
-  color: var(--text-dim);
-  font-size: 12px;
-}
-
-/* ── Loading ── */
-.loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 60px;
-  color: var(--text-dim);
-  gap: 8px;
-}
-
-.loading::before {
-  content: '';
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--border-bright);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 @keyframes spin { to { transform: rotate(360deg); } }
-
-/* ── Footer ── */
-footer {
-  border-top: 1px solid var(--border);
-  padding: 10px 24px;
-  font-size: 10px;
-  color: var(--text-dim);
-  background: var(--bg-card);
-  display: flex;
-  justify-content: space-between;
-}
-
-footer a {
-  color: var(--accent);
-  text-decoration: none;
-}
-
-/* ── Responsive ── */
-@media (max-width: 900px) {
-  main { grid-template-columns: 1fr; }
-  .stats-bar { flex-wrap: wrap; }
-  .stat { min-width: 50%; }
-}
+.animate-pulse-slow { animation: pulse 2s infinite; }
+.animate-spin { animation: spin 0.8s linear infinite; }
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: #0a0a0f; }
+::-webkit-scrollbar-thumb { background: #2a2a3e; border-radius: 2px; }
+input, select, textarea { font-family: 'JetBrains Mono', monospace; }
 </style>
 </head>
-<body>
+<body class="bg-bg text-text font-mono text-[13px] leading-relaxed min-h-screen flex flex-col">
 
-<header>
-  <div class="logo">
-    <div class="logo-mark">S</div>
-    <h1>Symbiote<span>console</span></h1>
+<!-- ════════ HEADER ════════ -->
+<header class="bg-bg-card border-b border-border px-6 py-3 flex items-center justify-between shrink-0">
+  <div class="flex items-center gap-3">
+    <div class="w-7 h-7 border-2 border-accent rounded-md flex items-center justify-center text-accent text-sm font-bold">S</div>
+    <h1 class="font-sans text-base font-semibold text-text-bright tracking-tight">Symbiote<span class="text-[11px] text-text-dim font-normal ml-2 px-2 py-0.5 border border-border rounded">console</span></h1>
   </div>
-  <div class="status-pill">
-    <div class="status-dot" id="status-dot"></div>
-    <span id="status-text">connecting...</span>
+  <div class="flex items-center gap-4">
+    <div class="flex items-center gap-2">
+      <label class="text-[10px] uppercase tracking-widest text-text-dim">API Key</label>
+      <input id="api-key-input" type="password" placeholder="sk-symbiote_..."
+        class="bg-bg border border-border rounded px-2 py-1 text-[11px] text-text-bright w-48 focus:border-accent focus:outline-none"
+        oninput="saveApiKey(this.value)">
+      <button onclick="toggleKeyVisibility()" class="text-text-dim hover:text-text text-[11px] px-1" title="Show/hide">&#128065;</button>
+    </div>
+    <div class="flex items-center gap-1.5 text-[11px] text-text-dim">
+      <div id="status-dot" class="w-1.5 h-1.5 rounded-full bg-text-dim animate-pulse-slow"></div>
+      <span id="status-text">connecting...</span>
+    </div>
   </div>
 </header>
 
-<div class="stats-bar">
-  <div class="stat">
-    <div class="stat-label">Symbiotes</div>
-    <div class="stat-value" id="stat-symbiotes">-</div>
-  </div>
-  <div class="stat">
-    <div class="stat-label">Sessions</div>
-    <div class="stat-value" id="stat-sessions">-</div>
-  </div>
-  <div class="stat">
-    <div class="stat-label">Active</div>
-    <div class="stat-value" id="stat-active">-</div>
-  </div>
-  <div class="stat">
-    <div class="stat-label">Memories</div>
-    <div class="stat-value" id="stat-memories">-</div>
-  </div>
-  <div class="stat">
-    <div class="stat-label">API Keys</div>
-    <div class="stat-value" id="stat-keys">-</div>
-  </div>
-  <div class="stat">
-    <div class="stat-label">Tools</div>
-    <div class="stat-value" id="stat-tools">-</div>
-  </div>
-  <div class="stat">
-    <div class="stat-label">Pending</div>
-    <div class="stat-value" id="stat-pending">-</div>
-  </div>
-</div>
+<!-- ════════ TAB BAR ════════ -->
+<nav class="bg-bg-card border-b border-border px-6 flex gap-0 shrink-0 overflow-x-auto">
+  <a href="#dashboard" class="tab-link px-4 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 border-transparent hover:text-text-bright hover:bg-bg-hover transition-colors" data-tab="dashboard">Dashboard</a>
+  <a href="#symbiotes" class="tab-link px-4 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 border-transparent hover:text-text-bright hover:bg-bg-hover transition-colors" data-tab="symbiotes">Symbiotes</a>
+  <a href="#sessions" class="tab-link px-4 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 border-transparent hover:text-text-bright hover:bg-bg-hover transition-colors" data-tab="sessions">Sessions</a>
+  <a href="#chat" class="tab-link px-4 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 border-transparent hover:text-text-bright hover:bg-bg-hover transition-colors" data-tab="chat">Chat</a>
+  <a href="#tools" class="tab-link px-4 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 border-transparent hover:text-text-bright hover:bg-bg-hover transition-colors" data-tab="tools">Tools</a>
+  <a href="#config" class="tab-link px-4 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 border-transparent hover:text-text-bright hover:bg-bg-hover transition-colors" data-tab="config">Config</a>
+  <a href="#api-keys" class="tab-link px-4 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 border-transparent hover:text-text-bright hover:bg-bg-hover transition-colors" data-tab="api-keys">API Keys</a>
+  <a href="#logs" class="tab-link px-4 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 border-transparent hover:text-text-bright hover:bg-bg-hover transition-colors" data-tab="logs">Logs</a>
+</nav>
 
-<main>
-  <section>
-    <div class="section-header">
-      <div class="section-title">Symbiotes</div>
-      <div class="section-count" id="sym-count">0</div>
-    </div>
-    <div class="table-scroll" id="sym-table">
-      <div class="loading">Loading</div>
-    </div>
-  </section>
+<!-- ════════ MAIN CONTENT ════════ -->
+<main id="main-content" class="flex-1 overflow-y-auto">
 
-  <section>
-    <div class="section-header">
-      <div class="section-title">Recent Sessions</div>
-      <div class="section-count" id="sess-count">0</div>
+  <!-- ──── DASHBOARD TAB ──── -->
+  <div id="tab-dashboard" class="tab-panel hidden">
+    <div class="flex gap-px bg-border border-b border-border">
+      <div class="flex-1 bg-bg-card px-5 py-3"><div class="text-[10px] uppercase tracking-widest text-text-dim">Symbiotes</div><div class="text-xl font-semibold text-text-bright tabular-nums" id="stat-symbiotes">-</div></div>
+      <div class="flex-1 bg-bg-card px-5 py-3"><div class="text-[10px] uppercase tracking-widest text-text-dim">Sessions</div><div class="text-xl font-semibold text-text-bright tabular-nums" id="stat-sessions">-</div></div>
+      <div class="flex-1 bg-bg-card px-5 py-3"><div class="text-[10px] uppercase tracking-widest text-text-dim">Active</div><div class="text-xl font-semibold text-text-bright tabular-nums" id="stat-active">-</div></div>
+      <div class="flex-1 bg-bg-card px-5 py-3"><div class="text-[10px] uppercase tracking-widest text-text-dim">Memories</div><div class="text-xl font-semibold text-text-bright tabular-nums" id="stat-memories">-</div></div>
+      <div class="flex-1 bg-bg-card px-5 py-3"><div class="text-[10px] uppercase tracking-widest text-text-dim">API Keys</div><div class="text-xl font-semibold text-text-bright tabular-nums" id="stat-keys">-</div></div>
+      <div class="flex-1 bg-bg-card px-5 py-3"><div class="text-[10px] uppercase tracking-widest text-text-dim">Tools</div><div class="text-xl font-semibold text-text-bright tabular-nums" id="stat-tools">-</div></div>
+      <div class="flex-1 bg-bg-card px-5 py-3"><div class="text-[10px] uppercase tracking-widest text-text-dim">Pending</div><div class="text-xl font-semibold text-text-bright tabular-nums" id="stat-pending">-</div></div>
     </div>
-    <div class="table-scroll" id="sess-table">
-      <div class="loading">Loading</div>
+    <div class="grid grid-cols-2 gap-px bg-border min-h-[calc(100vh-220px)]">
+      <section class="bg-bg">
+        <div class="px-5 py-3 border-b border-border bg-bg-card flex items-center justify-between">
+          <span class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim">Symbiotes</span>
+          <span class="text-[11px] text-accent bg-accent-dim px-2 py-0.5 rounded font-medium" id="dash-sym-count">0</span>
+        </div>
+        <div class="max-h-[calc(50vh-100px)] overflow-y-auto" id="dash-sym-table"><div class="p-10 text-center text-text-dim text-xs">Loading</div></div>
+      </section>
+      <section class="bg-bg">
+        <div class="px-5 py-3 border-b border-border bg-bg-card flex items-center justify-between">
+          <span class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim">Recent Sessions</span>
+          <span class="text-[11px] text-accent bg-accent-dim px-2 py-0.5 rounded font-medium" id="dash-sess-count">0</span>
+        </div>
+        <div class="max-h-[calc(50vh-100px)] overflow-y-auto" id="dash-sess-table"><div class="p-10 text-center text-text-dim text-xs">Loading</div></div>
+      </section>
+      <section class="bg-bg">
+        <div class="px-5 py-3 border-b border-border bg-bg-card flex items-center justify-between">
+          <span class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim">Tenants</span>
+          <span class="text-[11px] text-accent bg-accent-dim px-2 py-0.5 rounded font-medium" id="dash-tenant-count">0</span>
+        </div>
+        <div id="dash-tenant-list"><div class="p-10 text-center text-text-dim text-xs">Loading</div></div>
+      </section>
+      <section class="bg-bg">
+        <div class="px-5 py-3 border-b border-border bg-bg-card flex items-center justify-between">
+          <span class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim">Recent Traces</span>
+          <span class="text-[11px] text-accent bg-accent-dim px-2 py-0.5 rounded font-medium" id="dash-trace-count">0</span>
+        </div>
+        <div class="max-h-[calc(50vh-100px)] overflow-y-auto" id="dash-trace-table"><div class="p-10 text-center text-text-dim text-xs">Loading</div></div>
+      </section>
     </div>
-  </section>
+  </div>
 
-  <section>
-    <div class="section-header">
-      <div class="section-title">Tenants</div>
-      <div class="section-count" id="tenant-count">0</div>
+  <!-- ──── SYMBIOTES TAB ──── -->
+  <div id="tab-symbiotes" class="tab-panel hidden">
+    <div class="px-6 py-4 border-b border-border bg-bg-card flex items-center justify-between">
+      <span class="font-sans text-sm font-semibold text-text-bright">Symbiotes</span>
+      <button onclick="showModal('create-symbiote-modal')" class="bg-accent text-bg text-[11px] font-semibold px-3 py-1.5 rounded hover:opacity-90">+ Create</button>
     </div>
-    <div id="tenant-list">
-      <div class="loading">Loading</div>
-    </div>
-  </section>
+    <div id="symbiotes-list" class="p-6"><div class="p-10 text-center text-text-dim text-xs">Loading</div></div>
+    <!-- Detail view (shown when clicking a symbiote) -->
+    <div id="symbiote-detail" class="hidden p-6"></div>
+  </div>
 
-  <section>
-    <div class="section-header">
-      <div class="section-title">Discovered Tools</div>
-      <div class="section-count" id="tools-count">0</div>
+  <!-- ──── SESSIONS TAB ──── -->
+  <div id="tab-sessions" class="tab-panel hidden">
+    <div class="px-6 py-4 border-b border-border bg-bg-card flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <span class="font-sans text-sm font-semibold text-text-bright">Sessions</span>
+        <select id="sessions-filter-symbiote" onchange="loadSessions()" class="bg-bg border border-border rounded px-2 py-1 text-[11px] text-text focus:border-accent focus:outline-none">
+          <option value="">All symbiotes</option>
+        </select>
+        <select id="sessions-filter-status" onchange="loadSessions()" class="bg-bg border border-border rounded px-2 py-1 text-[11px] text-text focus:border-accent focus:outline-none">
+          <option value="">All statuses</option>
+          <option value="active">Active</option>
+          <option value="closed">Closed</option>
+        </select>
+      </div>
+      <button onclick="showModal('create-session-modal')" class="bg-accent text-bg text-[11px] font-semibold px-3 py-1.5 rounded hover:opacity-90">+ Create</button>
     </div>
-    <div class="table-scroll" id="tools-table">
-      <div class="loading">Loading</div>
-    </div>
-  </section>
+    <div id="sessions-list" class="p-6"><div class="p-10 text-center text-text-dim text-xs">Loading</div></div>
+    <div id="session-detail" class="hidden p-6"></div>
+  </div>
 
-  <section>
-    <div class="section-header">
-      <div class="section-title">Quick Reference</div>
+  <!-- ──── CHAT TAB ──── -->
+  <div id="tab-chat" class="tab-panel hidden flex flex-col h-[calc(100vh-110px)]">
+    <div class="px-6 py-3 border-b border-border bg-bg-card flex items-center gap-3 shrink-0">
+      <select id="chat-symbiote" onchange="onChatSymbioteChange()" class="bg-bg border border-border rounded px-2 py-1.5 text-[11px] text-text focus:border-accent focus:outline-none w-48">
+        <option value="">Select symbiote...</option>
+      </select>
+      <select id="chat-session" class="bg-bg border border-border rounded px-2 py-1.5 text-[11px] text-text focus:border-accent focus:outline-none w-56">
+        <option value="">New session</option>
+      </select>
+      <button onclick="startChatSession()" class="bg-accent text-bg text-[11px] font-semibold px-3 py-1.5 rounded hover:opacity-90">Start</button>
+      <div id="chat-mode-badge" class="ml-auto text-[10px] uppercase tracking-wider text-text-dim"></div>
     </div>
-    <div style="padding: 16px 20px; font-size: 12px; line-height: 2;">
-      <div style="color: var(--text-dim); margin-bottom: 8px;">Endpoints</div>
-      <div><span style="color: var(--accent);">POST</span> <span style="color: var(--text-bright);">/symbiotes</span></div>
-      <div><span style="color: var(--accent);">POST</span> <span style="color: var(--text-bright);">/sessions</span></div>
-      <div><span style="color: var(--blue);">POST</span> <span style="color: var(--text-bright);">/sessions/{id}/chat</span></div>
-      <div><span style="color: var(--amber);">GET</span>&nbsp; <span style="color: var(--text-bright);">/sessions/{id}</span></div>
-      <div><span style="color: var(--amber);">GET</span>&nbsp; <span style="color: var(--text-bright);">/memory/search?query=</span></div>
-      <div><span style="color: var(--amber);">GET</span>&nbsp; <span style="color: var(--text-bright);">/health</span></div>
-      <div><span style="color: var(--amber);">GET</span>&nbsp; <span style="color: var(--text-bright);">/docs</span> <span style="color: var(--text-dim);">(OpenAPI)</span></div>
-      <div style="color: var(--text-dim); margin-top: 12px; margin-bottom: 8px;">Discovery</div>
-      <div><span style="color: var(--accent);">POST</span> <span style="color: var(--text-bright);">/symbiotes/{id}/discover</span></div>
-      <div><span style="color: var(--amber);">GET</span>&nbsp; <span style="color: var(--text-bright);">/symbiotes/{id}/discovered-tools</span></div>
-      <div><span style="color: var(--blue);">PATCH</span> <span style="color: var(--text-bright);">/symbiotes/{id}/discovered-tools/{tool_id}</span></div>
-      <div style="color: var(--text-dim); margin-top: 12px; margin-bottom: 8px;">SDK</div>
-      <div style="color: var(--purple);">pip install symbiote</div>
-      <pre style="color: var(--text-dim); margin-top: 8px; font-size: 11px; line-height: 1.6;">from symbiote.sdk import SymbioteClient
-client = SymbioteClient(
-  "<span style="color: var(--text);">https://symbiote.symlabs.ai</span>",
-  api_key="<span style="color: var(--amber);">sk-symbiote_...</span>"
-)</pre>
+    <div id="chat-messages" class="flex-1 overflow-y-auto p-6 space-y-4">
+      <div class="text-center text-text-dim text-xs py-20">Select a symbiote and start a session to begin chatting.</div>
     </div>
-  </section>
+    <div class="px-6 py-3 border-t border-border bg-bg-card shrink-0">
+      <div class="flex gap-2">
+        <input id="chat-input" type="text" placeholder="Type a message..."
+          class="flex-1 bg-bg border border-border rounded px-3 py-2 text-[12px] text-text-bright focus:border-accent focus:outline-none"
+          onkeydown="if(event.key==='Enter')sendChat()" disabled>
+        <button id="chat-send-btn" onclick="sendChat()" class="bg-accent text-bg text-[11px] font-semibold px-4 py-2 rounded hover:opacity-90 disabled:opacity-50" disabled>Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ──── TOOLS TAB ──── -->
+  <div id="tab-tools" class="tab-panel hidden">
+    <div class="px-6 py-4 border-b border-border bg-bg-card flex items-center justify-between">
+      <span class="font-sans text-sm font-semibold text-text-bright">Discovered Tools</span>
+      <button onclick="showModal('discover-tools-modal')" class="bg-blue text-white text-[11px] font-semibold px-3 py-1.5 rounded hover:opacity-90">Discover from URL</button>
+    </div>
+    <div id="tools-list" class="p-6"><div class="p-10 text-center text-text-dim text-xs">Loading</div></div>
+  </div>
+
+  <!-- ──── CONFIG TAB ──── -->
+  <div id="tab-config" class="tab-panel hidden">
+    <div class="px-6 py-4 border-b border-border bg-bg-card flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <span class="font-sans text-sm font-semibold text-text-bright">Configuration</span>
+        <select id="config-symbiote" onchange="loadConfig()" class="bg-bg border border-border rounded px-2 py-1 text-[11px] text-text focus:border-accent focus:outline-none w-48">
+          <option value="">Select symbiote...</option>
+        </select>
+      </div>
+      <button onclick="saveConfig()" class="bg-accent text-bg text-[11px] font-semibold px-3 py-1.5 rounded hover:opacity-90">Save</button>
+    </div>
+    <div id="config-form" class="p-6">
+      <div class="text-center text-text-dim text-xs py-10">Select a symbiote to configure.</div>
+    </div>
+  </div>
+
+  <!-- ──── API KEYS TAB ──── -->
+  <div id="tab-api-keys" class="tab-panel hidden">
+    <div class="px-6 py-4 border-b border-border bg-bg-card flex items-center justify-between">
+      <span class="font-sans text-sm font-semibold text-text-bright">API Keys</span>
+      <div class="flex items-center gap-3">
+        <input id="apikeys-tenant-filter" type="text" placeholder="Tenant ID..." class="bg-bg border border-border rounded px-2 py-1 text-[11px] text-text focus:border-accent focus:outline-none w-40">
+        <button onclick="loadApiKeys()" class="bg-bg-hover text-text text-[11px] px-3 py-1.5 rounded border border-border hover:border-accent">Filter</button>
+        <button onclick="showModal('create-apikey-modal')" class="bg-accent text-bg text-[11px] font-semibold px-3 py-1.5 rounded hover:opacity-90">+ Create</button>
+      </div>
+    </div>
+    <div id="apikeys-list" class="p-6"><div class="p-10 text-center text-text-dim text-xs">Enter a tenant ID and click Filter, or create a new key.</div></div>
+  </div>
+
+  <!-- ──── LOGS TAB ──── -->
+  <div id="tab-logs" class="tab-panel hidden flex flex-col h-[calc(100vh-110px)]">
+    <div class="px-6 py-3 border-b border-border bg-bg-card flex items-center gap-3 shrink-0">
+      <span class="font-sans text-sm font-semibold text-text-bright">Logs</span>
+      <select id="logs-level" onchange="loadLogs()" class="bg-bg border border-border rounded px-2 py-1 text-[11px] text-text focus:border-accent focus:outline-none">
+        <option value="">All levels</option>
+        <option value="DEBUG">DEBUG</option>
+        <option value="INFO">INFO</option>
+        <option value="WARNING">WARNING</option>
+        <option value="ERROR">ERROR</option>
+        <option value="WARNING,ERROR" selected>WARN+ERROR</option>
+      </select>
+      <input id="logs-search" type="text" placeholder="Search logs..." class="bg-bg border border-border rounded px-2 py-1 text-[11px] text-text focus:border-accent focus:outline-none w-48" onkeydown="if(event.key==='Enter')loadLogs()">
+      <select id="logs-logger" onchange="loadLogs()" class="bg-bg border border-border rounded px-2 py-1 text-[11px] text-text focus:border-accent focus:outline-none">
+        <option value="">All loggers</option>
+        <option value="symbiote">symbiote.*</option>
+        <option value="symbiote.runners">runners</option>
+        <option value="symbiote.core">core</option>
+        <option value="forge_llm">forge_llm</option>
+        <option value="httpx">httpx</option>
+        <option value="openai">openai</option>
+      </select>
+      <label class="flex items-center gap-1 text-[11px] text-text-dim ml-auto">
+        <input id="logs-auto" type="checkbox" checked class="accent-accent" onchange="toggleLogsAuto()"> Auto-refresh
+      </label>
+      <button onclick="loadLogs()" class="bg-bg-hover text-text text-[11px] px-3 py-1.5 rounded border border-border hover:border-accent">Refresh</button>
+      <button onclick="clearLogs()" class="text-red text-[11px] px-2 py-1.5 rounded border border-border hover:border-red">Clear</button>
+    </div>
+    <div id="logs-list" class="flex-1 overflow-y-auto font-mono text-[11px] leading-[1.6]">
+      <div class="p-10 text-center text-text-dim text-xs">Loading logs...</div>
+    </div>
+  </div>
+
 </main>
 
-<footer>
-  <span>Symbiote Kernel v0.2.3 &mdash; <a href="/docs">API Docs</a></span>
+<!-- ════════ FOOTER ════════ -->
+<footer class="bg-bg-card border-t border-border px-6 py-2 text-[10px] text-text-dim flex justify-between shrink-0">
+  <span>Symbiote Kernel &mdash; <a href="/docs" class="text-accent hover:underline">API Docs</a></span>
   <span id="last-refresh">-</span>
 </footer>
 
-<script>
-const $ = id => document.getElementById(id);
+<!-- ════════ MODALS ════════ -->
 
+<!-- Create Symbiote Modal -->
+<div id="create-symbiote-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
+  <div class="bg-bg-card border border-border rounded-lg w-[400px] shadow-2xl">
+    <div class="px-5 py-3 border-b border-border flex items-center justify-between">
+      <span class="font-sans text-sm font-semibold text-text-bright">Create Symbiote</span>
+      <button onclick="hideModal('create-symbiote-modal')" class="text-text-dim hover:text-text">&times;</button>
+    </div>
+    <div class="p-5 space-y-3">
+      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Name</label><input id="new-sym-name" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text-bright focus:border-accent focus:outline-none"></div>
+      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Role</label><input id="new-sym-role" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text-bright focus:border-accent focus:outline-none" placeholder="e.g. assistant, analyst"></div>
+      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Persona (JSON, optional)</label><textarea id="new-sym-persona" rows="3" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text-bright focus:border-accent focus:outline-none font-mono" placeholder='{"tone": "professional"}'></textarea></div>
+    </div>
+    <div class="px-5 py-3 border-t border-border flex justify-end gap-2">
+      <button onclick="hideModal('create-symbiote-modal')" class="text-text-dim text-[11px] px-3 py-1.5 rounded border border-border hover:bg-bg-hover">Cancel</button>
+      <button onclick="createSymbiote()" class="bg-accent text-bg text-[11px] font-semibold px-4 py-1.5 rounded hover:opacity-90">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create Session Modal -->
+<div id="create-session-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
+  <div class="bg-bg-card border border-border rounded-lg w-[400px] shadow-2xl">
+    <div class="px-5 py-3 border-b border-border flex items-center justify-between">
+      <span class="font-sans text-sm font-semibold text-text-bright">Create Session</span>
+      <button onclick="hideModal('create-session-modal')" class="text-text-dim hover:text-text">&times;</button>
+    </div>
+    <div class="p-5 space-y-3">
+      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Symbiote</label><select id="new-sess-symbiote" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text focus:border-accent focus:outline-none"></select></div>
+      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Goal (optional)</label><input id="new-sess-goal" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text-bright focus:border-accent focus:outline-none" placeholder="What should this session accomplish?"></div>
+    </div>
+    <div class="px-5 py-3 border-t border-border flex justify-end gap-2">
+      <button onclick="hideModal('create-session-modal')" class="text-text-dim text-[11px] px-3 py-1.5 rounded border border-border hover:bg-bg-hover">Cancel</button>
+      <button onclick="createSession()" class="bg-accent text-bg text-[11px] font-semibold px-4 py-1.5 rounded hover:opacity-90">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Discover Tools Modal -->
+<div id="discover-tools-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
+  <div class="bg-bg-card border border-border rounded-lg w-[450px] shadow-2xl">
+    <div class="px-5 py-3 border-b border-border flex items-center justify-between">
+      <span class="font-sans text-sm font-semibold text-text-bright">Discover Tools</span>
+      <button onclick="hideModal('discover-tools-modal')" class="text-text-dim hover:text-text">&times;</button>
+    </div>
+    <div class="p-5 space-y-3">
+      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Symbiote</label><select id="discover-symbiote" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text focus:border-accent focus:outline-none"></select></div>
+      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Source Path</label><input id="discover-path" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text-bright focus:border-accent focus:outline-none" placeholder="/path/to/project"></div>
+      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Server URL (optional, for /openapi.json)</label><input id="discover-url" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text-bright focus:border-accent focus:outline-none" placeholder="http://localhost:8000"></div>
+    </div>
+    <div class="px-5 py-3 border-t border-border flex justify-end gap-2">
+      <button onclick="hideModal('discover-tools-modal')" class="text-text-dim text-[11px] px-3 py-1.5 rounded border border-border hover:bg-bg-hover">Cancel</button>
+      <button onclick="discoverTools()" class="bg-blue text-white text-[11px] font-semibold px-4 py-1.5 rounded hover:opacity-90">Discover</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create API Key Modal -->
+<div id="create-apikey-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
+  <div class="bg-bg-card border border-border rounded-lg w-[400px] shadow-2xl">
+    <div class="px-5 py-3 border-b border-border flex items-center justify-between">
+      <span class="font-sans text-sm font-semibold text-text-bright">Create API Key</span>
+      <button onclick="hideModal('create-apikey-modal')" class="text-text-dim hover:text-text">&times;</button>
+    </div>
+    <div class="p-5 space-y-3">
+      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Tenant ID</label><input id="new-key-tenant" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text-bright focus:border-accent focus:outline-none"></div>
+      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Key Name</label><input id="new-key-name" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text-bright focus:border-accent focus:outline-none" placeholder="e.g. dev-key-1"></div>
+      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Role</label><select id="new-key-role" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text focus:border-accent focus:outline-none"><option value="user">user</option><option value="admin">admin</option></select></div>
+    </div>
+    <div class="px-5 py-3 border-t border-border flex justify-end gap-2">
+      <button onclick="hideModal('create-apikey-modal')" class="text-text-dim text-[11px] px-3 py-1.5 rounded border border-border hover:bg-bg-hover">Cancel</button>
+      <button onclick="createApiKey()" class="bg-accent text-bg text-[11px] font-semibold px-4 py-1.5 rounded hover:opacity-90">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════ JAVASCRIPT ════════ -->
+<script>
+// ── State ────────────────────────────────────────────────────────────────
+const state = {
+  symbiotes: [],
+  sessions: [],
+  chatSessionId: null,
+  chatMessages: [],
+  chatLoading: false,
+  refreshTimers: {},
+};
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+function $(id) { return document.getElementById(id); }
 function fmtDate(iso) {
   if (!iso) return '-';
   const d = new Date(iso);
-  const pad = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function fmtDateShort(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  const p = n => String(n).padStart(2, '0');
+  return `${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + '...' : (s || '-'); }
+
+function renderBadge(text, type) {
+  const styles = {
+    active: 'bg-[rgba(0,229,160,0.08)] text-accent border border-[rgba(0,229,160,0.2)]',
+    closed: 'bg-[rgba(90,90,114,0.08)] text-text-dim border border-border',
+    role: 'bg-[rgba(92,124,250,0.08)] text-blue border border-[rgba(92,124,250,0.2)]',
+    amber: 'bg-[rgba(240,180,41,0.08)] text-amber border border-[rgba(240,180,41,0.2)]',
+    red: 'bg-[rgba(240,83,101,0.08)] text-red border border-[rgba(240,83,101,0.2)]',
+    purple: 'bg-[rgba(177,151,252,0.08)] text-purple border border-[rgba(177,151,252,0.2)]',
+  };
+  return `<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium tracking-wide ${styles[type] || styles.closed}">${esc(text)}</span>`;
 }
 
-function badge(text, cls) {
-  return `<span class="badge badge-${cls}">${text}</span>`;
+function renderTable(headers, rows, opts = {}) {
+  if (rows.length === 0) return `<div class="py-10 text-center text-text-dim text-xs">${opts.empty || 'No data'}</div>`;
+  return `<table class="w-full border-collapse">
+    <thead><tr>${headers.map(h => `<th class="text-left px-5 py-2 text-[10px] uppercase tracking-wider text-text-dim font-medium border-b border-border bg-bg-card sticky top-0">${h}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r => `<tr class="hover:bg-bg-hover">${r.map(c => `<td class="px-5 py-2 border-b border-border text-[12px] whitespace-nowrap overflow-hidden text-ellipsis max-w-[200px]">${c}</td>`).join('')}</tr>`).join('')}</tbody>
+  </table>`;
 }
 
-async function toggleTool(symbioteId, toolId, currentStatus) {
-  const newStatus = currentStatus === 'approved' ? 'disabled' : 'approved';
-  try {
-    const resp = await fetch(`/symbiotes/${symbioteId}/discovered-tools/${toolId}`, {
-      method: 'PATCH',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({status: newStatus}),
-    });
-    if (!resp.ok) { console.error('Toggle failed', resp.status); return; }
-    // Refresh dashboard to reflect new state
-    await loadDashboard();
-  } catch (e) {
-    console.error('Toggle error:', e);
+// ── API helper ───────────────────────────────────────────────────────────
+function getApiKey() { return localStorage.getItem('symbiote_api_key') || ''; }
+function saveApiKey(v) { localStorage.setItem('symbiote_api_key', v); }
+function toggleKeyVisibility() {
+  const inp = $('api-key-input');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+}
+
+async function api(method, url, body) {
+  const headers = { 'Content-Type': 'application/json' };
+  const key = getApiKey();
+  if (key) headers['Authorization'] = `Bearer ${key}`;
+  const opts = { method, headers };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const resp = await fetch(url, opts);
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(err.detail || `HTTP ${resp.status}`);
+  }
+  return resp.json();
+}
+
+// ── Modal helpers ────────────────────────────────────────────────────────
+function showModal(id) { $(id).classList.remove('hidden'); }
+function hideModal(id) { $(id).classList.add('hidden'); }
+
+// ── Router ───────────────────────────────────────────────────────────────
+function getRoute() {
+  const hash = location.hash.slice(1) || 'dashboard';
+  return hash.split('/');
+}
+
+function navigate() {
+  const parts = getRoute();
+  const tab = parts[0];
+
+  // Clear all refresh timers
+  Object.values(state.refreshTimers).forEach(clearInterval);
+  state.refreshTimers = {};
+
+  // Hide all panels, show active
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
+  const panel = $(`tab-${tab}`);
+  if (panel) panel.classList.remove('hidden');
+
+  // Update tab bar
+  document.querySelectorAll('.tab-link').forEach(a => {
+    const isActive = a.dataset.tab === tab;
+    a.classList.toggle('text-accent', isActive);
+    a.classList.toggle('border-accent', isActive);
+    a.classList.toggle('text-text-dim', !isActive);
+    a.classList.toggle('border-transparent', !isActive);
+  });
+
+  // Load data for tab
+  switch (tab) {
+    case 'dashboard': loadDashboard(); state.refreshTimers.dash = setInterval(loadDashboard, 30000); break;
+    case 'symbiotes':
+      if (parts[1]) loadSymbioteDetail(parts[1]); else loadSymbiotes();
+      state.refreshTimers.sym = setInterval(() => { if (!parts[1]) loadSymbiotes(); }, 15000);
+      break;
+    case 'sessions':
+      if (parts[1]) loadSessionDetail(parts[1]); else loadSessions();
+      state.refreshTimers.sess = setInterval(() => { if (!parts[1]) loadSessions(); }, 15000);
+      break;
+    case 'chat': initChat(); break;
+    case 'tools': loadTools(); state.refreshTimers.tools = setInterval(loadTools, 15000); break;
+    case 'config': initConfig(); break;
+    case 'api-keys': break;
+    case 'logs': loadLogs(); toggleLogsAuto(); break;
   }
 }
 
+window.addEventListener('hashchange', navigate);
+
+// ── Init ─────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  // Restore API key
+  const saved = getApiKey();
+  if (saved) $('api-key-input').value = saved;
+
+  // Check health
+  checkHealth();
+  setInterval(checkHealth, 30000);
+
+  // Navigate to current hash
+  if (!location.hash) location.hash = '#dashboard';
+  else navigate();
+});
+
+async function checkHealth() {
+  try {
+    await fetch('/health').then(r => r.json());
+    $('status-dot').className = 'w-1.5 h-1.5 rounded-full bg-accent animate-pulse-slow';
+    $('status-text').textContent = 'online';
+  } catch {
+    $('status-dot').className = 'w-1.5 h-1.5 rounded-full bg-red';
+    $('status-text').textContent = 'offline';
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// DASHBOARD TAB
+// ══════════════════════════════════════════════════════════════════════════
+
 async function loadDashboard() {
   try {
-    // Health check
-    const health = await fetch('/health').then(r => r.json());
-    $('status-dot').className = 'status-dot online';
-    $('status-text').textContent = 'online';
-
-    // Dashboard data
     const data = await fetch('/api/dashboard').then(r => r.json());
+    const s = data.stats;
 
-    // Stats
-    $('stat-symbiotes').textContent = data.stats.symbiotes;
-    $('stat-sessions').textContent = data.stats.sessions;
-    $('stat-active').textContent = data.stats.sessions_active;
-    $('stat-memories').textContent = data.stats.memories;
-    $('stat-keys').textContent = data.stats.api_keys;
-    $('stat-tools').textContent = data.stats.discovered_tools || 0;
-    $('stat-pending').textContent = data.stats.pending_tools || 0;
+    $('stat-symbiotes').textContent = s.symbiotes;
+    $('stat-sessions').textContent = s.sessions;
+    $('stat-active').textContent = s.sessions_active;
+    $('stat-memories').textContent = s.memories;
+    $('stat-keys').textContent = s.api_keys;
+    $('stat-tools').textContent = s.discovered_tools || 0;
+    $('stat-pending').textContent = s.pending_tools || 0;
 
-    // Symbiotes table
-    $('sym-count').textContent = data.symbiotes.length;
-    if (data.symbiotes.length === 0) {
-      $('sym-table').innerHTML = '<div class="empty">No symbiotes registered</div>';
-    } else {
-      $('sym-table').innerHTML = `<table>
-        <thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Created</th></tr></thead>
-        <tbody>${data.symbiotes.map(s => `<tr>
-          <td style="color: var(--text-bright)">${s.name}</td>
-          <td>${badge(s.role, 'role')}</td>
-          <td>${badge(s.status, s.status === 'active' ? 'active' : 'closed')}</td>
-          <td class="ts">${fmtDate(s.created_at)}</td>
-        </tr>`).join('')}</tbody>
-      </table>`;
-    }
+    // Symbiotes
+    $('dash-sym-count').textContent = data.symbiotes.length;
+    $('dash-sym-table').innerHTML = renderTable(
+      ['Name', 'Role', 'Status', 'Created'],
+      data.symbiotes.map(s => [
+        `<a href="#symbiotes/${s.id}" class="text-text-bright hover:text-accent">${esc(s.name)}</a>`,
+        renderBadge(s.role, 'role'),
+        renderBadge(s.status, s.status === 'active' ? 'active' : 'closed'),
+        `<span class="text-text-dim text-[11px]">${fmtDate(s.created_at)}</span>`,
+      ]),
+      { empty: 'No symbiotes registered' }
+    );
 
-    // Sessions table
-    $('sess-count').textContent = data.sessions.length;
-    if (data.sessions.length === 0) {
-      $('sess-table').innerHTML = '<div class="empty">No sessions</div>';
-    } else {
-      $('sess-table').innerHTML = `<table>
-        <thead><tr><th>ID</th><th>Symbiote</th><th>Status</th><th>Goal</th></tr></thead>
-        <tbody>${data.sessions.map(s => `<tr>
-          <td style="color: var(--text-dim); font-size: 11px">${s.id.slice(0,8)}</td>
-          <td style="color: var(--text-bright)">${s.symbiote_name || '-'}</td>
-          <td>${badge(s.status, s.status === 'active' ? 'active' : 'closed')}</td>
-          <td style="color: var(--text-dim); max-width: 180px">${s.goal || '-'}</td>
-        </tr>`).join('')}</tbody>
-      </table>`;
-    }
+    // Sessions
+    $('dash-sess-count').textContent = data.sessions.length;
+    $('dash-sess-table').innerHTML = renderTable(
+      ['ID', 'Symbiote', 'Status', 'Goal'],
+      data.sessions.map(s => [
+        `<a href="#sessions/${s.id}" class="text-text-dim hover:text-accent text-[11px]">${s.id.slice(0,8)}</a>`,
+        `<span class="text-text-bright">${esc(s.symbiote_name || '-')}</span>`,
+        renderBadge(s.status, s.status === 'active' ? 'active' : 'closed'),
+        `<span class="text-text-dim">${esc(truncate(s.goal, 40))}</span>`,
+      ]),
+      { empty: 'No sessions' }
+    );
 
     // Tenants
-    $('tenant-count').textContent = data.tenants.length;
+    $('dash-tenant-count').textContent = data.tenants.length;
     if (data.tenants.length === 0) {
-      $('tenant-list').innerHTML = '<div class="empty">No API keys issued</div>';
+      $('dash-tenant-list').innerHTML = '<div class="py-10 text-center text-text-dim text-xs">No API keys issued</div>';
     } else {
-      $('tenant-list').innerHTML = `<div class="tenant-list">${data.tenants.map(t => `
-        <div class="tenant-card">
-          <div class="tenant-name">${t.tenant_id}</div>
-          <div class="tenant-keys">${t.key_count}<span class="label">keys</span></div>
+      $('dash-tenant-list').innerHTML = `<div class="p-4 space-y-2">${data.tenants.map(t => `
+        <div class="flex items-center justify-between px-4 py-2.5 bg-bg-card border border-border rounded">
+          <span class="text-[12px] text-text-bright">${esc(t.tenant_id)}</span>
+          <span class="text-lg font-semibold text-amber tabular-nums">${t.key_count}<span class="text-[10px] text-text-dim font-normal ml-1">keys</span></span>
         </div>
       `).join('')}</div>`;
     }
 
-    // Discovered Tools table
-    const tools = data.discovered_tools || [];
-    $('tools-count').textContent = tools.length;
-    if (tools.length === 0) {
-      $('tools-table').innerHTML = '<div class="empty">No tools discovered — run <code>symbiote discover .</code></div>';
-    } else {
-      $('tools-table').innerHTML = `<table>
-        <thead><tr><th>Tool ID</th><th>Symbiote</th><th>Method</th><th>Endpoint</th><th>Status</th><th>Action</th></tr></thead>
-        <tbody>${tools.map(t => `<tr id="tool-row-${t.tool_id}">
-          <td style="color: var(--text-bright); font-size: 11px">${t.tool_id}</td>
-          <td style="color: var(--text-dim)">${t.symbiote_name || t.symbiote_id.slice(0,8)}</td>
-          <td>${t.method ? `<span style="color:var(--accent)">${t.method}</span>` : '<span style="color:var(--text-dim)">cli</span>'}</td>
-          <td style="color: var(--text-dim); font-size: 11px; max-width: 180px; overflow: hidden; text-overflow: ellipsis">${t.url_template || '-'}</td>
-          <td id="tool-status-${t.tool_id}">${badge(t.status, t.status === 'approved' ? 'active' : t.status === 'disabled' ? 'closed' : 'role')}</td>
-          <td><button onclick="toggleTool('${t.symbiote_id}','${t.tool_id}','${t.status}')" style="font-size:11px;padding:3px 8px;cursor:pointer;background:var(--bg-hover);color:var(--text);border:1px solid var(--border);border-radius:4px">${t.status === 'approved' ? 'Disable' : 'Approve'}</button></td>
-        </tr>`).join('')}</tbody>
-      </table>`;
-    }
+    // Traces (from all symbiotes — use dashboard data or fetch separately)
+    try {
+      // We'll fetch traces from the first symbiote if available, or show empty
+      let allTraces = [];
+      for (const sym of data.symbiotes.slice(0, 5)) {
+        const traces = await fetch(`/api/symbiotes/${sym.id}/traces?limit=5`).then(r => r.json());
+        allTraces = allTraces.concat(traces.map(t => ({ ...t, symbiote_name: sym.name })));
+      }
+      allTraces.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+      allTraces = allTraces.slice(0, 10);
+
+      $('dash-trace-count').textContent = allTraces.length;
+      $('dash-trace-table').innerHTML = renderTable(
+        ['Symbiote', 'Iterations', 'Tool Calls', 'Elapsed', 'Stop', 'Time'],
+        allTraces.map(t => [
+          `<span class="text-text-bright">${esc(t.symbiote_name || t.symbiote_id?.slice(0,8))}</span>`,
+          `<span class="text-text-bright">${t.total_iterations || 0}</span>`,
+          `<span class="text-amber">${t.total_tool_calls || 0}</span>`,
+          `<span class="text-purple">${t.total_elapsed_ms ? (t.total_elapsed_ms/1000).toFixed(1) + 's' : '-'}</span>`,
+          renderBadge(t.stop_reason || '-', t.stop_reason === 'completed' ? 'active' : 'amber'),
+          `<span class="text-text-dim text-[11px]">${fmtDateShort(t.created_at)}</span>`,
+        ]),
+        { empty: 'No traces yet' }
+      );
+    } catch { $('dash-trace-table').innerHTML = '<div class="py-10 text-center text-text-dim text-xs">No traces</div>'; }
 
     $('last-refresh').textContent = 'refreshed ' + new Date().toLocaleTimeString();
   } catch (e) {
-    $('status-dot').className = 'status-dot offline';
-    $('status-text').textContent = 'error';
     console.error('Dashboard load failed:', e);
   }
 }
 
-// Initial load + auto-refresh every 30s
-loadDashboard();
-setInterval(loadDashboard, 30000);
+// ══════════════════════════════════════════════════════════════════════════
+// SYMBIOTES TAB
+// ══════════════════════════════════════════════════════════════════════════
+
+async function loadSymbiotes() {
+  $('symbiote-detail').classList.add('hidden');
+  $('symbiotes-list').classList.remove('hidden');
+  try {
+    state.symbiotes = await fetch('/api/symbiotes').then(r => r.json());
+    $('symbiotes-list').innerHTML = renderTable(
+      ['Name', 'Role', 'Status', 'Owner', 'Created', 'Actions'],
+      state.symbiotes.map(s => [
+        `<a href="#symbiotes/${s.id}" class="text-text-bright hover:text-accent font-medium">${esc(s.name)}</a>`,
+        renderBadge(s.role, 'role'),
+        renderBadge(s.status, s.status === 'active' ? 'active' : 'closed'),
+        `<span class="text-text-dim text-[11px]">${esc(truncate(s.owner_id, 12))}</span>`,
+        `<span class="text-text-dim text-[11px]">${fmtDate(s.created_at)}</span>`,
+        `<a href="#symbiotes/${s.id}" class="text-accent text-[11px] hover:underline">View</a>`,
+      ]),
+      { empty: 'No symbiotes — click Create to add one' }
+    );
+    updateSymbioteSelects(state.symbiotes);
+  } catch (e) {
+    $('symbiotes-list').innerHTML = `<div class="py-10 text-center text-red text-xs">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+async function loadSymbioteDetail(id) {
+  $('symbiotes-list').classList.add('hidden');
+  $('symbiote-detail').classList.remove('hidden');
+  const det = $('symbiote-detail');
+  det.innerHTML = '<div class="py-10 text-center text-text-dim text-xs">Loading...</div>';
+
+  try {
+    const sym = (await fetch('/api/symbiotes').then(r => r.json())).find(s => s.id === id);
+    if (!sym) { det.innerHTML = '<div class="py-10 text-center text-red text-xs">Symbiote not found</div>'; return; }
+
+    const [sessions, traces, scores] = await Promise.all([
+      fetch(`/api/sessions?symbiote_id=${id}&limit=20`).then(r => r.json()),
+      fetch(`/api/symbiotes/${id}/traces?limit=10`).then(r => r.json()),
+      fetch(`/api/symbiotes/${id}/scores?limit=10`).then(r => r.json()),
+    ]);
+
+    det.innerHTML = `
+      <div class="mb-4"><a href="#symbiotes" class="text-accent text-[11px] hover:underline">&larr; Back to list</a></div>
+      <div class="bg-bg-card border border-border rounded-lg p-5 mb-6">
+        <div class="flex items-center gap-3 mb-3">
+          <h2 class="font-sans text-lg font-semibold text-text-bright">${esc(sym.name)}</h2>
+          ${renderBadge(sym.role, 'role')} ${renderBadge(sym.status, sym.status === 'active' ? 'active' : 'closed')}
+        </div>
+        <div class="grid grid-cols-3 gap-4 text-[11px]">
+          <div><span class="text-text-dim">ID:</span> <span class="text-text-bright">${sym.id}</span></div>
+          <div><span class="text-text-dim">Owner:</span> <span class="text-text-bright">${esc(sym.owner_id || '-')}</span></div>
+          <div><span class="text-text-dim">Created:</span> <span class="text-text-bright">${fmtDate(sym.created_at)}</span></div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-6">
+        <div>
+          <h3 class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim mb-3">Sessions (${sessions.length})</h3>
+          ${renderTable(['ID', 'Status', 'Goal', 'Started'],
+            sessions.map(s => [
+              `<a href="#sessions/${s.id}" class="text-text-dim hover:text-accent text-[11px]">${s.id.slice(0,8)}</a>`,
+              renderBadge(s.status, s.status === 'active' ? 'active' : 'closed'),
+              `<span class="text-text-dim">${esc(truncate(s.goal, 30))}</span>`,
+              `<span class="text-text-dim text-[11px]">${fmtDateShort(s.started_at)}</span>`,
+            ]),
+            { empty: 'No sessions' }
+          )}
+        </div>
+        <div>
+          <h3 class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim mb-3">Traces (${traces.length})</h3>
+          ${renderTable(['Iterations', 'Tools', 'Elapsed', 'Stop', 'Time'],
+            traces.map(t => [
+              `<span class="text-text-bright">${t.total_iterations || 0}</span>`,
+              `<span class="text-amber">${t.total_tool_calls || 0}</span>`,
+              `<span class="text-purple">${t.total_elapsed_ms ? (t.total_elapsed_ms/1000).toFixed(1) + 's' : '-'}</span>`,
+              renderBadge(t.stop_reason || '-', t.stop_reason === 'completed' ? 'active' : 'amber'),
+              `<span class="text-text-dim text-[11px]">${fmtDateShort(t.created_at)}</span>`,
+            ]),
+            { empty: 'No traces' }
+          )}
+          <h3 class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim mb-3 mt-6">Scores (${scores.length})</h3>
+          ${renderTable(['Auto', 'User', 'Final', 'Stop', 'Time'],
+            scores.map(s => [
+              `<span class="text-accent">${s.auto_score != null ? s.auto_score.toFixed(2) : '-'}</span>`,
+              `<span class="text-amber">${s.user_score != null ? s.user_score.toFixed(2) : '-'}</span>`,
+              `<span class="text-text-bright font-semibold">${s.final_score != null ? s.final_score.toFixed(2) : '-'}</span>`,
+              renderBadge(s.stop_reason || '-', 'closed'),
+              `<span class="text-text-dim text-[11px]">${fmtDateShort(s.computed_at)}</span>`,
+            ]),
+            { empty: 'No scores' }
+          )}
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    det.innerHTML = `<div class="py-10 text-center text-red text-xs">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+async function createSymbiote() {
+  const name = $('new-sym-name').value.trim();
+  const role = $('new-sym-role').value.trim();
+  const personaStr = $('new-sym-persona').value.trim();
+  if (!name || !role) { alert('Name and role are required'); return; }
+  let persona = null;
+  if (personaStr) {
+    try { persona = JSON.parse(personaStr); } catch { alert('Invalid JSON for persona'); return; }
+  }
+  try {
+    await api('POST', '/symbiotes', { name, role, persona_json: persona });
+    hideModal('create-symbiote-modal');
+    $('new-sym-name').value = '';
+    $('new-sym-role').value = '';
+    $('new-sym-persona').value = '';
+    loadSymbiotes();
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+function updateSymbioteSelects(symbiotes) {
+  const selects = ['sessions-filter-symbiote', 'chat-symbiote', 'config-symbiote', 'new-sess-symbiote', 'discover-symbiote'];
+  selects.forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    const current = el.value;
+    const firstOpt = el.options[0];
+    el.innerHTML = '';
+    if (firstOpt) el.appendChild(firstOpt);
+    symbiotes.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = s.name;
+      el.appendChild(opt);
+    });
+    if (current) el.value = current;
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// SESSIONS TAB
+// ══════════════════════════════════════════════════════════════════════════
+
+async function loadSessions() {
+  $('session-detail').classList.add('hidden');
+  $('sessions-list').classList.remove('hidden');
+  try {
+    const symId = $('sessions-filter-symbiote').value;
+    const status = $('sessions-filter-status').value;
+    let url = '/api/sessions?limit=50';
+    if (symId) url += `&symbiote_id=${symId}`;
+    if (status) url += `&status=${status}`;
+    state.sessions = await fetch(url).then(r => r.json());
+
+    $('sessions-list').innerHTML = renderTable(
+      ['ID', 'Symbiote', 'Status', 'Goal', 'Started', 'Actions'],
+      state.sessions.map(s => [
+        `<a href="#sessions/${s.id}" class="text-text-dim hover:text-accent text-[11px]">${s.id.slice(0,8)}</a>`,
+        `<span class="text-text-bright">${esc(s.symbiote_name || '-')}</span>`,
+        renderBadge(s.status, s.status === 'active' ? 'active' : 'closed'),
+        `<span class="text-text-dim">${esc(truncate(s.goal, 40))}</span>`,
+        `<span class="text-text-dim text-[11px]">${fmtDate(s.started_at)}</span>`,
+        `<a href="#sessions/${s.id}" class="text-accent text-[11px] hover:underline">View</a>`,
+      ]),
+      { empty: 'No sessions found' }
+    );
+  } catch (e) {
+    $('sessions-list').innerHTML = `<div class="py-10 text-center text-red text-xs">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+async function loadSessionDetail(id) {
+  $('sessions-list').classList.add('hidden');
+  $('session-detail').classList.remove('hidden');
+  const det = $('session-detail');
+  det.innerHTML = '<div class="py-10 text-center text-text-dim text-xs">Loading...</div>';
+
+  try {
+    const [session, messages, traces, scores] = await Promise.all([
+      fetch(`/sessions/${id}`).then(r => r.json()).catch(() => null),
+      fetch(`/api/sessions/${id}/messages`).then(r => r.json()),
+      fetch(`/api/sessions/${id}/trace`).then(r => r.json()),
+      fetch(`/api/sessions/${id}/score`).then(r => r.json()),
+    ]);
+
+    det.innerHTML = `
+      <div class="mb-4 flex items-center gap-3">
+        <a href="#sessions" class="text-accent text-[11px] hover:underline">&larr; Back to list</a>
+        ${session && session.status === 'active' ? `<button onclick="closeSession('${id}')" class="ml-auto bg-red text-white text-[11px] font-semibold px-3 py-1 rounded hover:opacity-90">Close Session</button>` : ''}
+      </div>
+      <div class="bg-bg-card border border-border rounded-lg p-5 mb-6">
+        <div class="flex items-center gap-3 mb-3">
+          <h2 class="font-sans text-lg font-semibold text-text-bright">Session ${id.slice(0,8)}</h2>
+          ${session ? renderBadge(session.status, session.status === 'active' ? 'active' : 'closed') : ''}
+        </div>
+        <div class="grid grid-cols-3 gap-4 text-[11px]">
+          <div><span class="text-text-dim">Full ID:</span> <span class="text-text-bright">${id}</span></div>
+          <div><span class="text-text-dim">Symbiote:</span> <span class="text-text-bright">${session ? esc(session.symbiote_id) : '-'}</span></div>
+          <div><span class="text-text-dim">Goal:</span> <span class="text-text-bright">${session ? esc(session.goal || '-') : '-'}</span></div>
+          ${session?.summary ? `<div class="col-span-3"><span class="text-text-dim">Summary:</span> <span class="text-text-bright">${esc(session.summary)}</span></div>` : ''}
+        </div>
+      </div>
+
+      <div class="grid grid-cols-3 gap-6">
+        <div class="col-span-2">
+          <h3 class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim mb-3">Messages (${messages.length})</h3>
+          <div class="space-y-2 max-h-[50vh] overflow-y-auto">
+            ${messages.length === 0 ? '<div class="text-text-dim text-xs py-4">No messages</div>' :
+              messages.map(m => `
+                <div class="px-4 py-2.5 rounded ${m.role === 'user' ? 'bg-bg-card border border-border' : m.role === 'assistant' ? 'bg-[rgba(0,229,160,0.04)] border border-[rgba(0,229,160,0.1)]' : 'bg-[rgba(92,124,250,0.04)] border border-[rgba(92,124,250,0.1)]'}">
+                  <div class="text-[10px] uppercase tracking-wider mb-1 ${m.role === 'user' ? 'text-amber' : m.role === 'assistant' ? 'text-accent' : 'text-blue'}">${m.role} <span class="text-text-dim font-normal">${fmtDateShort(m.created_at)}</span></div>
+                  <div class="text-[12px] text-text-bright whitespace-pre-wrap break-words">${esc(m.content)}</div>
+                </div>
+              `).join('')}
+          </div>
+        </div>
+        <div>
+          <h3 class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim mb-3">Traces (${traces.length})</h3>
+          ${traces.length === 0 ? '<div class="text-text-dim text-xs py-4">No traces</div>' :
+            traces.map(t => `
+              <div class="bg-bg-card border border-border rounded p-3 mb-2 text-[11px]">
+                <div class="flex justify-between mb-1"><span class="text-text-dim">Iterations:</span><span class="text-text-bright">${t.total_iterations}</span></div>
+                <div class="flex justify-between mb-1"><span class="text-text-dim">Tool calls:</span><span class="text-amber">${t.total_tool_calls}</span></div>
+                <div class="flex justify-between mb-1"><span class="text-text-dim">Elapsed:</span><span class="text-purple">${t.total_elapsed_ms ? (t.total_elapsed_ms/1000).toFixed(1) + 's' : '-'}</span></div>
+                <div class="flex justify-between"><span class="text-text-dim">Stop:</span>${renderBadge(t.stop_reason || '-', t.stop_reason === 'completed' ? 'active' : 'amber')}</div>
+                ${t.steps_json ? `<details class="mt-2"><summary class="text-accent cursor-pointer text-[10px]">Steps JSON</summary><pre class="mt-1 text-[10px] text-text-dim overflow-x-auto max-h-40 overflow-y-auto">${esc(typeof t.steps_json === 'string' ? t.steps_json : JSON.stringify(JSON.parse(t.steps_json), null, 2))}</pre></details>` : ''}
+              </div>
+            `).join('')}
+          <h3 class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim mb-3 mt-4">Scores (${scores.length})</h3>
+          ${scores.length === 0 ? '<div class="text-text-dim text-xs py-4">No scores</div>' :
+            scores.map(s => `
+              <div class="bg-bg-card border border-border rounded p-3 mb-2 text-[11px]">
+                <div class="flex justify-between mb-1"><span class="text-text-dim">Auto:</span><span class="text-accent">${s.auto_score != null ? s.auto_score.toFixed(2) : '-'}</span></div>
+                <div class="flex justify-between mb-1"><span class="text-text-dim">User:</span><span class="text-amber">${s.user_score != null ? s.user_score.toFixed(2) : '-'}</span></div>
+                <div class="flex justify-between mb-1"><span class="text-text-dim">Final:</span><span class="text-text-bright font-semibold">${s.final_score != null ? s.final_score.toFixed(2) : '-'}</span></div>
+                <div class="flex justify-between"><span class="text-text-dim">Time:</span><span class="text-text-dim">${fmtDateShort(s.computed_at)}</span></div>
+              </div>
+            `).join('')}
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    det.innerHTML = `<div class="py-10 text-center text-red text-xs">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+async function createSession() {
+  const symbioteId = $('new-sess-symbiote').value;
+  const goal = $('new-sess-goal').value.trim();
+  if (!symbioteId) { alert('Select a symbiote'); return; }
+  try {
+    const sess = await api('POST', '/sessions', { symbiote_id: symbioteId, goal: goal || null });
+    hideModal('create-session-modal');
+    $('new-sess-goal').value = '';
+    location.hash = `#sessions/${sess.id}`;
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+async function closeSession(id) {
+  try {
+    await api('POST', `/sessions/${id}/close`);
+    loadSessionDetail(id);
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// CHAT TAB
+// ══════════════════════════════════════════════════════════════════════════
+
+async function initChat() {
+  // Load symbiotes for dropdown
+  try {
+    const syms = await fetch('/api/symbiotes').then(r => r.json());
+    state.symbiotes = syms;
+    updateSymbioteSelects(syms);
+  } catch {}
+}
+
+async function onChatSymbioteChange() {
+  const symId = $('chat-symbiote').value;
+  const sessSelect = $('chat-session');
+  sessSelect.innerHTML = '<option value="">New session</option>';
+  if (!symId) return;
+
+  try {
+    const sessions = await fetch(`/api/sessions?symbiote_id=${symId}&status=active&limit=20`).then(r => r.json());
+    sessions.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = `${s.id.slice(0,8)} — ${s.goal || 'no goal'}`;
+      sessSelect.appendChild(opt);
+    });
+  } catch {}
+}
+
+async function startChatSession() {
+  const symId = $('chat-symbiote').value;
+  if (!symId) { alert('Select a symbiote'); return; }
+
+  let sessId = $('chat-session').value;
+  if (!sessId) {
+    // Create new session
+    try {
+      const sess = await api('POST', '/sessions', { symbiote_id: symId, goal: 'Chat session' });
+      sessId = sess.id;
+      // Add to dropdown
+      const opt = document.createElement('option');
+      opt.value = sessId;
+      opt.textContent = `${sessId.slice(0,8)} — Chat session`;
+      $('chat-session').appendChild(opt);
+      $('chat-session').value = sessId;
+    } catch (e) {
+      alert('Error creating session: ' + e.message);
+      return;
+    }
+  }
+
+  state.chatSessionId = sessId;
+  $('chat-input').disabled = false;
+  $('chat-send-btn').disabled = false;
+
+  // Load existing messages
+  try {
+    const msgs = await fetch(`/api/sessions/${sessId}/messages`).then(r => r.json());
+    state.chatMessages = msgs;
+    renderChatMessages();
+  } catch {
+    state.chatMessages = [];
+    renderChatMessages();
+  }
+
+  // Load config to show mode badge
+  try {
+    const sym = state.symbiotes.find(s => s.id === symId);
+    if (sym) {
+      const cfg = await api('GET', `/symbiotes/${symId}/config`);
+      $('chat-mode-badge').innerHTML = renderBadge(cfg.tool_mode || 'brief', cfg.tool_mode === 'long_run' ? 'purple' : cfg.tool_mode === 'continuous' ? 'red' : 'active');
+    }
+  } catch {}
+}
+
+function renderChatMessages() {
+  const container = $('chat-messages');
+  if (state.chatMessages.length === 0) {
+    container.innerHTML = '<div class="text-center text-text-dim text-xs py-10">No messages yet. Start typing below.</div>';
+    return;
+  }
+  container.innerHTML = state.chatMessages.map(m => {
+    const isUser = m.role === 'user';
+    const isSystem = m.role === 'system';
+    let content = esc(m.content);
+
+    // Try to detect tool call blocks in assistant messages
+    if (m.role === 'assistant' && m.content.includes('"tool_calls"')) {
+      try {
+        const parsed = JSON.parse(m.content);
+        if (parsed.tool_calls) {
+          content = `<div class="mb-2">${esc(parsed.response || parsed.content || '')}</div>`;
+          content += parsed.tool_calls.map(tc => `
+            <details class="mt-1 bg-bg rounded border border-border">
+              <summary class="px-3 py-1.5 cursor-pointer text-[10px] text-blue hover:text-accent">
+                Tool: ${esc(tc.tool_id || tc.name || 'unknown')} ${tc.success !== undefined ? (tc.success ? '&#10003;' : '&#10007;') : ''}
+              </summary>
+              <pre class="px-3 py-2 text-[10px] text-text-dim overflow-x-auto">${esc(JSON.stringify(tc, null, 2))}</pre>
+            </details>
+          `).join('');
+        }
+      } catch { /* not JSON, keep as text */ }
+    }
+
+    return `
+      <div class="flex ${isUser ? 'justify-end' : 'justify-start'}">
+        <div class="max-w-[80%] px-4 py-2.5 rounded-lg ${
+          isUser ? 'bg-bg-card border border-border' :
+          isSystem ? 'bg-[rgba(92,124,250,0.06)] border border-[rgba(92,124,250,0.15)]' :
+          'bg-[rgba(0,229,160,0.04)] border border-[rgba(0,229,160,0.1)]'
+        }">
+          <div class="text-[10px] uppercase tracking-wider mb-1 ${isUser ? 'text-amber' : isSystem ? 'text-blue' : 'text-accent'}">${m.role}</div>
+          <div class="text-[12px] text-text-bright whitespace-pre-wrap break-words">${content}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+  container.scrollTop = container.scrollHeight;
+}
+
+async function sendChat() {
+  if (!state.chatSessionId || state.chatLoading) return;
+  const input = $('chat-input');
+  const content = input.value.trim();
+  if (!content) return;
+
+  // Add user message locally
+  state.chatMessages.push({ role: 'user', content, created_at: new Date().toISOString() });
+  renderChatMessages();
+  input.value = '';
+
+  // Show loading
+  state.chatLoading = true;
+  $('chat-send-btn').disabled = true;
+  $('chat-send-btn').textContent = '...';
+
+  // Add loading indicator
+  const loadingDiv = document.createElement('div');
+  loadingDiv.className = 'flex justify-start';
+  loadingDiv.innerHTML = `<div class="px-4 py-3 rounded-lg bg-[rgba(0,229,160,0.04)] border border-[rgba(0,229,160,0.1)]">
+    <div class="flex items-center gap-2 text-accent text-[11px]">
+      <div class="w-3 h-3 border-2 border-accent/30 border-t-accent rounded-full animate-spin"></div>
+      Thinking...
+    </div>
+  </div>`;
+  $('chat-messages').appendChild(loadingDiv);
+  $('chat-messages').scrollTop = $('chat-messages').scrollHeight;
+
+  try {
+    const resp = await api('POST', `/sessions/${state.chatSessionId}/chat`, { content });
+    // Remove loading indicator
+    loadingDiv.remove();
+
+    // Add assistant response
+    const respContent = typeof resp.response === 'string' ? resp.response : JSON.stringify(resp.response);
+    state.chatMessages.push({ role: 'assistant', content: respContent, created_at: new Date().toISOString() });
+    renderChatMessages();
+
+    // Fetch trace for this session to show tool calls
+    try {
+      const traces = await fetch(`/api/sessions/${state.chatSessionId}/trace`).then(r => r.json());
+      if (traces.length > 0) {
+        const latest = traces[0];
+        if (latest.steps_json) {
+          let steps;
+          try { steps = typeof latest.steps_json === 'string' ? JSON.parse(latest.steps_json) : latest.steps_json; } catch { steps = null; }
+          if (steps && Array.isArray(steps) && steps.length > 0) {
+            const toolDiv = document.createElement('div');
+            toolDiv.className = 'flex justify-start';
+            toolDiv.innerHTML = `<div class="max-w-[80%]">
+              <details class="bg-bg rounded border border-border">
+                <summary class="px-3 py-1.5 cursor-pointer text-[10px] text-purple hover:text-accent">
+                  Trace: ${latest.total_iterations} iterations, ${latest.total_tool_calls} tool calls, ${latest.total_elapsed_ms ? (latest.total_elapsed_ms/1000).toFixed(1) + 's' : '-'}
+                </summary>
+                <pre class="px-3 py-2 text-[10px] text-text-dim overflow-x-auto max-h-60 overflow-y-auto">${esc(JSON.stringify(steps, null, 2))}</pre>
+              </details>
+            </div>`;
+            $('chat-messages').appendChild(toolDiv);
+            $('chat-messages').scrollTop = $('chat-messages').scrollHeight;
+          }
+        }
+      }
+    } catch {}
+  } catch (e) {
+    loadingDiv.remove();
+    state.chatMessages.push({ role: 'system', content: `Error: ${e.message}`, created_at: new Date().toISOString() });
+    renderChatMessages();
+  } finally {
+    state.chatLoading = false;
+    $('chat-send-btn').disabled = false;
+    $('chat-send-btn').textContent = 'Send';
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// TOOLS TAB
+// ══════════════════════════════════════════════════════════════════════════
+
+async function loadTools() {
+  try {
+    const data = await fetch('/api/dashboard').then(r => r.json());
+    const tools = data.discovered_tools || [];
+
+    if (tools.length === 0) {
+      $('tools-list').innerHTML = '<div class="py-10 text-center text-text-dim text-xs">No tools discovered. Use the "Discover from URL" button or run <code>symbiote discover .</code></div>';
+      return;
+    }
+
+    $('tools-list').innerHTML = `<div class="space-y-2">${tools.map(t => `
+      <div class="bg-bg-card border border-border rounded-lg overflow-hidden">
+        <div class="px-5 py-3 flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <span class="text-text-bright font-medium text-[12px]">${esc(t.name || t.tool_id)}</span>
+            ${t.method ? `<span class="text-accent text-[10px] font-semibold">${t.method}</span>` : ''}
+            ${renderBadge(t.status, t.status === 'approved' ? 'active' : t.status === 'disabled' ? 'closed' : 'amber')}
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="toggleToolStatus('${t.symbiote_id}', '${t.tool_id}', '${t.status}')"
+              class="text-[11px] px-3 py-1 rounded border ${t.status === 'approved' ? 'border-red text-red hover:bg-red hover:text-white' : 'border-accent text-accent hover:bg-accent hover:text-bg'} transition-colors">
+              ${t.status === 'approved' ? 'Disable' : 'Approve'}
+            </button>
+          </div>
+        </div>
+        <details>
+          <summary class="px-5 py-1.5 text-[10px] text-text-dim cursor-pointer hover:text-accent border-t border-border bg-bg">Details</summary>
+          <div class="px-5 py-3 bg-bg text-[11px] space-y-1">
+            <div><span class="text-text-dim">Tool ID:</span> <span class="text-text-bright">${esc(t.tool_id)}</span></div>
+            <div><span class="text-text-dim">Symbiote:</span> <span class="text-text-bright">${esc(t.symbiote_name || t.symbiote_id)}</span></div>
+            ${t.url_template ? `<div><span class="text-text-dim">Endpoint:</span> <span class="text-text-bright">${esc(t.url_template)}</span></div>` : ''}
+            ${t.source_path ? `<div><span class="text-text-dim">Source:</span> <span class="text-text-bright">${esc(t.source_path)}</span></div>` : ''}
+            <div><span class="text-text-dim">Discovered:</span> <span class="text-text-bright">${fmtDate(t.discovered_at)}</span></div>
+            ${t.approved_at ? `<div><span class="text-text-dim">Approved:</span> <span class="text-text-bright">${fmtDate(t.approved_at)}</span></div>` : ''}
+          </div>
+        </details>
+      </div>
+    `).join('')}</div>`;
+  } catch (e) {
+    $('tools-list').innerHTML = `<div class="py-10 text-center text-red text-xs">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+async function toggleToolStatus(symbioteId, toolId, currentStatus) {
+  const newStatus = currentStatus === 'approved' ? 'disabled' : 'approved';
+  try {
+    await api('PATCH', `/symbiotes/${symbioteId}/discovered-tools/${toolId}`, { status: newStatus });
+    loadTools();
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+async function discoverTools() {
+  const symId = $('discover-symbiote').value;
+  const path = $('discover-path').value.trim();
+  const url = $('discover-url').value.trim();
+  if (!symId || !path) { alert('Symbiote and source path are required'); return; }
+  try {
+    const result = await api('POST', `/symbiotes/${symId}/discover`, { source_path: path, url: url || null });
+    hideModal('discover-tools-modal');
+    alert(`Discovered ${result.discovered} tools${result.errors.length ? ` (${result.errors.length} errors)` : ''}`);
+    loadTools();
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// CONFIG TAB
+// ══════════════════════════════════════════════════════════════════════════
+
+async function initConfig() {
+  try {
+    const syms = await fetch('/api/symbiotes').then(r => r.json());
+    state.symbiotes = syms;
+    updateSymbioteSelects(syms);
+  } catch {}
+}
+
+async function loadConfig() {
+  const symId = $('config-symbiote').value;
+  if (!symId) {
+    $('config-form').innerHTML = '<div class="text-center text-text-dim text-xs py-10">Select a symbiote to configure.</div>';
+    return;
+  }
+
+  try {
+    const cfg = await api('GET', `/symbiotes/${symId}/config`);
+    $('config-form').innerHTML = `
+      <div class="grid grid-cols-2 gap-6">
+        <div class="space-y-4">
+          <h3 class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim">Execution</h3>
+
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Tool Mode</label>
+            <select id="cfg-tool-mode" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text focus:border-accent focus:outline-none">
+              <option value="instant" ${cfg.tool_mode === 'instant' ? 'selected' : ''}>instant</option>
+              <option value="brief" ${cfg.tool_mode === 'brief' ? 'selected' : ''}>brief</option>
+              <option value="long_run" ${cfg.tool_mode === 'long_run' ? 'selected' : ''}>long_run</option>
+              <option value="continuous" ${cfg.tool_mode === 'continuous' ? 'selected' : ''}>continuous</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Tool Loading</label>
+            <select id="cfg-tool-loading" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text focus:border-accent focus:outline-none">
+              <option value="full" ${cfg.tool_loading === 'full' ? 'selected' : ''}>full</option>
+              <option value="index" ${cfg.tool_loading === 'index' ? 'selected' : ''}>index</option>
+              <option value="semantic" ${cfg.tool_loading === 'semantic' ? 'selected' : ''}>semantic</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Context Mode</label>
+            <select id="cfg-context-mode" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text focus:border-accent focus:outline-none">
+              <option value="packed" ${cfg.context_mode === 'packed' ? 'selected' : ''}>packed</option>
+              <option value="on_demand" ${cfg.context_mode === 'on_demand' ? 'selected' : ''}>on_demand</option>
+            </select>
+          </div>
+
+          <h3 class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim pt-4">Timeouts &amp; Limits</h3>
+
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Max Tool Iterations <span class="text-text-bright">${cfg.max_tool_iterations}</span></label>
+            <input id="cfg-max-iterations" type="range" min="1" max="50" value="${cfg.max_tool_iterations}" class="w-full accent-accent" oninput="this.previousElementSibling.querySelector('span').textContent=this.value">
+          </div>
+
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Tool Call Timeout (s) <span class="text-text-bright">${cfg.tool_call_timeout}</span></label>
+            <input id="cfg-tool-timeout" type="range" min="1" max="300" value="${cfg.tool_call_timeout}" class="w-full accent-accent" oninput="this.previousElementSibling.querySelector('span').textContent=this.value">
+          </div>
+
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Loop Timeout (s) <span class="text-text-bright">${cfg.loop_timeout}</span></label>
+            <input id="cfg-loop-timeout" type="range" min="10" max="3600" step="10" value="${cfg.loop_timeout}" class="w-full accent-accent" oninput="this.previousElementSibling.querySelector('span').textContent=this.value">
+          </div>
+
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Memory Share <span class="text-text-bright">${cfg.memory_share}</span></label>
+            <input id="cfg-memory-share" type="range" min="0" max="1" step="0.05" value="${cfg.memory_share}" class="w-full accent-accent" oninput="this.previousElementSibling.querySelector('span').textContent=parseFloat(this.value).toFixed(2)">
+          </div>
+
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Knowledge Share <span class="text-text-bright">${cfg.knowledge_share}</span></label>
+            <input id="cfg-knowledge-share" type="range" min="0" max="1" step="0.05" value="${cfg.knowledge_share}" class="w-full accent-accent" oninput="this.previousElementSibling.querySelector('span').textContent=parseFloat(this.value).toFixed(2)">
+          </div>
+        </div>
+
+        <div class="space-y-4" id="cfg-longrun-panel">
+          <h3 class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim">Long-Run Configuration</h3>
+
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Context Strategy</label>
+            <select id="cfg-context-strategy" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text focus:border-accent focus:outline-none">
+              <option value="compaction" ${cfg.context_strategy === 'compaction' ? 'selected' : ''}>compaction</option>
+              <option value="reset" ${cfg.context_strategy === 'reset' ? 'selected' : ''}>reset</option>
+              <option value="hybrid" ${cfg.context_strategy === 'hybrid' ? 'selected' : ''}>hybrid</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Max Blocks <span class="text-text-bright">${cfg.max_blocks}</span></label>
+            <input id="cfg-max-blocks" type="range" min="1" max="100" value="${cfg.max_blocks}" class="w-full accent-accent" oninput="this.previousElementSibling.querySelector('span').textContent=this.value">
+          </div>
+
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Planner Prompt</label>
+            <textarea id="cfg-planner-prompt" rows="5" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[11px] text-text-bright focus:border-accent focus:outline-none">${esc(cfg.planner_prompt || '')}</textarea>
+          </div>
+
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Evaluator Prompt</label>
+            <textarea id="cfg-evaluator-prompt" rows="5" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[11px] text-text-bright focus:border-accent focus:outline-none">${esc(cfg.evaluator_prompt || '')}</textarea>
+          </div>
+
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Evaluator Criteria (JSON array)</label>
+            <textarea id="cfg-evaluator-criteria" rows="4" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[11px] text-text-bright focus:border-accent focus:outline-none font-mono">${cfg.evaluator_criteria ? JSON.stringify(cfg.evaluator_criteria, null, 2) : ''}</textarea>
+          </div>
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    $('config-form').innerHTML = `<div class="py-10 text-center text-red text-xs">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+async function saveConfig() {
+  const symId = $('config-symbiote').value;
+  if (!symId) { alert('Select a symbiote first'); return; }
+
+  const body = {
+    tool_mode: $('cfg-tool-mode')?.value,
+    tool_loading: $('cfg-tool-loading')?.value,
+    context_mode: $('cfg-context-mode')?.value,
+    max_tool_iterations: parseInt($('cfg-max-iterations')?.value),
+    tool_call_timeout: parseFloat($('cfg-tool-timeout')?.value),
+    loop_timeout: parseFloat($('cfg-loop-timeout')?.value),
+    memory_share: parseFloat($('cfg-memory-share')?.value),
+    knowledge_share: parseFloat($('cfg-knowledge-share')?.value),
+    context_strategy: $('cfg-context-strategy')?.value,
+    max_blocks: parseInt($('cfg-max-blocks')?.value),
+    planner_prompt: $('cfg-planner-prompt')?.value || null,
+    evaluator_prompt: $('cfg-evaluator-prompt')?.value || null,
+  };
+
+  // Parse evaluator criteria
+  const criteriaStr = $('cfg-evaluator-criteria')?.value?.trim();
+  if (criteriaStr) {
+    try { body.evaluator_criteria = JSON.parse(criteriaStr); } catch { alert('Invalid JSON for evaluator criteria'); return; }
+  }
+
+  try {
+    await api('PUT', `/symbiotes/${symId}/config`, body);
+    alert('Configuration saved');
+    loadConfig();
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// API KEYS TAB
+// ══════════════════════════════════════════════════════════════════════════
+
+async function loadApiKeys() {
+  const tenantId = $('apikeys-tenant-filter').value.trim();
+  if (!tenantId) { alert('Enter a tenant ID'); return; }
+
+  try {
+    const keys = await api('GET', `/admin/api-keys/${tenantId}`);
+    $('apikeys-list').innerHTML = renderTable(
+      ['Name', 'Prefix', 'Role', 'Status', 'Created', 'Actions'],
+      keys.map(k => [
+        `<span class="text-text-bright">${esc(k.name)}</span>`,
+        `<span class="text-text-dim text-[11px] font-mono">${esc(k.key_prefix)}...</span>`,
+        renderBadge(k.role, k.role === 'admin' ? 'amber' : 'role'),
+        renderBadge(k.is_active !== false ? 'active' : 'revoked', k.is_active !== false ? 'active' : 'red'),
+        `<span class="text-text-dim text-[11px]">${fmtDate(k.created_at)}</span>`,
+        k.is_active !== false ? `<button onclick="revokeApiKey('${k.id}')" class="text-red text-[11px] hover:underline">Revoke</button>` : '<span class="text-text-dim text-[11px]">-</span>',
+      ]),
+      { empty: 'No API keys for this tenant' }
+    );
+  } catch (e) {
+    $('apikeys-list').innerHTML = `<div class="py-10 text-center text-red text-xs">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+async function createApiKey() {
+  const tenantId = $('new-key-tenant').value.trim();
+  const name = $('new-key-name').value.trim();
+  const role = $('new-key-role').value;
+  if (!tenantId || !name) { alert('Tenant ID and name are required'); return; }
+
+  try {
+    const result = await api('POST', '/admin/api-keys', { tenant_id: tenantId, name, role });
+    hideModal('create-apikey-modal');
+    $('new-key-tenant').value = '';
+    $('new-key-name').value = '';
+
+    // Show the raw key prominently
+    $('apikeys-list').innerHTML = `
+      <div class="bg-[rgba(0,229,160,0.06)] border border-accent rounded-lg p-5 mb-6">
+        <div class="font-sans text-sm font-semibold text-accent mb-2">API Key Created!</div>
+        <div class="text-[11px] text-text-dim mb-2">Copy this key now — it won't be shown again.</div>
+        <div class="bg-bg border border-border rounded px-4 py-2 font-mono text-[12px] text-text-bright select-all">${esc(result.raw_key)}</div>
+        <div class="mt-3 text-[11px] text-text-dim">Name: ${esc(result.name)} | Role: ${esc(result.role)} | Tenant: ${esc(result.tenant_id)}</div>
+      </div>
+    `;
+
+    // Set tenant filter and auto-load
+    $('apikeys-tenant-filter').value = tenantId;
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+async function revokeApiKey(keyId) {
+  if (!confirm('Revoke this API key? This cannot be undone.')) return;
+  try {
+    await api('DELETE', `/admin/api-keys/${keyId}`);
+    loadApiKeys();
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// LOGS TAB
+// ══════════════════════════════════════════════════════════════════════════
+
+const _levelColors = {
+  DEBUG: 'text-text-dim',
+  INFO: 'text-blue',
+  WARNING: 'text-amber',
+  ERROR: 'text-red',
+  CRITICAL: 'text-red font-bold',
+};
+
+async function loadLogs() {
+  try {
+    const level = $('logs-level').value;
+    const search = $('logs-search').value.trim();
+    const logger = $('logs-logger').value;
+    let url = '/api/logs?limit=500';
+    if (level) url += `&level=${encodeURIComponent(level)}`;
+    if (search) url += `&search=${encodeURIComponent(search)}`;
+    if (logger) url += `&logger=${encodeURIComponent(logger)}`;
+    const logs = await fetch(url).then(r => r.json());
+
+    if (logs.length === 0) {
+      $('logs-list').innerHTML = '<div class="p-10 text-center text-text-dim text-xs">No log entries matching filters.</div>';
+      return;
+    }
+
+    const container = $('logs-list');
+    const wasAtBottom = container.scrollTop >= container.scrollHeight - container.clientHeight - 50;
+
+    container.innerHTML = `<table class="w-full border-collapse">
+      <thead><tr>
+        <th class="text-left px-3 py-1.5 text-[10px] uppercase tracking-wider text-text-dim font-medium border-b border-border bg-bg-card sticky top-0 w-20">Time</th>
+        <th class="text-left px-3 py-1.5 text-[10px] uppercase tracking-wider text-text-dim font-medium border-b border-border bg-bg-card sticky top-0 w-16">Level</th>
+        <th class="text-left px-3 py-1.5 text-[10px] uppercase tracking-wider text-text-dim font-medium border-b border-border bg-bg-card sticky top-0 w-40">Logger</th>
+        <th class="text-left px-3 py-1.5 text-[10px] uppercase tracking-wider text-text-dim font-medium border-b border-border bg-bg-card sticky top-0">Message</th>
+      </tr></thead>
+      <tbody>${logs.map(l => `<tr class="hover:bg-bg-hover ${l.level === 'ERROR' || l.level === 'CRITICAL' ? 'bg-[rgba(240,83,101,0.04)]' : l.level === 'WARNING' ? 'bg-[rgba(240,180,41,0.03)]' : ''}">
+        <td class="px-3 py-1 border-b border-border text-text-dim whitespace-nowrap">${l.time}</td>
+        <td class="px-3 py-1 border-b border-border whitespace-nowrap ${_levelColors[l.level] || 'text-text'}">${l.level}</td>
+        <td class="px-3 py-1 border-b border-border text-purple whitespace-nowrap overflow-hidden text-ellipsis max-w-[200px]" title="${esc(l.logger)}">${esc(l.logger.replace('symbiote.', 's.'))}</td>
+        <td class="px-3 py-1 border-b border-border text-text-bright whitespace-pre-wrap break-all">${esc(l.message)}</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+
+    // Auto-scroll to bottom if was at bottom
+    if (wasAtBottom) container.scrollTop = container.scrollHeight;
+  } catch (e) {
+    $('logs-list').innerHTML = `<div class="p-10 text-center text-red text-xs">Error loading logs: ${esc(e.message)}</div>`;
+  }
+}
+
+function toggleLogsAuto() {
+  clearInterval(state.refreshTimers.logs);
+  if ($('logs-auto')?.checked && getRoute()[0] === 'logs') {
+    state.refreshTimers.logs = setInterval(loadLogs, 2000);
+  }
+}
+
+function clearLogs() {
+  $('logs-list').innerHTML = '<div class="p-10 text-center text-text-dim text-xs">Logs cleared (server buffer persists).</div>';
+}
 </script>
 </body>
 </html>

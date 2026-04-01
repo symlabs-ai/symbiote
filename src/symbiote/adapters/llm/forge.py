@@ -44,13 +44,15 @@ class ForgeLLMAdapter:
             if base_url is None:
                 base_url = os.environ.get(f"{prefix}_BASE_URL")
 
-            kwargs: dict = {"provider": provider}
+            kwargs: dict = {"provider": provider, "max_retries": 0}
             if model is not None:
                 kwargs["model"] = model
             if api_key is not None:
                 kwargs["api_key"] = api_key
             if base_url is not None:
                 kwargs["base_url"] = base_url
+            # Inject project slug for symgateway routing
+            kwargs["extra"] = {"project_slug": "symbiote"}
             self._agent = ChatAgent(**kwargs)
         except Exception as exc:
             raise LLMError(str(exc)) from exc

@@ -773,13 +773,21 @@ class ChatRunner:
 
     @staticmethod
     def _is_retryable_error(exc: Exception) -> bool:
-        """Return True if *exc* is a transient error worth retrying."""
+        """Return True if *exc* is a transient error worth retrying.
+
+        429 rate-limit errors are NOT retried here — the OpenAI SDK already
+        retries them internally, so a second layer only amplifies the problem.
+        Rate limits should surface immediately to the caller.
+        """
         if isinstance(exc, ValueError | TypeError | KeyError):
             return False
         if isinstance(exc, ConnectionError | TimeoutError | OSError):
             return True
         msg = str(exc).lower()
-        return any(kw in msg for kw in ("rate limit", "429", "503", "502", "timeout"))
+        # Exclude 429 — rate limits must not be retried at this layer
+        if "429" in msg or "rate limit" in msg or "rate_limit" in msg:
+            return False
+        return any(kw in msg for kw in ("503", "502", "timeout", "overloaded"))
 
     def _call_llm_with_retry(
         self,

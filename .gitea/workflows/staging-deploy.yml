@@ -13,24 +13,14 @@ jobs:
           cd ~/staging/repos/symbiote
           git pull origin main
 
-      - name: Install dependencies
+      - name: Rebuild and deploy
         run: |
-          cd ~/staging/repos/symbiote
-          .venv/bin/pip install --quiet .
-
-      - name: Restart service
-        run: |
-          sudo systemctl restart symbiote-staging
+          cd ~/staging
+          docker compose build --quiet symbiote
+          docker compose up -d symbiote
 
       - name: Health check
         run: |
-          sleep 3
-          curl -sf http://localhost:8008/health > /dev/null && echo "Symbiote staging OK" || echo "WARNING: health check failed"
-
-  auto-promote:
-    needs: deploy
-    runs-on: linux
-    if: ${{ vars.AUTO_DEPLOY == 'true' }}
-    steps:
-      - name: Promote to production
-        run: ~/scripts/ci-promote.sh symbiote
+          sleep 10
+          curl -sf http://localhost:8008/health > /dev/null
+          echo "Health check passed"

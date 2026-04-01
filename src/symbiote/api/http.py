@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import collections
+import logging
 import os
+import time as _time
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -29,6 +32,38 @@ from symbiote.environment.manager import EnvironmentManager
 from symbiote.environment.policies import PolicyGate
 from symbiote.environment.tools import ToolGateway
 from symbiote.memory.store import MemoryStore
+
+# ── In-memory log ring buffer ────────────────────────────────────────────
+
+class _LogRingBuffer(logging.Handler):
+    """Captures log records into a fixed-size deque for the admin console."""
+
+    def __init__(self, capacity: int = 2000) -> None:
+        super().__init__()
+        self.records: collections.deque[dict] = collections.deque(maxlen=capacity)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append({
+            "ts": record.created,
+            "time": _time.strftime("%H:%M:%S", _time.localtime(record.created))
+                    + f".{int(record.msecs):03d}",
+            "level": record.levelname,
+            "logger": record.name,
+            "message": self.format(record),
+        })
+
+
+_log_buffer = _LogRingBuffer(capacity=2000)
+_log_buffer.setLevel(logging.DEBUG)
+_log_buffer.setFormatter(logging.Formatter("%(message)s"))
+
+# Attach to root logger + key symbiote loggers
+logging.basicConfig(level=logging.DEBUG, handlers=[logging.StreamHandler()])
+logging.getLogger().addHandler(_log_buffer)
+# Ensure symbiote loggers propagate at DEBUG
+for _ns in ("symbiote", "forge_llm", "httpx", "openai"):
+    logging.getLogger(_ns).setLevel(logging.DEBUG)
+
 
 app = FastAPI(title="Symbiote API")
 
@@ -278,7 +313,8 @@ def _resolve_llm() -> LLMPort | None:
         return None
     from symbiote.adapters.llm.forge import ForgeLLMAdapter
 
-    return ForgeLLMAdapter(provider=provider)
+    model = os.environ.get("SYMBIOTE_LLM_MODEL") or None
+    return ForgeLLMAdapter(provider=provider, model=model)
 
 
 def get_adapter() -> SQLiteAdapter:
@@ -1053,6 +1089,148 @@ def revoke_api_key(
     if not _key_manager.revoke_key(key_id):
         raise HTTPException(status_code=404, detail="API key not found")
     return {"revoked": key_id}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ADMIN CONSOLE — Data endpoints (no auth, local admin UI)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+@app.get("/api/logs")
+def api_logs(
+    level: str | None = Query(default=None),
+    logger_name: str | None = Query(default=None, alias="logger"),
+    search: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=2000),
+) -> list[dict]:
+    """Return recent log entries from the in-memory ring buffer (admin console)."""
+    entries = list(_log_buffer.records)
+    if level:
+        levels = {lvl.strip().upper() for lvl in level.split(",")}
+        entries = [e for e in entries if e["level"] in levels]
+    if logger_name:
+        entries = [e for e in entries if logger_name in e["logger"]]
+    if search:
+        q = search.lower()
+        entries = [e for e in entries if q in e["message"].lower() or q in e["logger"].lower()]
+    return entries[-limit:]
+
+
+@app.get("/api/symbiotes")
+def api_list_symbiotes(
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+) -> list[dict]:
+    """List all symbiotes (admin console)."""
+    rows = adapter.fetch_all(
+        "SELECT id, name, role, owner_id, status, created_at, updated_at "
+        "FROM symbiotes ORDER BY created_at DESC"
+    )
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/sessions")
+def api_list_sessions(
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    symbiote_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[dict]:
+    """List sessions with optional filters (admin console)."""
+    sql = (
+        "SELECT s.id, s.symbiote_id, s.goal, s.status, s.started_at, s.ended_at, "
+        "s.summary, s.external_key, sym.name as symbiote_name "
+        "FROM sessions s JOIN symbiotes sym ON s.symbiote_id = sym.id"
+    )
+    conditions: list[str] = []
+    params: list[str | int] = []
+    if symbiote_id:
+        conditions.append("s.symbiote_id = ?")
+        params.append(symbiote_id)
+    if status:
+        conditions.append("s.status = ?")
+        params.append(status)
+    if conditions:
+        sql += " WHERE " + " AND ".join(conditions)
+    sql += " ORDER BY s.started_at DESC LIMIT ?"
+    params.append(limit)
+    rows = adapter.fetch_all(sql, tuple(params))
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/sessions/{session_id}/messages")
+def api_session_messages(
+    session_id: str,
+    sessions: Annotated[SessionManager, Depends(get_session_manager)],
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[dict]:
+    """Get message history for a session (admin console)."""
+    msgs = sessions.get_messages(session_id, limit=limit)
+    return [
+        {"id": m.id, "role": m.role, "content": m.content, "created_at": m.created_at.isoformat()}
+        for m in reversed(msgs)  # chronological order
+    ]
+
+
+@app.get("/api/sessions/{session_id}/trace")
+def api_session_trace(
+    session_id: str,
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+) -> list[dict]:
+    """Get execution traces for a session (admin console)."""
+    rows = adapter.fetch_all(
+        "SELECT id, session_id, symbiote_id, total_iterations, total_tool_calls, "
+        "total_elapsed_ms, stop_reason, steps_json, created_at "
+        "FROM execution_traces WHERE session_id = ? ORDER BY created_at DESC",
+        (session_id,),
+    )
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/sessions/{session_id}/score")
+def api_session_score(
+    session_id: str,
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+) -> list[dict]:
+    """Get session scores (admin console)."""
+    rows = adapter.fetch_all(
+        "SELECT id, session_id, symbiote_id, auto_score, user_score, final_score, "
+        "stop_reason, total_iterations, total_tool_calls, computed_at "
+        "FROM session_scores WHERE session_id = ? ORDER BY computed_at DESC",
+        (session_id,),
+    )
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/symbiotes/{symbiote_id}/traces")
+def api_symbiote_traces(
+    symbiote_id: str,
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    limit: int = Query(default=20, ge=1, le=100),
+) -> list[dict]:
+    """Get recent execution traces for a symbiote (admin console)."""
+    rows = adapter.fetch_all(
+        "SELECT id, session_id, symbiote_id, total_iterations, total_tool_calls, "
+        "total_elapsed_ms, stop_reason, created_at "
+        "FROM execution_traces WHERE symbiote_id = ? ORDER BY created_at DESC LIMIT ?",
+        (symbiote_id, limit),
+    )
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/symbiotes/{symbiote_id}/scores")
+def api_symbiote_scores(
+    symbiote_id: str,
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    limit: int = Query(default=20, ge=1, le=100),
+) -> list[dict]:
+    """Get recent session scores for a symbiote (admin console)."""
+    rows = adapter.fetch_all(
+        "SELECT id, session_id, symbiote_id, auto_score, user_score, final_score, "
+        "stop_reason, total_iterations, total_tool_calls, computed_at "
+        "FROM session_scores WHERE symbiote_id = ? ORDER BY computed_at DESC LIMIT ?",
+        (symbiote_id, limit),
+    )
+    return [dict(r) for r in rows]
 
 
 # ══════════════════════════════════════════════════════════════════════════
