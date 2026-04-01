@@ -1,535 +1,316 @@
 # Harness Evolution Plan — Symbiote
 
-> Documento vivo de planejamento para evolução do harness agêntico do Symbiote.
+> Documento vivo de planejamento para evolucao do harness agentico do Symbiote.
 > Criado: 2026-04-01
-> Última atualização: 2026-04-01
-> Status: planejamento ativo
-> Referências: `~/dev/kb/engenharia/meta_harness.md` (análise completa), `kb/meta-harness-analysis.md` (resumo no repo)
+> Ultima atualizacao: 2026-04-01
+> Status: Fases 1-4 implementadas (v0.3.0). Trabalho futuro documentado.
+> Referencias: `~/dev/kb/engenharia/meta_harness.md` (analise completa), `kb/meta-harness-analysis.md` (resumo no repo)
 
 ---
 
 ## Contexto
 
-O Symbiote é um kernel embeddable para agentes LLM persistentes. No vocabulário do paper Meta-Harness (Stanford/CMU, 2026), o Symbiote **é** um harness — o código que determina o que armazenar, recuperar e apresentar ao modelo.
+O Symbiote e um kernel embeddable para agentes LLM persistentes. No vocabulario do paper Meta-Harness (Stanford/CMU, 2026), o Symbiote **e** um harness — o codigo que determina o que armazenar, recuperar e apresentar ao modelo.
 
-O paper demonstra que mudar apenas o harness (sem mudar o modelo) produz **6x de diferença** no mesmo benchmark. A implicação: otimizar o harness automaticamente é tão ou mais valioso que trocar de modelo.
-
-### O que já temos (base de partida)
-
-Implementado no sprint de resiliência (v0.2.22):
-
-| Componente | O que faz | Arquivo |
-|---|---|---|
-| **LoopController** | Detecta stagnation (2x mesma call) e circuit breaker (3 falhas). Injeta stop message | `runners/loop_control.py` |
-| **LoopTrace** | Registra cada iteração: tool_id, params, success, error, elapsed_ms, stop_reason | `runners/base.py` |
-| **LLM Retry** | 3 retries com backoff 1s/2s/4s em erros transientes | `runners/chat.py` |
-| **Parallel Tools** | asyncio.gather (async) + ThreadPoolExecutor (sync, max 4 workers) | `environment/tools.py` |
-| **3-Layer Compaction** | L1: microcompact (trunca >2000 chars), L2: loop compact (resume pares antigos), L3: autocompact (80% budget) | `runners/chat.py` |
-
-Implementado anteriormente (v0.2.20-0.2.21):
-
-| Componente | O que faz |
-|---|---|
-| **SessionRecallPort** | Protocol para busca host-provided em sessões passadas |
-| **MemoryCategory** | Auto-classificação (ephemeral, declarative, procedural, meta) |
-| **MemoryConsolidator** | Sumarização via LLM quando working memory excede threshold |
-| **CompositeHook** | before/after tool + before/after turn, error isolation |
-| **PolicyGate** | Deny-by-default, audit log de toda tool call |
-
-### O que falta (a tese)
-
-O harness hoje é **estático** — mesmas regras, mesmos parâmetros, mesmos prompts para todos os symbiotas, para sempre. O Meta-Harness mostra que harnesses devem ser **evolvable**. A evolução precisa de:
-
-1. **Feedback signal** — medir se o harness está funcionando
-2. **Dados persistentes** — traces e scores para análise
-3. **Mecanismo de evolução** — algo que use os dados para propor melhorias
+O paper demonstra que mudar apenas o harness (sem mudar o modelo) produz **6x de diferenca** no mesmo benchmark. A implicacao: otimizar o harness automaticamente e tao ou mais valioso que trocar de modelo.
 
 ---
 
-## Princípios de Design
+## Implementacao Realizada (v0.2.22 — v0.3.0)
+
+### Base de Resiliencia (v0.2.22)
+
+| Componente | O que faz | Arquivo | Backlog |
+|---|---|---|---|
+| **LoopController** | Detecta stagnation (2x mesma call) e circuit breaker (3 falhas). Injeta stop message | `runners/loop_control.py` | B-57 |
+| **LoopTrace** | Registra cada iteracao: tool_id, params, success, error, elapsed_ms, stop_reason | `runners/base.py` | B-57 |
+| **LLM Retry** | 3 retries com backoff 1s/2s/4s em erros transientes | `runners/chat.py` | B-56 |
+| **Parallel Tools** | asyncio.gather (async) + ThreadPoolExecutor (sync, max 4 workers) | `environment/tools.py` | B-55 |
+| **3-Layer Compaction** | L1: microcompact (trunca >2000 chars), L2: loop compact (resume pares antigos), L3: autocompact (80% budget) | `runners/chat.py` | B-58 |
+
+### Fase 1 — Fundacoes (v0.2.24)
+
+Todas implementadas. Feedback signal funcionando e dados fluindo.
+
+| Item | O que faz | Arquivo | Status |
+|---|---|---|---|
+| **H-01: SessionScore** (B-60) | `compute_auto_score()` — score 0.0-1.0 a partir de stop_reason + iterations + failure_rate | `core/scoring.py` | Implementado |
+| **H-02: FeedbackPort** (B-61) | Protocol para host reportar feedback. `kernel.report_feedback()` compoe auto_score * 0.6 + user_score * 0.4 | `core/ports.py`, `core/kernel.py` | Implementado |
+| **H-03: MemoryEntry de falha** (B-62) | Memoria procedural deterministica quando stop_reason != end_turn. Zero LLM | `core/kernel.py` | Implementado |
+| **H-04: Context splits** (B-63) | `memory_share` e `knowledge_share` configuraveis por symbiote no EnvironmentConfig | `core/context.py`, `environment/manager.py` | Implementado |
+| **H-05: LoopTrace persistence** (B-66) | Tabela `execution_traces` com steps, timing, stop_reason. Persistido no `close_session()` | `adapters/storage/sqlite.py` | Implementado |
+
+**Decisao tomada:** Opcao 2 para propagacao do trace — `kernel._last_trace` como state temporario entre `message()` e `close_session()`.
+
+### Fase 2 — Evolucao Automatica (v0.2.25)
+
+Implementada com ativacao tiered para funcionar com zero dados.
+
+| Item | O que faz | Arquivo | Status |
+|---|---|---|---|
+| **H-06: harness_versions** (B-64) | Versionamento de textos evolvable por symbiote com rollback chain | `harness/versions.py`, `adapters/storage/sqlite.py` | Implementado |
+| **H-07: ParameterTuner** (B-65) | Auto-calibracao tiered (Tier 0-3) com safety caps e logging | `harness/tuner.py` | Implementado |
+| **H-08: max_iterations config** (B-32) | `max_tool_iterations` per symbiote via EnvironmentConfig, cap 50 | `core/models.py`, `environment/manager.py` | Implementado |
+
+**Tiers de ativacao implementados:**
+- Tier 0 (0 sessoes): defaults hardcoded, sem ajustes
+- Tier 1 (5+ sessoes): ajustes safe only (max_iterations, compaction threshold)
+- Tier 2 (20+ sessoes): ajustes estatisticos (memory/knowledge splits)
+- Tier 3 (50+ sessoes): fine tuning completo
+
+**Decisao tomada:** Removido pre-requisito de "200+ sessoes para iniciar". O sistema trabalha com zero dados e ativa gradualmente conforme coleta.
+
+### Fase 3 — Prompt Evolution (v0.2.26)
+
+Implementada. O harness evolui os textos que controlam o LLM.
+
+| Item | O que faz | Arquivo | Status |
+|---|---|---|---|
+| **H-09: HarnessEvolver** (B-67) | LLM proposer analisa traces (failed vs successful) e propoe textos melhorados. Guard rails + auto-rollback | `harness/evolver.py` | Implementado |
+| **H-10: Memory/Knowledge on-demand** (B-68) | `context_mode: packed/on_demand`. `search_memories`/`search_knowledge` como builtin tools | `environment/tools.py`, `core/context.py` | Implementado |
+
+**Componentes evolvable (3 textos, apenas estes):**
+- `tool_instructions` — regras de comportamento com tools
+- `injection_stagnation` — mensagem quando stagnation detectado
+- `injection_circuit_breaker` — mensagem quando circuit breaker dispara
+
+**Textos NAO evolvable (10, e por que):**
+- `_INDEX_INSTRUCTIONS` — fatos tecnicos (lista de tools)
+- `_build_system()` structure — parser-dependent, quebraria se mudasse
+- Compaction format — resumo tecnico, nao comportamental
+- Tool result formatting — consistencia > otimizacao
+- Persona/identity — controlado pelo host, nao pelo harness
+- Error hints — fatos, nao instrucoes
+- Runtime context strip — metadata efemera
+- On-demand instruction — fato tecnico ("voce tem tools de busca")
+- Subagent delegation — fato tecnico
+- Security banners — intocavel
+
+**Guard rails implementados:**
+- Versao nova nao pode ter > 2x o tamanho da anterior
+- Linhas contendo "CRITICAL" devem ser preservadas
+- Se proposer retorna lixo (JSON, codigo), descarta
+- Minimo 50 sessoes antes de aceitar/rejeitar
+- Rollback automatico se `new_avg < old_avg - 0.05`
+
+**Decisao tomada:** Opcao 3 para proposer LLM — aceita ambos. Host pode injetar LLM separado via `kernel.set_evolver_llm()`, default usa o LLM principal. O ContextAssembler resolve versoes ativas via `harness_versions`.
+
+### Fase 4 — Horizonte (v0.2.27)
+
+Implementada. Inicialmente planejada como "futuro distante", foi executada imediatamente.
+
+| Item | O que faz | Arquivo | Status |
+|---|---|---|---|
+| **B-33: Timeout** | Per-tool (30s) + loop total (300s) configuraveis per symbiote | `environment/tools.py`, `runners/chat.py` | Implementado |
+| **B-29: Human-in-the-loop** | `risk_level` no ToolDescriptor + `on_before_tool_call` approval callback | `environment/descriptors.py`, `runners/chat.py` | Implementado |
+| **B-34: Index mode cache** | Loop-local schema cache, reduz iterations ~50% em index mode | `runners/chat.py` | Implementado |
+| **B-35: Multi-model test matrix** | E2E infra com 3 cenarios x N modelos | `tests/e2e/test_multi_model.py` | Implementado |
+| **B-40: Tool Mode** | `instant/brief/continuous` substitui `tool_loop: bool` | `core/models.py`, `runners/chat.py` | Implementado |
+| **B-27: Streaming mid-loop** | `on_progress` + `on_stream` callbacks para visibilidade real-time | `runners/chat.py` | Implementado |
+| **B-30: Working memory intermediaria** | Loop summary prepended na WorkingMemory | `runners/chat.py` | Implementado |
+| **H-11: BenchmarkRunner** | Task grading: tool_called, param_match, custom | `harness/benchmark.py` | Implementado |
+| **H-12: StructuralEvolver** | Pluggable strategy registry com proposal/apply | `harness/structural.py` | Implementado |
+| **H-13: CrossSymbioteLearner** | Tool overlap detection + harness version transfer | `harness/cross_learning.py` | Implementado |
+
+**Decisao tomada:** O usuario definiu que "horizon features sao imediatas, nao distantes" e que "terao 10 symbiotas testando nos proximos 2 meses". Tudo foi implementado.
+
+---
+
+## Metricas de Implementacao
+
+| Metrica | Valor |
+|---|---|
+| Total de testes | 1184 (130+ novos para harness) |
+| Arquivos novos | 6 (scoring.py, versions.py, tuner.py, evolver.py, benchmark.py, structural.py, cross_learning.py) |
+| Arquivos de teste novos | 18 |
+| Tabelas SQLite novas | 3 (execution_traces, session_scores, harness_versions) |
+| Campos novos em EnvironmentConfig | 7 (memory_share, knowledge_share, max_tool_iterations, tool_call_timeout, loop_timeout, tool_mode, context_mode) |
+| Versao final | v0.3.0 |
+
+---
+
+## Principios de Design (mantidos como referencia)
 
 ### 1. Feedback signal composto (3 camadas)
 
-O feedback NÃO precisa vir do usuário. Já temos sinais automáticos:
-
 ```
-┌─────────────────────────────────────────────────────────┐
-│ Sinal 1: "Conseguiu ou desistiu?"                       │
-│ ─────────────────────────────────                       │
-│ stop_reason     │ Score                                 │
-│ end_turn        │ 1.0  — LLM completou naturalmente     │
-│ None (sem loop) │ 0.8  — resposta direta, ok            │
-│ stagnation      │ 0.2  — repetiu mesma ação             │
-│ circuit_breaker │ 0.1  — tool quebrou 3x                │
-│ max_iterations  │ 0.0  — esgotou limite                 │
-├─────────────────────────────────────────────────────────┤
-│ Sinal 2: "Funcionou de primeira?"                       │
-│ ─────────────────────────────────                       │
-│ 1 iter + end_turn     │ 1.0  — primeira tentativa       │
-│ 2-3 iter + end_turn   │ 0.7  — precisou ajustar         │
-│ 5+ iter + end_turn    │ 0.4  — custoso mas completou    │
-│ Qualquer + falha      │ 0.0  — não funcionou            │
-├─────────────────────────────────────────────────────────┤
-│ Sinal 3: "Usuário qualificou?" (opcional, via host)     │
-│ ─────────────────────────────────                       │
-│ Thumbs up / ação positiva │ 1.0                         │
-│ Repetiu pergunta          │ 0.2                         │
-│ Thumbs down               │ 0.0                         │
-│                                                         │
-│ Composição:                                             │
-│ final = auto_score * 0.6 + user_score * 0.4             │
-│ (se sem user_score: final = auto_score)                 │
-└─────────────────────────────────────────────────────────┘
-```
+Sinal 1: "Conseguiu ou desistiu?"
+  stop_reason     | Score
+  end_turn        | 1.0  — LLM completou naturalmente
+  None (sem loop) | 0.8  — resposta direta, ok
+  stagnation      | 0.2  — repetiu mesma acao
+  circuit_breaker | 0.1  — tool quebrou 3x
+  max_iterations  | 0.0  — esgotou limite
 
-**Os sinais 1 e 2 são 100% automáticos e já estão no código.** O sinal 3 é bônus.
+Sinal 2: "Funcionou de primeira?"
+  1 iter + end_turn     | 1.0
+  2-3 iter + end_turn   | 0.7
+  5+ iter + end_turn    | 0.4
+  Qualquer + falha      | 0.0
+
+Sinal 3: "Usuario qualificou?" (opcional, via host)
+  Composicao: final = auto * 0.6 + user * 0.4
+```
 
 ### 2. "Let the model decide what it needs"
 
-Princípio do Meta-Harness que Berman destaca: em vez de pre-empacotar contexto monolítico, dar ao modelo acesso adaptativo. Já fazemos isso com tools (index mode + semantic mode). O próximo passo é fazer o mesmo com memories e knowledge.
+Implementado via `context_mode: on_demand` + builtin tools `search_memories`/`search_knowledge`.
 
-### 3. Evolução em 3 níveis (menor risco primeiro)
+### 3. Evolucao em 3 niveis (menor risco primeiro)
 
 ```
-Nível 1: Parameter Tuning    — zero LLM, SQL puro, zero risco
-Nível 2: Prompt Evolution     — LLM barato offline, rollback automático
-Nível 3: Structural Evolution — coding agent, sandbox, futuro distante
+Nivel 1: Parameter Tuning    — zero LLM, SQL puro, tiered activation
+Nivel 2: Prompt Evolution     — LLM proposer offline, rollback automatico
+Nivel 3: Structural Evolution — pluggable strategy registry, sandbox futuro
 ```
 
 ### 4. Rollback sempre
 
-Toda mudança automática é versionada e revertível. Se a versão nova tem score pior após N sessões, reverte automaticamente. O default hardcoded é sempre o fallback.
+Toda mudanca automatica e versionada e revertivel. Default hardcoded e sempre o fallback.
+
+### 5. Zero-data ready
+
+O sistema trabalha com zero dados e melhora conforme coleta. Tiers de ativacao garantem que nenhum ajuste automatico acontece sem dados suficientes.
 
 ---
 
-## O que é "evolvable" no harness
-
-### Categoria A — Textos (maior impacto, mais fácil de evoluir)
-
-| Texto | Onde vive | Impacto |
-|---|---|---|
-| `_TOOL_INSTRUCTIONS` | `runners/chat.py:44-66` | Alto — regras de comportamento com tools |
-| `_INDEX_INSTRUCTIONS` | `runners/chat.py:68-71` | Médio — instrução para index mode |
-| System prompt structure | `_build_system()` L682+ | Alto — ordem e formatação do contexto |
-| Compaction summary format | `_compact_loop_messages()` | Médio — como o resumo é apresentado |
-| Injection messages | `loop_control.py:69-82` | Médio — como o LLM é instruído a parar |
-| Tool result formatting | `_format_tool_results()` | Baixo — consistência é mais importante que otimização |
+## Trabalho Futuro
 
-### Categoria B — Parâmetros numéricos
+> Insights extraidos do artigo "Effective Harnesses for Long-Running Agents" (Anthropic, 2025)
+> e de gaps identificados durante a implementacao.
+>
+> O artigo da Anthropic descreve um harness para coding agents especificamente.
+> O Symbiote e um kernel agnostico de dominio — as generalizacoes abaixo abstraem
+> os padroes do artigo para aplicabilidade em qualquer host.
 
-| Parâmetro | Valor atual | Onde | Evolvable? |
-|---|---|---|---|
-| `_MAX_TOOL_ITERATIONS` | 10 | `chat.py:33` | Sim — calibrar por symbiote |
-| `_COMPACTION_THRESHOLD` | 4 pairs | `chat.py:34` | Sim — depende do avg iterations |
-| `_MICROCOMPACT_MAX_CHARS` | 2000 | `chat.py:37` | Sim — depende do tamanho dos tool results |
-| `_AUTOCOMPACT_THRESHOLD` | 0.80 | `chat.py:38` | Sim — depende do context budget |
-| `_MEMORIES_SHARE` | 0.40 | `context.py:49` | Sim — depende do uso de memories vs knowledge |
-| `_KNOWLEDGE_SHARE` | 0.25 | `context.py:50` | Sim — idem |
-| `context_budget` | 4000/16000 | `context.py:64`, `chat.py:39` | Já configurável por host |
-| Circuit breaker threshold | 3 | `loop_control.py` | Talvez — 3 é conservador |
-| Stagnation threshold | 2 | `loop_control.py` | Provavelmente não — 2 é bom |
-
-### Categoria C — Decisões estruturais (futuro)
-
-| Decisão | Estado atual | Alternativa |
-|---|---|---|
-| Context pre-packed vs on-demand | Pre-packed (ContextAssembler injeta) | On-demand (memories/knowledge como tools) |
-| Ranking de memórias | `LIKE %query%` + importance DESC | BM25, TF-IDF, embeddings via SessionRecallPort |
-| Ordem das seções no prompt | Persona → Tools → Context → Memories → Knowledge | Pode depender do task type |
-
----
-
-## Horizonte de Implementação
-
-### Fase 1 — Fundações (sprint imediato)
-
-> Objetivo: ter o feedback signal funcionando e dados fluindo. Sem mágica, sem LLM extra.
-> Estimativa: 1-2 dias de implementação
-
-#### H-01: SessionScore (B-60)
-**Prioridade: CRÍTICA — desbloqueia tudo**
-
-Modelo `SessionScore` que computa score 0.0-1.0 automaticamente a partir do `LoopTrace`.
-
-```python
-# core/scoring.py (novo)
-def compute_auto_score(trace: LoopTrace | None) -> float:
-    if trace is None:
-        return 0.8  # sem loop = resposta direta
-
-    # Base score pelo stop_reason
-    reason_scores = {
-        "end_turn": 1.0,
-        "stagnation": 0.2,
-        "circuit_breaker": 0.1,
-        "max_iterations": 0.0,
-    }
-    base = reason_scores.get(trace.stop_reason or "end_turn", 0.5)
-
-    # Penalizar por iterations (só se end_turn)
-    if trace.stop_reason == "end_turn" and trace.total_iterations > 0:
-        if trace.total_iterations <= 2:
-            iter_factor = 1.0
-        elif trace.total_iterations <= 4:
-            iter_factor = 0.7
-        else:
-            iter_factor = 0.4
-        base *= iter_factor
-
-    # Penalizar por tool failures
-    if trace.steps:
-        failure_rate = sum(1 for s in trace.steps if not s.success) / len(trace.steps)
-        base *= (1 - failure_rate * 0.3)
-
-    return round(base, 2)
-```
-
-**Persistência**: tabela `session_scores`, INSERT em `kernel.close_session()`.
-
-**Observação importante**: precisamos guardar o `RunResult` (ou pelo menos o `loop_trace`) em algum lugar acessível no `close_session()`. Hoje o `RunResult` é retornado ao caller e não persiste. Opções:
-- Guardar `last_loop_trace` no `SessionManager` ou no kernel como atributo temporário
-- Ou: calcular o score no `ChatRunner.run()` e retornar no `RunResult` (campo novo `auto_score`)
-- Ou: fazer B-66 (LoopTrace persistence) junto — a tabela `execution_traces` serve de fonte
-
-**Decisão**: fazer H-01 e H-05 (LoopTrace persistence) juntos, pois o score precisa do trace.
-
-#### H-02: FeedbackPort (B-61)
-**Prioridade: alta**
-
-Protocol para o host reportar feedback. Simples — um método que atualiza o score.
-
-```python
-# core/ports.py
-class FeedbackPort(Protocol):
-    def report(self, session_id: str, score: float, source: str) -> None: ...
-```
-
-**Implementação inline no kernel**: `kernel.report_feedback(session_id, score, source)` → UPDATE na tabela `session_scores`.
-
-**API**: `POST /sessions/{id}/feedback {"score": 0.9, "source": "user_click"}`
-
-**Observação**: o host pode reportar feedback muito depois do close_session. O score deve ser recalculável: `final = auto * 0.6 + user * 0.4`.
-
-#### H-03: MemoryEntry de falha determinística (B-62)
-**Prioridade: alta — valor imediato, zero custo**
-
-Quando `stop_reason != "end_turn"`, gerar `MemoryEntry(type="procedural")` automaticamente.
-
-```python
-# No kernel.close_session(), após reflection:
-if loop_trace and loop_trace.stop_reason not in ("end_turn", None):
-    # Gerar conteúdo baseado no stop_reason
-    if loop_trace.stop_reason == "circuit_breaker":
-        failed_tool = _find_breaker_tool(loop_trace)
-        content = f"Tool '{failed_tool}' falhou múltiplas vezes consecutivas. Verificar pré-condições antes de chamar."
-    elif loop_trace.stop_reason == "stagnation":
-        last_tool = loop_trace.steps[-1].tool_id if loop_trace.steps else "unknown"
-        content = f"Loop estagnou chamando '{last_tool}' repetidamente. Verificar se task já completou."
-    elif loop_trace.stop_reason == "max_iterations":
-        top_tools = _top_tools(loop_trace, n=3)
-        content = f"Sessão esgotou {loop_trace.total_iterations} iterações. Tools mais usadas: {top_tools}. Considerar decompor em passos menores."
-
-    memory_store.store(MemoryEntry(
-        symbiote_id=symbiote_id,
-        session_id=session_id,
-        type="procedural",
-        scope="global",
-        content=content,
-        importance=0.7,
-        source="system",
-        tags=["harness_failure", loop_trace.stop_reason],
-    ))
-```
-
-**Observação**: esse MemoryEntry será encontrado pelo `get_relevant()` em sessões futuras quando o user_input mencionar a mesma tool ou task. Não é perfeito (LIKE %query% é bruto), mas é melhor que nada. Melhoria futura: ranking semântico via SessionRecallPort.
-
-#### H-04: Context splits configuráveis (B-63)
-**Prioridade: média**
-
-Expor `memory_share` e `knowledge_share` no EnvironmentConfig.
-
-```sql
-ALTER TABLE env_configs ADD COLUMN memory_share REAL DEFAULT 0.40;
-ALTER TABLE env_configs ADD COLUMN knowledge_share REAL DEFAULT 0.25;
-```
-
-O `ContextAssembler._trim_to_budget()` lê os valores do EnvironmentConfig em vez de usar constantes.
-
-**Observação**: se `memory_share + knowledge_share > 1.0`, normalizar. Se host não configura, usa defaults atuais (backward compat).
-
-#### H-05: LoopTrace persistence (B-66)
-**Prioridade: alta — pré-requisito para scoring e parameter tuning**
-
-```sql
-CREATE TABLE execution_traces (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    symbiote_id TEXT NOT NULL,
-    total_iterations INTEGER,
-    total_tool_calls INTEGER,
-    total_elapsed_ms INTEGER,
-    stop_reason TEXT,
-    steps_json TEXT,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (session_id) REFERENCES sessions(id)
-);
-CREATE INDEX idx_traces_symbiote ON execution_traces(symbiote_id, created_at);
-```
+### F-01: Orientacao automatica na primeira mensagem da sessao
 
-**Implementação**: persist no `kernel.close_session()` (ou no `kernel.message()` após o `run()`).
+**Origem:** Artigo Anthropic — "initializer agent" vs "coding agent" com prompts diferentes.
 
-**Observação sobre o fluxo**: hoje `kernel.message()` retorna o response text (ou dict com tool_results). O `LoopTrace` está dentro do `RunResult` que o `CapabilitySurface.chat()` recebe. Precisamos propagar o trace até o kernel para persist. Opções:
-1. `CapabilitySurface.chat()` retorna `(response, trace)` — breaking change na API
-2. Kernel mantém um `_last_trace: LoopTrace | None` que é setado após cada `chat()` — simples mas stateful
-3. `ChatRunner` persiste diretamente (recebe storage como dep) — viola hexagonal
+**Generalizacao:** A primeira mensagem de uma sessao deveria receber contexto extra automaticamente. Hoje o `ContextAssembler` monta o mesmo contexto para toda mensagem. Um `is_session_start: bool` no AssembledContext permitiria injetar um bloco de orientacao: ultimas N sessoes resumidas (via SessionRecallPort), memorias procedurais relevantes, e instrucao de "antes de agir, entenda o estado atual".
 
-**Decisão recomendada**: opção 2. O kernel já é stateful (mantém sessions, working memory). Um `_last_trace` que vive entre `message()` e `close_session()` é aceitável. Limpar no `close_session()`.
+**Impacto:** Alto. Resolve o problema generico de "agente comeca do zero" sem o host ter que microgerenciar o prompt da primeira mensagem.
 
----
+**Esforco:** Baixo. Flag booleano + condicional no ContextAssembler.
 
-### Fase 2 — Evolução Automática (quando Fase 1 tiver ~200+ sessões com scores)
-
-> Objetivo: o harness começa a se calibrar sozinho.
-> Pré-requisito: Fase 1 em produção com dados acumulados.
-
-#### H-06: harness_versions table (B-64)
-
-Versionamento de textos evolvable por symbiote.
-
-```sql
-CREATE TABLE harness_versions (
-    id TEXT PRIMARY KEY,
-    symbiote_id TEXT NOT NULL,
-    component TEXT NOT NULL,       -- "tool_instructions", "compaction_format", etc.
-    version INTEGER NOT NULL,
-    content TEXT NOT NULL,          -- o texto novo
-    avg_score REAL DEFAULT 0.0,
-    session_count INTEGER DEFAULT 0,
-    is_active INTEGER DEFAULT 1,
-    created_at TEXT NOT NULL,
-    parent_version INTEGER,         -- para rollback chain
-    UNIQUE(symbiote_id, component, version)
-);
-```
-
-`ChatRunner._build_system()` consulta versão ativa: `SELECT content FROM harness_versions WHERE symbiote_id=? AND component='tool_instructions' AND is_active=1 ORDER BY version DESC LIMIT 1`. Se não encontra, usa constante `_TOOL_INSTRUCTIONS`.
-
-**Componentes registráveis**:
-- `tool_instructions` — `_TOOL_INSTRUCTIONS`
-- `index_instructions` — `_INDEX_INSTRUCTIONS`
-- `injection_stagnation` — mensagem quando stagnation
-- `injection_circuit_breaker` — mensagem quando circuit breaker
-- `compaction_format` — template do resumo de compaction
-
-#### H-07: Nível 1 — Parameter Tuning (B-65)
-
-Job batch que lê scores agregados e ajusta parâmetros. Zero LLM.
-
-```python
-# harness/tuner.py
-class ParameterTuner:
-    def tune(self, symbiote_id: str) -> dict[str, Any]:
-        scores = self._get_recent_scores(symbiote_id, days=7)
-        traces = self._get_recent_traces(symbiote_id, days=7)
-        adjustments = {}
+### F-02: Handoff note estruturado (separado da reflection)
 
-        # Regra 1: max_iterations
-        max_iter_sessions = [t for t in traces if t.stop_reason == "max_iterations"]
-        if len(max_iter_sessions) / len(traces) > 0.30:
-            adjustments["max_tool_iterations"] = current + 5  # cap at 30
+**Origem:** Artigo Anthropic — "progress file" atualizado ao final de cada sessao.
 
-        # Regra 2: compaction_threshold
-        avg_iters = mean(t.total_iterations for t in traces if t.stop_reason == "end_turn")
-        if avg_iters < current_compaction_threshold:
-            adjustments["compaction_threshold"] = max(int(avg_iters) - 1, 2)
+**Generalizacao:** Hoje o `close_session()` faz reflection (aprendizado) + scoring. Falta um artefato de **continuidade** — um resumo curto focado em: "o que estava fazendo, onde parou, o que a proxima sessao deve fazer primeiro". Isso e diferente da reflection, que e sobre aprender padroes.
 
-        # Regra 3: microcompact chars
-        # (requer tracking se truncation correlaciona com score baixo)
+**Implementacao proposta:**
+- Nova `MemoryCategory.handoff` no enum existente
+- Geracao automatica no `close_session()`, apos reflection, antes de fechar
+- Template: `"Sessao encerrada. Estado: {status}. Ultimo trabalho: {summary}. Proximo passo sugerido: {next_step}."`
+- O SessionRecallPort prioriza memorias handoff no inicio da proxima sessao (complementa F-01)
 
-        return adjustments
-```
+**Impacto:** Alto. Bridging entre sessoes e o problema central do artigo.
 
-**Invocação**: `symbiote tune <symbiote_id>` na CLI, ou cron no host, ou hook no `close_session()` a cada N sessões.
+**Esforco:** Medio. Nova categoria + geracao no close_session + priorizacao no recall.
 
-**Observação**: precisa de mínimo de sessões (ex: 50) antes de ajustar. Sem dados suficientes → noop. Cada ajuste é logado no audit_log para rastreabilidade.
+### F-03: Self-verification gate antes do end_turn
 
-#### H-08: max_iterations configurável (B-32)
+**Origem:** Artigo Anthropic — "Claude marks features as done without proper testing".
 
-Pré-requisito para H-07 funcionar. Adicionar `max_tool_iterations: int = 10` no EnvironmentConfig.
+**Generalizacao:** Antes de aceitar `end_turn`, o LoopController poderia injetar uma mensagem de verificacao: "antes de encerrar, verifique se o resultado esta correto usando as ferramentas disponiveis". Nao e human-in-the-loop (que ja temos), e **self-audit pelo proprio agente**.
 
-```sql
-ALTER TABLE env_configs ADD COLUMN max_tool_iterations INTEGER DEFAULT 10;
-```
+**Implementacao proposta:**
+- Novo `injection_verification` como 4o texto evolvable no HarnessEvolver
+- Mensagem default: "Antes de encerrar, verifique se a tarefa foi concluida corretamente."
+- Ativacao condicional: so injeta se a sessao usou tools (evita overhead em respostas diretas)
+- O HarnessEvolver pode evoluir este texto como os outros 3
 
-`ChatRunner.run()` lê do context ao invés de usar `_MAX_TOOL_ITERATIONS`:
-```python
-max_iters = context.max_tool_iterations if context.tool_loop else 1
-```
+**Impacto:** Alto. Diferente de tudo que temos. Reduz false positives (agente diz que fez, nao fez).
 
-**Observação**: `AssembledContext` precisa de campo novo `max_tool_iterations`. O `ContextAssembler` propaga do EnvironmentConfig.
+**Esforco:** Medio. Nova injection no LoopController + texto evolvable.
 
----
+### F-04: Session phases explicitas
 
-### Fase 3 — Prompt Evolution (quando Fase 2 mostrar que parameter tuning funciona)
+**Origem:** Artigo Anthropic — fluxo implicito de orientation -> work -> verification -> handoff.
 
-> Objetivo: o harness evolui os TEXTOS que controlam o LLM.
-> Pré-requisito: Fase 2 calibrada + 500+ sessões com scores.
+**Generalizacao:** O kernel poderia ter um `SessionPhase` (orientation, working, verification, handoff) que o ContextAssembler usa para ajustar o que injeta. Na fase orientation, mais memoria e recall. Na fase handoff, instrucao de continuidade. Hoje a sessao e um fluxo livre.
 
-#### H-09: Nível 2 — HarnessEvolver (B-67)
+**Impacto:** Medio. Melhora qualidade de sessoes longas.
 
-Job batch que usa LLM barato para propor textos melhores.
+**Esforco:** Medio-alto. Novo conceito no kernel, deteccao automatica de fase, ajuste no ContextAssembler.
 
-**Fluxo**:
-```
-1. Coletar sessões com score < 0.5 (últimos 7 dias)
-2. Coletar sessões com score > 0.8 (para contraste)
-3. Extrair traces dessas sessões
-4. Montar prompt para proposer:
-   "Instruções atuais: {current}
-    Sessões que falharam: {failed_summary}
-    Sessões que deram certo: {success_summary}
-    Proponha versão melhorada que endereçe os padrões de falha."
-5. Proposer retorna texto novo
-6. Guard rails: max length, manter linhas CRITICAL, etc.
-7. Salvar como nova versão em harness_versions
-8. Após 50+ sessões, comparar avg_score
-9. Se pior: rollback. Se melhor: manter.
-```
+**Dependencia:** F-01 e F-02 cobrem 80% do valor sem a complexidade de phases explicitas. Avaliar se phases sao necessarias apos F-01/F-02 estarem em producao.
 
-**Guard rails obrigatórios**:
-- Versão nova não pode ter > 2x o tamanho da anterior
-- Linhas contendo "CRITICAL" na versão atual devem existir na nova
-- Se o proposer retorna lixo (JSON, código, etc.), descartar
-- Mínimo 50 sessões antes de aceitar/rejeitar
-- Rollback automático se `new_avg < old_avg - 0.05`
+### F-05: Scope control evolvable por sessao
 
-**Observação sobre custo**: 1 call de Haiku por batch (~semanal). Com traces de ~20 sessões no prompt, são ~10k tokens input. Custo negligível.
+**Origem:** Artigo Anthropic — "work on only one feature at a time".
 
-**Observação sobre o proposer**: idealmente o proposer é um modelo DIFERENTE do que roda no harness. Se o harness usa Kimi/Groq, o proposer pode ser Haiku. Se o harness usa Claude, o proposer pode ser GPT. Isso evita que o proposer tenha os mesmos blind spots do modelo que está tentando melhorar.
+**Generalizacao:** Um mecanismo para limitar o escopo por sessao. Poderia ser um `scope_instruction` no EnvironmentConfig que o ContextAssembler injeta, e que o HarnessEvolver aprende a calibrar com base no scoring (sessoes com escopo amplo demais tendem a ter scores piores).
 
-#### H-10: Memory/Knowledge on-demand (B-68)
+**Impacto:** Medio. O `tool_instructions` ja pode fazer isso manualmente. A diferenca e que seria automaticamente evolvable.
 
-Mudar de context pre-packed para acesso adaptativo.
+**Esforco:** Baixo. Novo campo no EnvironmentConfig + texto no ContextAssembler.
 
-**Implementação**:
-- Registrar `search_memories(query, scope?, limit?)` e `search_knowledge(query, limit?)` como builtin tools
-- Novo `EnvironmentConfig.context_mode: Literal["packed", "on_demand"]` (default: packed)
-- Quando on-demand: ContextAssembler pula memories/knowledge, tools ficam disponíveis
-- System prompt ganha: "Você tem acesso a memórias e knowledge via tools. Use quando precisar de contexto."
+### F-06: Heuristica "declared victory too early" no scoring
 
-**Observação sobre trade-offs**:
-- On-demand gasta mais iterations (LLM precisa chamar tool antes de responder)
-- Mas contexto injetado é mais preciso (LLM formula a query certa)
-- Ideal para symbiotas com MUITAS memórias onde pre-packed polui
-- NÃO ideal para conversas rápidas (1 iteration extra = latência)
-- Pode ser híbrido: packed para top-3 memories + on-demand para deep search
+**Origem:** Artigo Anthropic — agente ve progresso e declara que terminou.
 
----
+**Generalizacao:** O `compute_auto_score()` poderia penalizar sessoes com `stop_reason=end_turn` + muito poucas iteracoes quando o contexto sugere que havia mais trabalho. Dificil de implementar de forma generica sem conhecer o dominio.
 
-### Fase 4 — Horizonte Longo (futuro, quando tiver benchmark suite)
+**Implementacao proposta:** Sinal simples — se o host reportou feedback negativo (score < 0.3) E o auto_score era alto (> 0.7), registrar como "false positive" na memoria procedural. O evolver pode aprender com esses casos.
 
-> Não implementar agora. Documentar para quando fizer sentido.
+**Impacto:** Baixo-medio. Depende de feedback do host para ser util.
 
-#### H-11: Benchmark Suite próprio
+**Esforco:** Baixo. Condicional no `report_feedback()`.
 
-Criar um conjunto de tasks representativos dos hosts (YouNews, etc.) com grading automático. Tipo:
-- "Publique a matéria sobre incêndio" → grading: items_publish foi chamado com status=ready? 1.0/0.0
-- "Busque matérias de ontem" → grading: items_list foi chamado com date filter? 1.0/0.0
+### F-07: JSON estruturado para memorias procedurais
 
-Isso permitiria rodar o Meta-Harness loop completo: propor harness → eval contra benchmark → score → iterar.
+**Origem:** Artigo Anthropic — "JSON because the model is less likely to overwrite JSON".
 
-#### H-12: Nível 3 — Structural Evolution
+**Generalizacao:** Memorias procedurais e handoff poderiam ser JSON estruturado em vez de texto livre, reduzindo corrupcao pelo LLM em sessoes on-demand.
 
-Coding agent que reescreve partes do código do ChatRunner. Precisa de:
-- Benchmark suite (H-11)
-- Sandbox eval (rodar harness candidato sem afetar produção)
-- Rollback de código (git branch por variante)
+**Impacto:** Baixo. Guideline para hosts, nao necessariamente mudanca no kernel.
 
-Complexidade desproporcional para hoje. Registrar como horizonte.
+**Esforco:** Baixo.
 
-#### H-13: Cross-symbiote learning
+### Priorizacao sugerida
 
-Se o symbiote A descobre que "verificar status antes de publicar" melhora o score, transferir esse aprendizado para o symbiote B que usa tools similares. Requer:
-- Tagging de tools cross-symbiote (B usa tools parecidas com A?)
-- Propagação de harness_versions entre symbiotas com overlap de tools
-
----
-
-## Observações de Implementação
-
-### Fluxo de dados no close_session (onde tudo converge)
-
-Hoje o `close_session()` faz:
-```
-1. reflection.reflect_session() → extrai fatos
-2. sessions.close() → status=closed, summary
-```
-
-Com o harness plan, precisa fazer:
-```
-1. Persist LoopTrace → execution_traces (H-05)
-2. Compute SessionScore → session_scores (H-01)
-3. Generate MemoryEntry de falha se aplicável (H-03)
-4. reflection.reflect_session() → extrai fatos (existente)
-5. sessions.close() → status=closed, summary (existente)
-6. Trigger parameter tuning se N sessões acumuladas (H-07, eventual)
-```
-
-**Problema**: `close_session()` hoje não tem acesso ao `LoopTrace`. O trace vive no `RunResult` que é retornado ao caller em `kernel.message()`. Precisamos persistir o trace ANTES do close.
-
-**Solução proposta**: `kernel.message()` persiste o trace imediatamente (se houver) em `execution_traces` E guarda `self._last_trace = trace`. O `close_session()` usa `self._last_trace` para scoring e MemoryEntry de falha. Limpa `self._last_trace` após uso.
-
-### SQLite schema migrations
-
-Todas as migrations devem ser idempotentes (ALTER TABLE IF NOT EXISTS pattern do SQLiteAdapter). Ordem:
-
-```sql
--- Fase 1
-CREATE TABLE IF NOT EXISTS execution_traces (...);
-CREATE TABLE IF NOT EXISTS session_scores (...);
-ALTER TABLE env_configs ADD COLUMN memory_share REAL DEFAULT 0.40;
-ALTER TABLE env_configs ADD COLUMN knowledge_share REAL DEFAULT 0.25;
-
--- Fase 2
-CREATE TABLE IF NOT EXISTS harness_versions (...);
-ALTER TABLE env_configs ADD COLUMN max_tool_iterations INTEGER DEFAULT 10;
-
--- Fase 3
-ALTER TABLE env_configs ADD COLUMN context_mode TEXT DEFAULT 'packed';
-```
-
-### Backward compatibility
-
-**Regra absoluta**: se o host não configura nada novo, o comportamento é idêntico ao atual. Defaults são os valores hardcoded de hoje. Nenhuma feature de evolução é ativa por padrão — o host opt-in.
-
-### Métricas para observar antes de avançar fases
-
-**Para sair da Fase 1 → Fase 2**:
-- [ ] Pelo menos 200 sessões com `session_scores` persistidas
-- [ ] Distribuição de stop_reasons estável (não está mudando semana a semana)
-- [ ] Pelo menos 1 host reportando feedback via FeedbackPort (nice to have, não blocker)
-- [ ] MemoryEntry de falha aparecendo em `get_relevant()` em sessões subsequentes (validar manualmente)
-
-**Para sair da Fase 2 → Fase 3**:
-- [ ] Parameter tuning rodou pelo menos 5 vezes
-- [ ] Pelo menos 1 ajuste automático de parâmetro mostrou melhoria no avg_score
-- [ ] Pelo menos 500 sessões com scores
-- [ ] harness_versions table com pelo menos 1 versão customizada ativa (mesmo que manual)
-
-**Para sair da Fase 3 → Fase 4**:
-- [ ] HarnessEvolver gerou pelo menos 3 versões aceitas (não rolled back)
-- [ ] avg_score do symbiote melhorou vs. baseline (default hardcoded)
-- [ ] Benchmark suite definido com pelo menos 20 tasks com grading automático
-
----
-
-## Resumo Executivo
-
-| Fase | O que | Quando | Risco | Custo LLM |
+| # | Item | Esforco | Impacto | Quando |
 |---|---|---|---|---|
-| **1 — Fundações** | Score + traces + feedback + memory de falha | Agora | Nenhum | Zero |
-| **2 — Calibração** | Parameter tuning automático | Com 200+ sessões | Baixo (caps + fallback) | Zero |
-| **3 — Evolução** | Prompt evolution + on-demand context | Com 500+ sessões | Médio (rollback) | ~1 Haiku/semana |
-| **4 — Horizonte** | Benchmark suite + structural evolution | Quando justificar | Alto | Variável |
+| F-01 | Orientacao automatica 1a msg | Baixo | Alto | Proximo sprint |
+| F-02 | Handoff note | Medio | Alto | Proximo sprint |
+| F-03 | Self-verification gate | Medio | Alto | Proximo sprint |
+| F-05 | Scope control evolvable | Baixo | Medio | Proximo sprint |
+| F-06 | False positive detection | Baixo | Medio | Segundo sprint |
+| F-04 | Session phases | Medio-alto | Medio | Avaliar apos F-01/F-02 |
+| F-07 | JSON para memorias | Baixo | Baixo | Guideline |
 
-O caminho é incremental. Cada fase se paga antes de abrir a próxima. Se a Fase 1 não mostrar valor (scores não correlacionam com qualidade percebida), paramos ali. Se a Fase 2 mostrar que parameter tuning melhora scores, avançamos. A Fase 4 pode nunca ser necessária — e tudo bem.
+---
+
+## Itens NAO implementados (escopo externo)
+
+| Item | Razao |
+|---|---|
+| **B-36: Cost tracking** | Pertence ao SymGateway, nao ao kernel. O gateway ja mede tokens in/out |
+| **B-41: Kimi K2 context limit** | Problema do provider (Groq), nao do kernel. Monitoramento |
+| **B-42: Tool descriptions** | Cross-repo (YouNews). Melhoria no OpenAPI do host |
+| **B-44: Narracao intermediaria** | Cross-repo (YouNews). Validacao pos-deploy |
+| **B-45: Test harness E2E** | Requer YouNews + SymGateway rodando. Baixa prioridade |
+
+---
+
+## Observacoes Historicas
+
+### Decisoes de design relevantes
+
+1. **Tiered activation vs threshold fixo:** Inicialmente o plano exigia 200+ sessoes para Fase 2 e 500+ para Fase 3. O usuario definiu que "o sistema deve funcionar com zero dados". Redesenhamos para tiers graduais (0/5/20/50 sessoes).
+
+2. **Proposer LLM:** Tres opcoes foram analisadas: (1) LLM separado obrigatorio, (2) mesmo LLM, (3) aceitar ambos. Opcao 3 implementada — host pode injetar LLM separado, default usa o principal.
+
+3. **Quais prompts evoluir:** Dos 13 textos enviados ao LLM, apenas 3 foram classificados como evolvable (instrucoes comportamentais). Os demais sao fatos tecnicos, formatos parser-dependent, ou conteudo controlado pelo host.
+
+4. **Horizon features imediatas:** O plano original deixava H-11/H-12/H-13 como "futuro distante". O usuario redefiniu: "terao 10 symbiotas testando em 2 meses". Tudo foi implementado imediatamente.
+
+5. **Propagacao do LoopTrace:** Opcao 2 escolhida (kernel._last_trace stateful) por ser simples e consistente com o design existente do kernel.
+
+### Inspiracoes externas
+
+- **Meta-Harness paper (Stanford/CMU, 2026):** Filesystem-based execution traces, self-evolving harness, feedback signals automaticos. Base conceitual para toda a implementacao.
+- **Berman commentary:** "Bitter lesson" aplicada a harnesses — pare de hardcodar, deixe o sistema aprender. Motivou o design de evolucao automatica.
+- **Anthropic "Effective Harnesses" (2025):** Padroes para agentes long-running — orientacao, progresso incremental, verificacao, handoff. Inspirou os itens F-01 a F-07 do trabalho futuro.
