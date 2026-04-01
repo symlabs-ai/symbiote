@@ -155,7 +155,8 @@ class EnvironmentConfig(BaseModel):
     resources: dict = Field(default_factory=dict)
     tool_tags: list[str] = Field(default_factory=list)
     tool_loading: Literal["full", "index", "semantic"] = "full"
-    tool_loop: bool = True
+    tool_mode: Literal["instant", "brief", "continuous"] = "brief"
+    tool_loop: bool = True  # deprecated — derived from tool_mode
     prompt_caching: bool = False
     memory_share: float = Field(default=0.40, ge=0.0, le=1.0)
     knowledge_share: float = Field(default=0.25, ge=0.0, le=1.0)

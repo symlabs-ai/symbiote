@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS environment_configs (
     resources_json  TEXT DEFAULT '{}',
     tool_tags_json  TEXT DEFAULT '[]',
     tool_loading    TEXT DEFAULT 'full',
+    tool_mode       TEXT DEFAULT 'brief',
     tool_loop       INTEGER DEFAULT 1
 );
 
@@ -194,6 +195,7 @@ class SQLiteAdapter:
             "ALTER TABLE environment_configs ADD COLUMN memory_share REAL DEFAULT 0.40",
             "ALTER TABLE environment_configs ADD COLUMN knowledge_share REAL DEFAULT 0.25",
             "ALTER TABLE environment_configs ADD COLUMN max_tool_iterations INTEGER DEFAULT 10",
+            "ALTER TABLE environment_configs ADD COLUMN tool_mode TEXT DEFAULT 'brief'",
         ):
             try:
                 self._conn.execute(stmt)

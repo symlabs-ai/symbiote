@@ -106,13 +106,14 @@ class ChatRunner:
     ) -> RunResult:
         """Run the chat runner synchronously with tool-loop support.
 
-        When ``context.tool_loop`` is True (default), the runner feeds tool
-        results back to the LLM and re-invokes it until the LLM responds
-        without tool calls or ``_MAX_TOOL_ITERATIONS`` is reached.
+        When ``context.tool_mode`` is ``"brief"`` or ``"continuous"`` the
+        runner feeds tool results back to the LLM and re-invokes until the
+        LLM responds without tool calls or max iterations is reached.
+        ``"instant"`` mode limits to a single shot (no loop).
         """
         messages = self._build_messages(context)
         kwargs = self._build_llm_kwargs(context)
-        max_iters = context.max_tool_iterations if context.tool_loop else 1
+        max_iters = self._resolve_max_iters(context)
         initial_msg_count = len(messages)
         controller = LoopController(
             max_iterations=max_iters,
@@ -219,7 +220,7 @@ class ChatRunner:
         """Async variant of run() with tool-loop support."""
         messages = self._build_messages(context)
         kwargs = self._build_llm_kwargs(context)
-        max_iters = context.max_tool_iterations if context.tool_loop else 1
+        max_iters = self._resolve_max_iters(context)
         initial_msg_count = len(messages)
         controller = LoopController(
             max_iterations=max_iters,
@@ -318,7 +319,7 @@ class ChatRunner:
             # Layer 3: aggressive autocompact if approaching context budget
             self._autocompact_if_needed(messages, initial_msg_count)
 
-        trace.total_iterations = iteration + 1 if context.tool_loop else 0
+        trace.total_iterations = iteration + 1 if max_iters > 1 else 0
         trace.total_tool_calls = len(trace.steps)
         trace.total_elapsed_ms = int((time.monotonic() - loop_start) * 1000)
         if trace.stop_reason is None:
@@ -347,6 +348,22 @@ class ChatRunner:
         )
 
     # ── internal ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _resolve_max_iters(context: AssembledContext) -> int:
+        """Derive max loop iterations from tool_mode, with tool_loop backward compat.
+
+        - ``instant`` mode always yields 1 (no loop).
+        - ``brief`` / ``continuous`` yield ``max_tool_iterations``.
+        - Backward compat: if ``tool_mode`` is the default "brief" but
+          ``tool_loop`` is explicitly False, treat as instant (1 iteration).
+        """
+        if context.tool_mode == "instant":
+            return 1
+        # Backward compat: tool_loop=False overrides default brief mode
+        if not context.tool_loop:
+            return 1
+        return context.max_tool_iterations
 
     def _build_llm_kwargs(self, context: AssembledContext) -> dict:
         """Build kwargs dict for the LLM call (config + native tools)."""
