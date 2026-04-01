@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [v0.2.23] - 2026-04-01
+
+- docs: clean up BACKLOG — remove 8 implemented items (B-25/26/28/31/37/38/39/43), add 9 Meta-Harness items (B-60 to B-68)
+- docs: add Meta-Harness analysis to kb/
+
 ## [v0.2.22] - 2026-03-31
 
 ### Added — Agent Loop Resilience Sprint
