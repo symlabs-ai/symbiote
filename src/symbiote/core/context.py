@@ -123,25 +123,34 @@ class ContextAssembler:
         if working_memory is not None:
             wm_snapshot = working_memory.snapshot()
 
-        # 3. Relevant memories
-        raw_memories = self._memory.get_relevant(user_input, session_id)
-        memories_dicts = [
-            {
-                "content": m.content,
-                "type": m.type,
-                "importance": m.importance,
-            }
-            for m in raw_memories
-        ]
-        # Sort by importance descending for trimming
-        memories_dicts.sort(key=lambda d: d["importance"], reverse=True)
+        # Resolve context_mode from EnvironmentConfig
+        context_mode = "packed"
+        if self._environment is not None:
+            context_mode = self._environment.get_context_mode(symbiote_id)
 
-        # 4. Relevant knowledge
-        raw_knowledge = self._knowledge.query(symbiote_id, user_input)
-        knowledge_dicts = [
-            {"name": k.name, "content": k.content or ""}
-            for k in raw_knowledge
-        ]
+        # 3. Relevant memories (skipped in on_demand mode)
+        memories_dicts: list[dict] = []
+        if context_mode != "on_demand":
+            raw_memories = self._memory.get_relevant(user_input, session_id)
+            memories_dicts = [
+                {
+                    "content": m.content,
+                    "type": m.type,
+                    "importance": m.importance,
+                }
+                for m in raw_memories
+            ]
+            # Sort by importance descending for trimming
+            memories_dicts.sort(key=lambda d: d["importance"], reverse=True)
+
+        # 4. Relevant knowledge (skipped in on_demand mode)
+        knowledge_dicts: list[dict] = []
+        if context_mode != "on_demand":
+            raw_knowledge = self._knowledge.query(symbiote_id, user_input)
+            knowledge_dicts = [
+                {"name": k.name, "content": k.content or ""}
+                for k in raw_knowledge
+            ]
 
         # 5. Tool descriptors — mode-aware loading
         #    Resolve tags: explicit param > EnvironmentConfig > None (all)

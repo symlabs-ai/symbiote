@@ -21,16 +21,28 @@ logger = logging.getLogger(__name__)
 
 # ── Memory/Knowledge tool descriptors ────────────────────────────────────────
 
+# ── Built-in descriptors ─────────────────────────────────────────────────────
+
 _MEMORY_SEARCH_DESCRIPTOR = ToolDescriptor(
     tool_id="search_memories",
     name="Search Memories",
-    description="Search the agent's memory store for relevant memories.",
+    description=(
+        "Search the agent's memory store for relevant memories. "
+        "Returns matching memory entries sorted by importance."
+    ),
     parameters={
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "Search query"},
-            "scope": {"type": "string", "description": "Optional scope filter"},
-            "limit": {"type": "integer", "description": "Max results (default 5)", "default": 5},
+            "query": {"type": "string", "description": "Search query for memory content"},
+            "scope": {
+                "type": "string",
+                "description": "Optional scope filter (global, user, project, workspace, session)",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max results to return (default 5)",
+                "default": 5,
+            },
         },
         "required": ["query"],
     },
@@ -40,19 +52,24 @@ _MEMORY_SEARCH_DESCRIPTOR = ToolDescriptor(
 _KNOWLEDGE_SEARCH_DESCRIPTOR = ToolDescriptor(
     tool_id="search_knowledge",
     name="Search Knowledge",
-    description="Search the knowledge base for relevant domain knowledge.",
+    description=(
+        "Search the knowledge base for relevant domain knowledge and documents. "
+        "Returns matching knowledge entries."
+    ),
     parameters={
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "Search query"},
-            "limit": {"type": "integer", "description": "Max results (default 5)", "default": 5},
+            "query": {"type": "string", "description": "Search query for knowledge content"},
+            "limit": {
+                "type": "integer",
+                "description": "Max results to return (default 5)",
+                "default": 5,
+            },
         },
         "required": ["query"],
     },
     handler_type="builtin",
 )
-
-# ── Built-in descriptors ─────────────────────────────────────────────────────
 
 _BUILTIN_DESCRIPTORS: dict[str, ToolDescriptor] = {
     "fs_read": ToolDescriptor(
@@ -498,8 +515,16 @@ class ToolGateway:
             return desc.risk_level
         return "low"
 
-    def register_memory_tools(self, memory_store: Any, knowledge_service: Any) -> None:
-        """Register search_memories and search_knowledge builtin tools."""
+    def register_memory_tools(
+        self,
+        memory_store: Any,
+        knowledge_service: Any,
+    ) -> None:
+        """Register search_memories and search_knowledge builtin tools.
+
+        These are always registered but only authorized (via EnvironmentConfig
+        tools list) when context_mode == "on_demand".
+        """
         self.register_descriptor(
             _MEMORY_SEARCH_DESCRIPTOR,
             _make_memory_search_handler(memory_store),
@@ -526,6 +551,8 @@ class ToolGateway:
 
 
 def _make_memory_search_handler(memory_store: Any) -> Callable[[dict], Any]:
+    """Create a handler that searches the memory store."""
+
     def handler(params: dict) -> Any:
         query = params.get("query", "")
         scope = params.get("scope")
@@ -535,16 +562,20 @@ def _make_memory_search_handler(memory_store: Any) -> Callable[[dict], Any]:
             {"content": m.content, "type": m.type, "importance": m.importance}
             for m in results
         ]
+
     return handler
 
 
 def _make_knowledge_search_handler(knowledge_service: Any) -> Callable[[dict], Any]:
+    """Create a handler that queries the knowledge service."""
+
     def handler(params: dict) -> Any:
         symbiote_id = params.get("symbiote_id", "")
         query = params.get("query", "")
         limit = params.get("limit", 5)
         results = knowledge_service.query(symbiote_id, query, limit=limit)
         return [{"name": k.name, "content": k.content or ""} for k in results]
+
     return handler
 
 

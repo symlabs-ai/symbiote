@@ -162,8 +162,8 @@ class EnvironmentConfig(BaseModel):
     knowledge_share: float = Field(default=0.25, ge=0.0, le=1.0)
     max_tool_iterations: int = Field(default=10, ge=1, le=50)
     tool_call_timeout: float = Field(default=30.0, ge=1.0, le=300.0)
-    context_mode: Literal["packed", "on_demand"] = "packed"
     loop_timeout: float = Field(default=300.0, ge=10.0, le=3600.0)
+    context_mode: Literal["packed", "on_demand"] = "packed"
     # Long-run mode configuration
     planner_prompt: str | None = None
     evaluator_prompt: str | None = None
