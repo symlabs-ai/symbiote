@@ -58,6 +58,9 @@ class SymbioteKernel:
         self._policy_gate = PolicyGate(self._environment, self._storage)
         self._tool_gateway = ToolGateway(self._policy_gate)
 
+        # Memory/knowledge tools (on-demand context mode)
+        self._tool_gateway.register_memory_tools(self._memory, self._knowledge)
+
         # Harness versioning
         self._harness_versions = HarnessVersionRepository(self._storage)
 

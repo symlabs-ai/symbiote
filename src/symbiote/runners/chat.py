@@ -977,6 +977,14 @@ class ChatRunner:
                 content = k.get("content", "")
                 parts.append(f"### {name}\n{content}")
 
+        # On-demand context mode instruction
+        if context.context_mode == "on_demand" and not context.relevant_memories and not context.relevant_knowledge:
+            parts.append(
+                "## Context Access\n"
+                "You have access to search_memories and search_knowledge tools. "
+                "Use them when you need historical context or domain knowledge."
+            )
+
         if not parts:
             return "You are a helpful assistant."
 

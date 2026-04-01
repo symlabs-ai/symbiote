@@ -198,6 +198,7 @@ class SQLiteAdapter:
             "ALTER TABLE environment_configs ADD COLUMN tool_call_timeout REAL DEFAULT 30.0",
             "ALTER TABLE environment_configs ADD COLUMN loop_timeout REAL DEFAULT 300.0",
             "ALTER TABLE environment_configs ADD COLUMN tool_mode TEXT DEFAULT 'brief'",
+            "ALTER TABLE environment_configs ADD COLUMN context_mode TEXT DEFAULT 'packed'",
         ):
             try:
                 self._conn.execute(stmt)

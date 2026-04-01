@@ -19,6 +19,39 @@ from symbiote.environment.policies import PolicyGate, ToolResult
 
 logger = logging.getLogger(__name__)
 
+# ── Memory/Knowledge tool descriptors ────────────────────────────────────────
+
+_MEMORY_SEARCH_DESCRIPTOR = ToolDescriptor(
+    tool_id="search_memories",
+    name="Search Memories",
+    description="Search the agent's memory store for relevant memories.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Search query"},
+            "scope": {"type": "string", "description": "Optional scope filter"},
+            "limit": {"type": "integer", "description": "Max results (default 5)", "default": 5},
+        },
+        "required": ["query"],
+    },
+    handler_type="builtin",
+)
+
+_KNOWLEDGE_SEARCH_DESCRIPTOR = ToolDescriptor(
+    tool_id="search_knowledge",
+    name="Search Knowledge",
+    description="Search the knowledge base for relevant domain knowledge.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Search query"},
+            "limit": {"type": "integer", "description": "Max results (default 5)", "default": 5},
+        },
+        "required": ["query"],
+    },
+    handler_type="builtin",
+)
+
 # ── Built-in descriptors ─────────────────────────────────────────────────────
 
 _BUILTIN_DESCRIPTORS: dict[str, ToolDescriptor] = {
@@ -433,6 +466,17 @@ class ToolGateway:
             return desc.risk_level
         return "low"
 
+    def register_memory_tools(self, memory_store: Any, knowledge_service: Any) -> None:
+        """Register search_memories and search_knowledge builtin tools."""
+        self.register_descriptor(
+            _MEMORY_SEARCH_DESCRIPTOR,
+            _make_memory_search_handler(memory_store),
+        )
+        self.register_descriptor(
+            _KNOWLEDGE_SEARCH_DESCRIPTOR,
+            _make_knowledge_search_handler(knowledge_service),
+        )
+
     def get_http_config(self, tool_id: str) -> HttpToolConfig | None:
         """Return the HTTP config for a tool, or None."""
         return self._http_configs.get(tool_id)
@@ -443,6 +487,32 @@ class ToolGateway:
         self.register_descriptor(_BUILTIN_DESCRIPTORS["fs_read"], _fs_read)
         self.register_descriptor(_BUILTIN_DESCRIPTORS["fs_write"], _fs_write)
         self.register_descriptor(_BUILTIN_DESCRIPTORS["fs_list"], _fs_list)
+
+
+# ── Memory / Knowledge handler factories ─────────────────────────────────────
+
+
+def _make_memory_search_handler(memory_store: Any) -> Callable[[dict], Any]:
+    def handler(params: dict) -> Any:
+        query = params.get("query", "")
+        scope = params.get("scope")
+        limit = params.get("limit", 5)
+        results = memory_store.search(query, scope=scope, limit=limit)
+        return [
+            {"content": m.content, "type": m.type, "importance": m.importance}
+            for m in results
+        ]
+    return handler
+
+
+def _make_knowledge_search_handler(knowledge_service: Any) -> Callable[[dict], Any]:
+    def handler(params: dict) -> Any:
+        symbiote_id = params.get("symbiote_id", "")
+        query = params.get("query", "")
+        limit = params.get("limit", 5)
+        results = knowledge_service.query(symbiote_id, query, limit=limit)
+        return [{"name": k.name, "content": k.content or ""} for k in results]
+    return handler
 
 
 # ── External content safety ──────────────────────────────────────────────────

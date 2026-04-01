@@ -35,6 +35,7 @@ class EnvironmentManager:
         max_tool_iterations: int | None = None,
         tool_call_timeout: float | None = None,
         loop_timeout: float | None = None,
+        context_mode: str | None = None,
     ) -> EnvironmentConfig:
         """Create or update an environment config for a symbiote+workspace combo."""
         existing = self._fetch_exact(symbiote_id, workspace_id)
@@ -67,6 +68,7 @@ class EnvironmentManager:
                 max_tool_iterations=max_tool_iterations if max_tool_iterations is not None else existing.max_tool_iterations,
                 tool_call_timeout=tool_call_timeout if tool_call_timeout is not None else existing.tool_call_timeout,
                 loop_timeout=loop_timeout if loop_timeout is not None else existing.loop_timeout,
+                context_mode=context_mode if context_mode is not None else existing.context_mode,
             )
             self._storage.execute(
                 "UPDATE environment_configs SET "
@@ -74,7 +76,7 @@ class EnvironmentManager:
                 "policies_json = ?, resources_json = ?, tool_tags_json = ?, "
                 "tool_loading = ?, tool_loop = ?, prompt_caching = ?, "
                 "memory_share = ?, knowledge_share = ?, max_tool_iterations = ?, "
-                "tool_call_timeout = ?, loop_timeout = ?, tool_mode = ? "
+                "tool_call_timeout = ?, loop_timeout = ?, tool_mode = ?, context_mode = ? "
                 "WHERE id = ?",
                 (
                     json.dumps(cfg.tools),
@@ -92,6 +94,7 @@ class EnvironmentManager:
                     cfg.tool_call_timeout,
                     cfg.loop_timeout,
                     cfg.tool_mode,
+                    cfg.context_mode,
                     cfg.id,
                 ),
             )
@@ -116,14 +119,15 @@ class EnvironmentManager:
             max_tool_iterations=max_tool_iterations if max_tool_iterations is not None else 10,
             tool_call_timeout=tool_call_timeout if tool_call_timeout is not None else 30.0,
             loop_timeout=loop_timeout if loop_timeout is not None else 300.0,
+            context_mode=context_mode or "packed",
         )
         self._storage.execute(
             "INSERT INTO environment_configs "
             "(id, symbiote_id, workspace_id, tools_json, services_json, "
             "humans_json, policies_json, resources_json, tool_tags_json, "
             "tool_loading, tool_loop, prompt_caching, memory_share, knowledge_share, "
-            "max_tool_iterations, tool_call_timeout, loop_timeout, tool_mode) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "max_tool_iterations, tool_call_timeout, loop_timeout, tool_mode, context_mode) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 cfg.id,
                 cfg.symbiote_id,
@@ -143,6 +147,7 @@ class EnvironmentManager:
                 cfg.tool_call_timeout,
                 cfg.loop_timeout,
                 cfg.tool_mode,
+                cfg.context_mode,
             ),
         )
         return cfg
@@ -263,6 +268,15 @@ class EnvironmentManager:
             return 300.0
         return cfg.loop_timeout
 
+    def get_context_mode(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> str:
+        """Return context_mode from config, or 'packed' if no config."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return "packed"
+        return cfg.context_mode
+
     # ── private helpers ────────────────────────────────────────────────
 
     def _fetch_exact(
@@ -306,4 +320,5 @@ class EnvironmentManager:
             max_tool_iterations=int(row.get("max_tool_iterations", 10) or 10),
             tool_call_timeout=float(row.get("tool_call_timeout", 30.0) or 30.0),
             loop_timeout=float(row.get("loop_timeout", 300.0) or 300.0),
+            context_mode=row.get("context_mode") or "packed",
         )

@@ -38,6 +38,7 @@ class AssembledContext(BaseModel):
     tool_instructions_override: str | None = None
     injection_stagnation_override: str | None = None
     injection_circuit_breaker_override: str | None = None
+    context_mode: str = "packed"
     extra_context: dict | None = None
     generation_settings: dict | None = None  # from GenerationSettings.to_config_dict()
     user_input: str
@@ -152,6 +153,7 @@ class ContextAssembler:
         max_tool_iterations = 10
         tool_call_timeout = 30.0
         loop_timeout = 300.0
+        context_mode = "packed"
         if self._environment is not None:
             loading_mode = self._environment.get_tool_loading(symbiote_id)
             tool_mode = self._environment.get_tool_mode(symbiote_id)
@@ -162,6 +164,12 @@ class ContextAssembler:
             max_tool_iterations = self._environment.get_max_tool_iterations(symbiote_id)
             tool_call_timeout = self._environment.get_tool_call_timeout(symbiote_id)
             loop_timeout = self._environment.get_loop_timeout(symbiote_id)
+            context_mode = self._environment.get_context_mode(symbiote_id)
+
+        # On-demand mode: skip memory/knowledge injection (available as tools)
+        if context_mode == "on_demand":
+            memories_dicts = []
+            knowledge_dicts = []
 
         tool_dicts: list[dict] = []
         if self._tool_gateway is not None:
@@ -213,6 +221,7 @@ class ContextAssembler:
             tool_instructions_override=tool_instr_override,
             injection_stagnation_override=stag_override,
             injection_circuit_breaker_override=cb_override,
+            context_mode=context_mode,
             extra_context=extra_context,
             user_input=user_input,
             total_tokens_estimate=total,
