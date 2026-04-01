@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [v0.3.5] - 2026-04-01
+
+- fix: disable OpenAI SDK-level retries on 429 (max_retries=0) — prevents burst amplification
+- fix: exclude rate-limit errors from ChatRunner outer retry layer
+- feat: inject symgateway project slug header in ForgeLLM adapter
+- feat: staging environment migrated to Docker container (staging-symbiote, port 8008)
+- chore: update Gitea CI workflow for Docker-based staging deploy
+- docs: update INFRA.md with Docker staging instructions
+
+---
+
 ## [v0.3.4] - 2026-04-01
 
 - feat: API config endpoint — PUT/GET /symbiotes/{id}/config (tool_mode, long-run config, timeouts)
