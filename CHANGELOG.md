@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [v0.3.2] - 2026-04-01
+
+- feat: brief mode — sync trace, calibrated scoring, multi-step instructions
+
+---
+
 ## [v0.3.1] - 2026-04-01
 
 - feat: instant mode — mode-aware harness for single-shot execution
