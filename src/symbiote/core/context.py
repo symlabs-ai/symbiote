@@ -29,7 +29,8 @@ class AssembledContext(BaseModel):
     relevant_knowledge: list[dict] = Field(default_factory=list)
     available_tools: list[dict] = Field(default_factory=list)
     tool_loading: str = "full"
-    tool_loop: bool = True
+    tool_mode: str = "brief"
+    tool_loop: bool = True  # deprecated — derived from tool_mode
     max_tool_iterations: int = 10
     tool_call_timeout: float = 30.0
     loop_timeout: float = 300.0
@@ -143,6 +144,7 @@ class ContextAssembler:
 
         # Resolve loading mode, tool loop, prompt caching, and context splits
         loading_mode = "full"
+        tool_mode = "brief"
         loop_enabled = True
         prompt_caching = False
         memory_share = _MEMORIES_SHARE
@@ -152,7 +154,8 @@ class ContextAssembler:
         loop_timeout = 300.0
         if self._environment is not None:
             loading_mode = self._environment.get_tool_loading(symbiote_id)
-            loop_enabled = self._environment.get_tool_loop(symbiote_id)
+            tool_mode = self._environment.get_tool_mode(symbiote_id)
+            loop_enabled = tool_mode != "instant"
             prompt_caching = self._environment.get_prompt_caching(symbiote_id)
             memory_share = self._environment.get_memory_share(symbiote_id)
             knowledge_share = self._environment.get_knowledge_share(symbiote_id)
@@ -202,6 +205,7 @@ class ContextAssembler:
             relevant_knowledge=knowledge_dicts,
             available_tools=tool_dicts,
             tool_loading=loading_mode,
+            tool_mode=tool_mode,
             tool_loop=loop_enabled,
             max_tool_iterations=max_tool_iterations,
             tool_call_timeout=tool_call_timeout,

@@ -118,7 +118,7 @@ class ChatRunner:
         """
         messages = self._build_messages(context)
         kwargs = self._build_llm_kwargs(context)
-        max_iters = context.max_tool_iterations if context.tool_loop else 1
+        max_iters = self._resolve_max_iters(context)
         initial_msg_count = len(messages)
         controller = LoopController(
             max_iterations=max_iters,
@@ -276,7 +276,7 @@ class ChatRunner:
         """Async variant of run() with tool-loop support."""
         messages = self._build_messages(context)
         kwargs = self._build_llm_kwargs(context)
-        max_iters = context.max_tool_iterations if context.tool_loop else 1
+        max_iters = self._resolve_max_iters(context)
         initial_msg_count = len(messages)
         controller = LoopController(
             max_iterations=max_iters,
@@ -496,6 +496,17 @@ class ChatRunner:
             status = "ok" if r.success else f"error: {(r.error or '')[:50]}"
             lines.append(f"{i}) {r.tool_id} \u2192 {status}")
         return "\n".join(lines)
+
+    # ── Tool mode resolution ───────────────────────────────────────────
+
+    @staticmethod
+    def _resolve_max_iters(context: AssembledContext) -> int:
+        """Derive max loop iterations from tool_mode, with tool_loop backward compat."""
+        if context.tool_mode == "instant":
+            return 1
+        if not context.tool_loop:
+            return 1
+        return context.max_tool_iterations
 
     # ── Index mode schema cache ────────────────────────────────────────
 

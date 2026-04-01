@@ -27,6 +27,7 @@ class EnvironmentManager:
         resources: dict | None = None,
         tool_tags: list[str] | None = None,
         tool_loading: str | None = None,
+        tool_mode: str | None = None,
         tool_loop: bool | None = None,
         prompt_caching: bool | None = None,
         memory_share: float | None = None,
@@ -37,6 +38,13 @@ class EnvironmentManager:
     ) -> EnvironmentConfig:
         """Create or update an environment config for a symbiote+workspace combo."""
         existing = self._fetch_exact(symbiote_id, workspace_id)
+
+        # Auto-derive tool_loop from tool_mode when tool_mode is set explicitly
+        if tool_mode is not None and tool_loop is None:
+            tool_loop = tool_mode != "instant"
+        # Backward compat: if only tool_loop is set, derive tool_mode
+        if tool_loop is not None and tool_mode is None:
+            tool_mode = "instant" if not tool_loop else None  # None = keep existing
 
         if existing is not None:
             # Update in place
@@ -51,6 +59,7 @@ class EnvironmentManager:
                 resources=resources if resources is not None else existing.resources,
                 tool_tags=tool_tags if tool_tags is not None else existing.tool_tags,
                 tool_loading=tool_loading if tool_loading is not None else existing.tool_loading,
+                tool_mode=tool_mode if tool_mode is not None else existing.tool_mode,
                 tool_loop=tool_loop if tool_loop is not None else existing.tool_loop,
                 prompt_caching=prompt_caching if prompt_caching is not None else existing.prompt_caching,
                 memory_share=memory_share if memory_share is not None else existing.memory_share,
@@ -65,7 +74,7 @@ class EnvironmentManager:
                 "policies_json = ?, resources_json = ?, tool_tags_json = ?, "
                 "tool_loading = ?, tool_loop = ?, prompt_caching = ?, "
                 "memory_share = ?, knowledge_share = ?, max_tool_iterations = ?, "
-                "tool_call_timeout = ?, loop_timeout = ? "
+                "tool_call_timeout = ?, loop_timeout = ?, tool_mode = ? "
                 "WHERE id = ?",
                 (
                     json.dumps(cfg.tools),
@@ -82,6 +91,7 @@ class EnvironmentManager:
                     cfg.max_tool_iterations,
                     cfg.tool_call_timeout,
                     cfg.loop_timeout,
+                    cfg.tool_mode,
                     cfg.id,
                 ),
             )
@@ -98,6 +108,7 @@ class EnvironmentManager:
             resources=resources or {},
             tool_tags=tool_tags or [],
             tool_loading=tool_loading or "full",
+            tool_mode=tool_mode if tool_mode is not None else "brief",
             tool_loop=tool_loop if tool_loop is not None else True,
             prompt_caching=prompt_caching if prompt_caching is not None else False,
             memory_share=memory_share if memory_share is not None else 0.40,
@@ -111,8 +122,8 @@ class EnvironmentManager:
             "(id, symbiote_id, workspace_id, tools_json, services_json, "
             "humans_json, policies_json, resources_json, tool_tags_json, "
             "tool_loading, tool_loop, prompt_caching, memory_share, knowledge_share, "
-            "max_tool_iterations, tool_call_timeout, loop_timeout) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "max_tool_iterations, tool_call_timeout, loop_timeout, tool_mode) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 cfg.id,
                 cfg.symbiote_id,
@@ -131,6 +142,7 @@ class EnvironmentManager:
                 cfg.max_tool_iterations,
                 cfg.tool_call_timeout,
                 cfg.loop_timeout,
+                cfg.tool_mode,
             ),
         )
         return cfg
@@ -178,6 +190,15 @@ class EnvironmentManager:
         if cfg is None:
             return "full"
         return cfg.tool_loading
+
+    def get_tool_mode(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> str:
+        """Return tool_mode from config, or 'brief' if no config."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return "brief"
+        return cfg.tool_mode
 
     def get_tool_loop(
         self, symbiote_id: str, workspace_id: str | None = None
@@ -277,6 +298,7 @@ class EnvironmentManager:
             resources=json.loads(row["resources_json"]),
             tool_tags=json.loads(row.get("tool_tags_json") or "[]"),
             tool_loading=row.get("tool_loading") or "full",
+            tool_mode=row.get("tool_mode") or "brief",
             tool_loop=bool(row.get("tool_loop", 1)),
             prompt_caching=bool(row.get("prompt_caching", 0)),
             memory_share=float(row.get("memory_share", 0.40) or 0.40),
