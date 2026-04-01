@@ -226,7 +226,7 @@ class ChatRunner:
 
         for iteration in range(max_iters):
             try:
-                response, buffered_chunks = self._call_llm_sync(messages, kwargs, on_token)
+                response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
             except Exception as exc:
                 return RunResult(success=False, error=str(exc), runner_type=self.runner_type, loop_trace=trace)
 
