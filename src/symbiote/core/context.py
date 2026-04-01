@@ -132,14 +132,18 @@ class ContextAssembler:
         if not effective_tags and self._environment is not None:
             effective_tags = self._environment.get_tool_tags(symbiote_id) or None
 
-        # Resolve loading mode, tool loop, and prompt caching from EnvironmentConfig
+        # Resolve loading mode, tool loop, prompt caching, and context splits
         loading_mode = "full"
         loop_enabled = True
         prompt_caching = False
+        memory_share = _MEMORIES_SHARE
+        knowledge_share = _KNOWLEDGE_SHARE
         if self._environment is not None:
             loading_mode = self._environment.get_tool_loading(symbiote_id)
             loop_enabled = self._environment.get_tool_loop(symbiote_id)
             prompt_caching = self._environment.get_prompt_caching(symbiote_id)
+            memory_share = self._environment.get_memory_share(symbiote_id)
+            knowledge_share = self._environment.get_knowledge_share(symbiote_id)
 
         tool_dicts: list[dict] = []
         if self._tool_gateway is not None:
@@ -147,9 +151,10 @@ class ContextAssembler:
                 symbiote_id, user_input, effective_tags, loading_mode
             )
 
-        # 6. Trim to fit budget
+        # 6. Trim to fit budget (using configurable shares)
         persona, wm_snapshot, memories_dicts, knowledge_dicts = self._trim_to_budget(
-            persona, wm_snapshot, memories_dicts, knowledge_dicts, user_input
+            persona, wm_snapshot, memories_dicts, knowledge_dicts, user_input,
+            memory_share=memory_share, knowledge_share=knowledge_share,
         )
 
         # 7. Compute total token estimate
@@ -315,6 +320,9 @@ class ContextAssembler:
         memories: list[dict],
         knowledge: list[dict],
         user_input: str,
+        *,
+        memory_share: float = _MEMORIES_SHARE,
+        knowledge_share: float = _KNOWLEDGE_SHARE,
     ) -> tuple[dict | None, dict | None, list[dict], list[dict]]:
         """Trim memories and knowledge (least important first) to fit budget."""
         total = self._total_tokens(persona, wm_snapshot, memories, knowledge, user_input)
@@ -330,7 +338,10 @@ class ContextAssembler:
             return persona, wm_snapshot, [], []
 
         # Split available between memories and knowledge proportionally
-        mem_budget = int(available * _MEMORIES_SHARE / (_MEMORIES_SHARE + _KNOWLEDGE_SHARE))
+        total_share = memory_share + knowledge_share
+        if total_share <= 0:
+            total_share = 0.65  # fallback
+        mem_budget = int(available * memory_share / total_share)
         know_budget = available - mem_budget
 
         # Trim memories (already sorted by importance desc)

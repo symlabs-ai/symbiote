@@ -16,6 +16,7 @@ from symbiote.core.identity import IdentityManager
 from symbiote.core.models import Session, Symbiote
 from symbiote.core.ports import LLMPort, SessionRecallPort
 from symbiote.core.reflection import ReflectionEngine
+from symbiote.core.scoring import compute_auto_score, compute_final_score
 from symbiote.core.session import SessionManager
 from symbiote.core.session_lock import SessionLock
 from symbiote.discovery.loader import DiscoveredToolLoader
@@ -26,7 +27,7 @@ from symbiote.environment.tools import ToolGateway
 from symbiote.knowledge.service import KnowledgeService
 from symbiote.memory.store import MemoryStore
 from symbiote.process.engine import ProcessEngine
-from symbiote.runners.base import RunnerRegistry
+from symbiote.runners.base import LoopTrace, RunnerRegistry
 from symbiote.runners.chat import ChatRunner
 from symbiote.runners.process import ProcessRunner
 from symbiote.runners.subagent import SubagentManager
@@ -95,6 +96,10 @@ class SymbioteKernel:
 
         # Optional session recall (host provides implementation)
         self._session_recall: SessionRecallPort | None = None
+
+        # Last loop trace — set by message(), consumed by close_session()
+        self._last_trace: LoopTrace | None = None
+        self._last_trace_session: str | None = None
 
         # Capability surface
         self._capabilities = CapabilitySurface(
@@ -219,6 +224,13 @@ class SymbioteKernel:
 
         self._sessions.add_message(session_id, "assistant", text)
 
+        # Capture loop trace from last RunResult for close_session()
+        trace = self._capabilities.last_loop_trace
+        if trace is not None:
+            self._last_trace = trace
+            self._last_trace_session = session_id
+            self._persist_trace(session_id, symbiote_id, trace)
+
         return response
 
     async def message_async(
@@ -268,18 +280,78 @@ class SymbioteKernel:
             text = response
 
         self._sessions.add_message(session_id, "assistant", text)
+
+        # Capture loop trace from last RunResult for close_session()
+        trace = self._capabilities.last_loop_trace
+        if trace is not None:
+            self._last_trace = trace
+            self._last_trace_session = session_id
+            self._persist_trace(session_id, symbiote_id, trace)
+
         return response
 
     def close_session(self, session_id: str) -> Session:
-        """Run reflection on the session, then close it."""
-        # Get symbiote_id for reflection
+        """Run reflection, compute score, persist failure memory, then close."""
         row = self._storage.fetch_one(
             "SELECT symbiote_id FROM sessions WHERE id = ?", (session_id,)
         )
         if row is not None:
-            self._reflection.reflect_session(session_id, row["symbiote_id"])
+            symbiote_id = row["symbiote_id"]
+
+            # 1. Compute and persist session score
+            trace = self._last_trace if self._last_trace_session == session_id else None
+            self._persist_score(session_id, symbiote_id, trace)
+
+            # 2. Generate failure MemoryEntry if loop didn't complete
+            self._generate_failure_memory(session_id, symbiote_id, trace)
+
+            # 3. Reflection (existing)
+            self._reflection.reflect_session(session_id, symbiote_id)
+
+            # Clear trace state
+            if self._last_trace_session == session_id:
+                self._last_trace = None
+                self._last_trace_session = None
 
         return self._sessions.close(session_id)
+
+    def report_feedback(
+        self, session_id: str, score: float, source: str = "user"
+    ) -> None:
+        """Report user feedback for a session, updating the final score.
+
+        The host calls this when it has a quality signal (user thumbs up,
+        task completion, etc.).  The auto_score is preserved; final_score
+        is recomputed as a weighted combination.
+        """
+        row = self._storage.fetch_one(
+            "SELECT id, auto_score FROM session_scores WHERE session_id = ?",
+            (session_id,),
+        )
+        if row is None:
+            # No auto_score yet — store user score alone
+            from symbiote.core.scoring import _utcnow, _uuid
+
+            sid_row = self._storage.fetch_one(
+                "SELECT symbiote_id FROM sessions WHERE id = ?", (session_id,),
+            )
+            symbiote_id = sid_row["symbiote_id"] if sid_row else ""
+            final = compute_final_score(0.8, score)  # assume 0.8 auto
+            self._storage.execute(
+                "INSERT INTO session_scores "
+                "(id, session_id, symbiote_id, auto_score, user_score, final_score, "
+                "computed_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (_uuid(), session_id, symbiote_id, 0.8, score, final,
+                 _utcnow().isoformat()),
+            )
+            return
+
+        auto = row["auto_score"]
+        final = compute_final_score(auto, score)
+        self._storage.execute(
+            "UPDATE session_scores SET user_score = ?, final_score = ? WHERE id = ?",
+            (score, final, row["id"]),
+        )
 
     def load_discovered_tools(self, symbiote_id: str, base_url: str = "") -> list[str]:
         """Load approved discovered tools into the ToolGateway and authorize them.
@@ -362,6 +434,111 @@ class SymbioteKernel:
         Only used when ``tool_loading="semantic"`` is configured for a symbiote.
         """
         self._context_assembler._semantic_llm = llm
+
+    # ── Harness foundations (trace, score, failure memory) ───────────
+
+    def _persist_trace(
+        self, session_id: str, symbiote_id: str, trace: LoopTrace
+    ) -> None:
+        """Persist a LoopTrace to execution_traces table."""
+        import json
+        from datetime import UTC, datetime
+        from uuid import uuid4
+
+        self._storage.execute(
+            "INSERT INTO execution_traces "
+            "(id, session_id, symbiote_id, total_iterations, total_tool_calls, "
+            "total_elapsed_ms, stop_reason, steps_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(uuid4()),
+                session_id,
+                symbiote_id,
+                trace.total_iterations,
+                trace.total_tool_calls,
+                trace.total_elapsed_ms,
+                trace.stop_reason,
+                json.dumps([s.model_dump() for s in trace.steps]),
+                datetime.now(tz=UTC).isoformat(),
+            ),
+        )
+
+    def _persist_score(
+        self, session_id: str, symbiote_id: str, trace: LoopTrace | None
+    ) -> None:
+        """Compute and persist session score."""
+        from datetime import UTC, datetime
+        from uuid import uuid4
+
+        auto = compute_auto_score(trace)
+        final = compute_final_score(auto)
+        self._storage.execute(
+            "INSERT OR REPLACE INTO session_scores "
+            "(id, session_id, symbiote_id, auto_score, final_score, "
+            "stop_reason, total_iterations, total_tool_calls, computed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(uuid4()),
+                session_id,
+                symbiote_id,
+                auto,
+                final,
+                trace.stop_reason if trace else None,
+                trace.total_iterations if trace else 0,
+                trace.total_tool_calls if trace else 0,
+                datetime.now(tz=UTC).isoformat(),
+            ),
+        )
+
+    def _generate_failure_memory(
+        self, session_id: str, symbiote_id: str, trace: LoopTrace | None
+    ) -> None:
+        """Generate a procedural MemoryEntry when the tool loop fails."""
+        from collections import Counter
+
+        from symbiote.core.models import MemoryEntry
+
+        if trace is None or trace.stop_reason in ("end_turn", None):
+            return
+
+        if trace.stop_reason == "circuit_breaker":
+            # Find the tool that triggered the breaker
+            failed_tool = "unknown"
+            for step in reversed(trace.steps):
+                if not step.success:
+                    failed_tool = step.tool_id
+                    break
+            content = (
+                f"Tool '{failed_tool}' falhou múltiplas vezes consecutivas. "
+                "Verificar pré-condições antes de chamar."
+            )
+        elif trace.stop_reason == "stagnation":
+            last_tool = trace.steps[-1].tool_id if trace.steps else "unknown"
+            content = (
+                f"Loop estagnou chamando '{last_tool}' repetidamente. "
+                "Verificar se a task já foi completada antes de chamar novamente."
+            )
+        elif trace.stop_reason == "max_iterations":
+            tool_counts = Counter(s.tool_id for s in trace.steps)
+            top_3 = ", ".join(t for t, _ in tool_counts.most_common(3))
+            content = (
+                f"Sessão esgotou {trace.total_iterations} iterações sem completar. "
+                f"Tools mais usadas: {top_3}. "
+                "Considerar decompor a task em passos menores."
+            )
+        else:
+            return
+
+        self._memory.store(MemoryEntry(
+            symbiote_id=symbiote_id,
+            session_id=session_id,
+            type="procedural",
+            scope="global",
+            content=content,
+            importance=0.7,
+            source="system",
+            tags=["harness_failure", trace.stop_reason],
+        ))
 
     def shutdown(self) -> None:
         """Close the storage adapter."""

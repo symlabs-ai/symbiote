@@ -191,6 +191,43 @@ class SQLiteAdapter:
             "ALTER TABLE environment_configs ADD COLUMN tool_loop INTEGER DEFAULT 1",
             "ALTER TABLE environment_configs ADD COLUMN prompt_caching INTEGER DEFAULT 0",
             "ALTER TABLE memory_entries ADD COLUMN category TEXT DEFAULT NULL",
+            "ALTER TABLE environment_configs ADD COLUMN memory_share REAL DEFAULT 0.40",
+            "ALTER TABLE environment_configs ADD COLUMN knowledge_share REAL DEFAULT 0.25",
+        ):
+            try:
+                self._conn.execute(stmt)
+                self._conn.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
+
+        # Create new tables (idempotent via IF NOT EXISTS)
+        for stmt in (
+            """CREATE TABLE IF NOT EXISTS execution_traces (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                symbiote_id TEXT NOT NULL,
+                total_iterations INTEGER,
+                total_tool_calls INTEGER,
+                total_elapsed_ms INTEGER,
+                stop_reason TEXT,
+                steps_json TEXT,
+                created_at TEXT NOT NULL
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_traces_symbiote ON execution_traces(symbiote_id, created_at)",
+            """CREATE TABLE IF NOT EXISTS session_scores (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                symbiote_id TEXT NOT NULL,
+                auto_score REAL DEFAULT 0.0,
+                user_score REAL,
+                final_score REAL DEFAULT 0.0,
+                stop_reason TEXT,
+                total_iterations INTEGER DEFAULT 0,
+                total_tool_calls INTEGER DEFAULT 0,
+                computed_at TEXT NOT NULL
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_scores_symbiote ON session_scores(symbiote_id, computed_at)",
+            "CREATE INDEX IF NOT EXISTS idx_scores_session ON session_scores(session_id)",
         ):
             try:
                 self._conn.execute(stmt)

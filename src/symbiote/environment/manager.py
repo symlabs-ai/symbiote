@@ -29,6 +29,8 @@ class EnvironmentManager:
         tool_loading: str | None = None,
         tool_loop: bool | None = None,
         prompt_caching: bool | None = None,
+        memory_share: float | None = None,
+        knowledge_share: float | None = None,
     ) -> EnvironmentConfig:
         """Create or update an environment config for a symbiote+workspace combo."""
         existing = self._fetch_exact(symbiote_id, workspace_id)
@@ -48,12 +50,15 @@ class EnvironmentManager:
                 tool_loading=tool_loading if tool_loading is not None else existing.tool_loading,
                 tool_loop=tool_loop if tool_loop is not None else existing.tool_loop,
                 prompt_caching=prompt_caching if prompt_caching is not None else existing.prompt_caching,
+                memory_share=memory_share if memory_share is not None else existing.memory_share,
+                knowledge_share=knowledge_share if knowledge_share is not None else existing.knowledge_share,
             )
             self._storage.execute(
                 "UPDATE environment_configs SET "
                 "tools_json = ?, services_json = ?, humans_json = ?, "
                 "policies_json = ?, resources_json = ?, tool_tags_json = ?, "
-                "tool_loading = ?, tool_loop = ?, prompt_caching = ? "
+                "tool_loading = ?, tool_loop = ?, prompt_caching = ?, "
+                "memory_share = ?, knowledge_share = ? "
                 "WHERE id = ?",
                 (
                     json.dumps(cfg.tools),
@@ -65,6 +70,8 @@ class EnvironmentManager:
                     cfg.tool_loading,
                     int(cfg.tool_loop),
                     int(cfg.prompt_caching),
+                    cfg.memory_share,
+                    cfg.knowledge_share,
                     cfg.id,
                 ),
             )
@@ -83,13 +90,15 @@ class EnvironmentManager:
             tool_loading=tool_loading or "full",
             tool_loop=tool_loop if tool_loop is not None else True,
             prompt_caching=prompt_caching if prompt_caching is not None else False,
+            memory_share=memory_share if memory_share is not None else 0.40,
+            knowledge_share=knowledge_share if knowledge_share is not None else 0.25,
         )
         self._storage.execute(
             "INSERT INTO environment_configs "
             "(id, symbiote_id, workspace_id, tools_json, services_json, "
             "humans_json, policies_json, resources_json, tool_tags_json, "
-            "tool_loading, tool_loop, prompt_caching) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "tool_loading, tool_loop, prompt_caching, memory_share, knowledge_share) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 cfg.id,
                 cfg.symbiote_id,
@@ -103,6 +112,8 @@ class EnvironmentManager:
                 cfg.tool_loading,
                 int(cfg.tool_loop),
                 int(cfg.prompt_caching),
+                cfg.memory_share,
+                cfg.knowledge_share,
             ),
         )
         return cfg
@@ -169,6 +180,24 @@ class EnvironmentManager:
             return False
         return cfg.prompt_caching
 
+    def get_memory_share(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> float:
+        """Return memory_share from config, or 0.40 if no config."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return 0.40
+        return cfg.memory_share
+
+    def get_knowledge_share(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> float:
+        """Return knowledge_share from config, or 0.25 if no config."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return 0.25
+        return cfg.knowledge_share
+
     # ── private helpers ────────────────────────────────────────────────
 
     def _fetch_exact(
@@ -206,4 +235,6 @@ class EnvironmentManager:
             tool_loading=row.get("tool_loading") or "full",
             tool_loop=bool(row.get("tool_loop", 1)),
             prompt_caching=bool(row.get("prompt_caching", 0)),
+            memory_share=float(row.get("memory_share", 0.40) or 0.40),
+            knowledge_share=float(row.get("knowledge_share", 0.25) or 0.25),
         )

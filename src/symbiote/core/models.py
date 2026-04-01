@@ -157,6 +157,8 @@ class EnvironmentConfig(BaseModel):
     tool_loading: Literal["full", "index", "semantic"] = "full"
     tool_loop: bool = True
     prompt_caching: bool = False
+    memory_share: float = Field(default=0.40, ge=0.0, le=1.0)
+    knowledge_share: float = Field(default=0.25, ge=0.0, le=1.0)
 
 
 # ── Decision ─────────────────────────────────────────────────────────────────

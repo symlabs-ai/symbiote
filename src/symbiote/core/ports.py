@@ -71,6 +71,19 @@ class KnowledgePort(Protocol):
     def query(self, symbiote_id: str, theme: str, limit: int = 10) -> list: ...
 
 
+class FeedbackPort(Protocol):
+    """Port for reporting session quality feedback.
+
+    The host calls ``report()`` when it has a signal about session quality
+    (user thumbs up/down, task completion, etc.).  The kernel composes
+    this with the auto_score from LoopTrace to compute a final_score.
+    """
+
+    def report(self, session_id: str, score: float, source: str = "user") -> None:
+        """Report a quality score (0.0–1.0) for a session."""
+        ...
+
+
 class SessionRecallPort(Protocol):
     """Port for searching past session transcripts.
 
