@@ -17,6 +17,7 @@ class ToolDescriptor(BaseModel):
     parameters: dict = Field(default_factory=dict)  # JSON Schema
     tags: list[str] = Field(default_factory=list)
     handler_type: Literal["builtin", "http", "custom"] = "custom"
+    risk_level: Literal["low", "medium", "high"] = "low"
 
     def to_openai_schema(self) -> dict:
         """Convert to OpenAI function calling format."""
@@ -80,6 +81,7 @@ class ToolCallResult(BaseModel):
     success: bool
     output: Any = None
     error: str | None = None
+    risk_level: str | None = None
 
 
 # ── Native function calling models ──────────────────────────────────────────
