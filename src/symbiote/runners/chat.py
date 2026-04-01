@@ -89,6 +89,8 @@ class ChatRunner:
         native_tools: bool = False,
         context_budget: int = _DEFAULT_CONTEXT_BUDGET,
         on_before_tool_call: Callable[[str, dict, str], bool] | None = None,
+        on_progress: Callable[[str, int, int], None] | None = None,
+        on_stream: Callable[[str, int], None] | None = None,
     ) -> None:
         self._llm = llm
         self._working_memory = working_memory
@@ -97,6 +99,8 @@ class ChatRunner:
         self._native_tools = native_tools
         self._context_budget = context_budget
         self._on_before_tool_call = on_before_tool_call
+        self._on_progress = on_progress
+        self._on_stream = on_stream
 
     def can_handle(self, intent: str) -> bool:
         return intent in _HANDLED_INTENTS
@@ -128,11 +132,14 @@ class ChatRunner:
         loop_start = time.monotonic()
         loop_timeout = context.loop_timeout
 
-        for _ in range(max_iters):
+        for iteration in range(max_iters):
             # Check loop timeout before each iteration
             if time.monotonic() - loop_start > loop_timeout:
                 logger.info("[tool-loop] loop timeout exceeded (%.1fs)", loop_timeout)
                 break
+
+            if self._on_progress is not None:
+                self._on_progress("iteration_start", iteration + 1, max_iters)
 
             try:
                 response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
@@ -151,6 +158,10 @@ class ChatRunner:
 
             final_text = clean_text
 
+            # Emit intermediate text via on_stream for ALL iterations
+            if self._on_stream is not None and clean_text:
+                self._on_stream(clean_text, iteration + 1)
+
             # Release tokens to the caller after validation.
             # When tool calls are present, suppress intermediate narration
             # (e.g. "Vou verificar...") — only the final response should
@@ -163,6 +174,8 @@ class ChatRunner:
                     on_token(clean_text)
 
             if not tool_calls or self._tool_gateway is None:
+                if self._on_progress is not None:
+                    self._on_progress("iteration_end", iteration + 1, max_iters)
                 break
 
             # Schema cache: intercept repeated get_tool_schema in index mode
@@ -175,6 +188,9 @@ class ChatRunner:
             approved_calls, denial_results = self._check_approval(remaining_calls)
             all_tool_results.extend(denial_results)
 
+            if self._on_progress is not None:
+                self._on_progress("tool_start", iteration + 1, max_iters)
+
             gateway_results: list[ToolCallResult] = list(denial_results)
             if approved_calls:
                 exec_results = self._tool_gateway.execute_tool_calls(
@@ -185,6 +201,9 @@ class ChatRunner:
                 )
                 gateway_results.extend(exec_results)
                 all_tool_results.extend(exec_results)
+
+            if self._on_progress is not None:
+                self._on_progress("tool_end", iteration + 1, max_iters)
 
             # Update schema cache with new results
             self._update_schema_cache(remaining_calls, gateway_results, schema_cache)
@@ -227,10 +246,18 @@ class ChatRunner:
             # Layer 3: aggressive autocompact if approaching context budget
             self._autocompact_if_needed(messages, initial_msg_count)
 
-        # Save only the final response to working memory
+            if self._on_progress is not None:
+                self._on_progress("iteration_end", iteration + 1, max_iters)
+
+        # Save final response (with loop summary) to working memory
         if self._working_memory is not None:
+            if all_tool_results:
+                summary = self._build_loop_summary(all_tool_results)
+                memory_text = f"{summary}\n\n{final_text}"
+            else:
+                memory_text = final_text
             self._working_memory.update_message(
-                Message(session_id=context.session_id, role="assistant", content=final_text)
+                Message(session_id=context.session_id, role="assistant", content=memory_text)
             )
             if self._consolidator is not None:
                 self._consolidator.consolidate_if_needed(self._working_memory, context.symbiote_id)
@@ -271,6 +298,9 @@ class ChatRunner:
                 trace.stop_reason = "timeout"
                 break
 
+            if self._on_progress is not None:
+                self._on_progress("iteration_start", iteration + 1, max_iters)
+
             try:
                 response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
             except Exception as exc:
@@ -286,6 +316,10 @@ class ChatRunner:
 
             final_text = clean_text
 
+            # Emit intermediate text via on_stream for ALL iterations
+            if self._on_stream is not None and clean_text:
+                self._on_stream(clean_text, iteration + 1)
+
             # Release tokens to the caller after validation.
             if on_token is not None and not tool_calls:
                 if buffered_chunks is not None:
@@ -295,6 +329,8 @@ class ChatRunner:
                     on_token(clean_text)
 
             if not tool_calls or self._tool_gateway is None:
+                if self._on_progress is not None:
+                    self._on_progress("iteration_end", iteration + 1, max_iters)
                 break
 
             # Schema cache: intercept repeated get_tool_schema in index mode
@@ -306,6 +342,9 @@ class ChatRunner:
             # Approval gate: check high-risk tools before execution
             approved_calls, denial_results = self._check_approval(remaining_calls)
             all_tool_results.extend(denial_results)
+
+            if self._on_progress is not None:
+                self._on_progress("tool_start", iteration + 1, max_iters)
 
             step_start = time.monotonic()
             gateway_results: list[ToolCallResult] = list(denial_results)
@@ -319,6 +358,9 @@ class ChatRunner:
                 gateway_results.extend(exec_results)
                 all_tool_results.extend(exec_results)
             step_elapsed = int((time.monotonic() - step_start) * 1000)
+
+            if self._on_progress is not None:
+                self._on_progress("tool_end", iteration + 1, max_iters)
 
             # Update schema cache with new results
             self._update_schema_cache(remaining_calls, gateway_results, schema_cache)
@@ -376,6 +418,9 @@ class ChatRunner:
             # Layer 3: aggressive autocompact if approaching context budget
             self._autocompact_if_needed(messages, initial_msg_count)
 
+            if self._on_progress is not None:
+                self._on_progress("iteration_end", iteration + 1, max_iters)
+
         trace.total_iterations = iteration + 1 if context.tool_loop else 0
         trace.total_tool_calls = len(trace.steps)
         trace.total_elapsed_ms = int((time.monotonic() - loop_start) * 1000)
@@ -383,8 +428,13 @@ class ChatRunner:
             trace.stop_reason = "end_turn" if trace.total_iterations > 0 else None
 
         if self._working_memory is not None:
+            if all_tool_results:
+                summary = self._build_loop_summary(all_tool_results)
+                memory_text = f"{summary}\n\n{final_text}"
+            else:
+                memory_text = final_text
             self._working_memory.update_message(
-                Message(session_id=context.session_id, role="assistant", content=final_text)
+                Message(session_id=context.session_id, role="assistant", content=memory_text)
             )
             if self._consolidator is not None:
                 self._consolidator.consolidate_if_needed(self._working_memory, context.symbiote_id)
@@ -433,6 +483,19 @@ class ChatRunner:
             approved.append(call)
 
         return approved, denied
+
+    # ── Loop summary for working memory ─────────────────────────────────
+
+    @staticmethod
+    def _build_loop_summary(tool_results: list[ToolCallResult]) -> str:
+        """Build a compact summary of tool loop execution for working memory."""
+        if not tool_results:
+            return ""
+        lines = [f"[Loop summary: {len(tool_results)} tool calls]"]
+        for i, r in enumerate(tool_results, 1):
+            status = "ok" if r.success else f"error: {(r.error or '')[:50]}"
+            lines.append(f"{i}) {r.tool_id} \u2192 {status}")
+        return "\n".join(lines)
 
     # ── Index mode schema cache ────────────────────────────────────────
 
