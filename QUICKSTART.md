@@ -140,7 +140,7 @@ Configured via `kernel.environment.configure()` or `EnvironmentManager`. All fie
 | `tools` | `list[str]` | `[]` | Authorized tool IDs |
 | `tool_tags` | `list[str]` | `[]` | Filter tools by tag |
 | `tool_loading` | `"full"\|"index"\|"semantic"` | `"full"` | How tool schemas appear in prompts |
-| `tool_mode` | `"instant"\|"brief"\|"continuous"` | `"brief"` | Tool loop behavior (see below) |
+| `tool_mode` | `"instant"\|"brief"\|"long_run"\|"continuous"` | `"brief"` | Execution mode (see below) |
 | `max_tool_iterations` | `int` | `10` | Max tool loop iterations (cap: 50) |
 | `tool_call_timeout` | `float` | `30.0` | Per-tool call timeout in seconds |
 | `loop_timeout` | `float` | `300.0` | Total loop timeout in seconds |
@@ -193,13 +193,14 @@ async with McpToolset.from_http("http://localhost:9000/mcp") as registry:
     tool_ids = kernel.load_mcp_tools(registry, symbiote_id=sym.id)
 ```
 
-### Tool Mode
+### Execution Modes
 
 | Mode | Behavior |
 |------|----------|
-| `instant` | Single-shot: call tool once, return result |
-| `brief` | Loop up to `max_tool_iterations` (default 10) |
-| `continuous` | Loop up to `max_tool_iterations` (default 50, higher cap) |
+| `instant` | Single-shot: 0-1 tool calls, fast-path with mode-aware scoring |
+| `brief` | Multi-step task loop: 3-10 iterations, scoring calibrated for compound tasks |
+| `long_run` | Project-scale: Planner/Generator/Evaluator phases, blocks of work, configurable context strategy |
+| `continuous` | Always-on agent (placeholder, not yet implemented) |
 
 ### Risk Level and Human-in-the-Loop
 

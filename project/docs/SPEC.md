@@ -138,7 +138,10 @@ Symbiote é um kernel Python para construir entidades cognitivas persistentes. M
 | Human-in-the-loop — risk_level + approval callback | B-29 | ✅ Entregue | horizon |
 | Index mode cache — loop-local schema cache | B-34 | ✅ Entregue | horizon |
 | Multi-model test matrix — E2E test infra | B-35 | ✅ Entregue | horizon |
-| Tool Mode — instant/brief/continuous | B-40 | ✅ Entregue | horizon |
+| Tool Mode — instant/brief/long_run/continuous (4 modes) | B-40 | ✅ Entregue | horizon |
+| Instant Mode — fast-path, mode-aware scoring, context seletivo | — | ✅ Entregue | v0.3.1 |
+| Brief Mode — sync trace, calibrated scoring, multi-step instructions | — | ✅ Entregue | v0.3.2 |
+| Long-run Mode — Planner/Generator/Evaluator architecture | — | ✅ Entregue | v0.3.3 |
 | Streaming mid-loop — on_progress + on_stream callbacks | B-27 | ✅ Entregue | horizon |
 | Working memory intermediária — loop summary in WorkingMemory | B-30 | ✅ Entregue | horizon |
 | Memory/Knowledge on-demand — search tools | B-68 | ✅ Entregue | horizon |

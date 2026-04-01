@@ -149,7 +149,7 @@ All fields can be set via `kernel.environment.configure(symbiote_id=..., field=v
 | `resources` | `dict` | `{}` | -- | Resource configuration |
 | `tool_tags` | `list[str]` | `[]` | -- | Filter which tools are visible by tag |
 | `tool_loading` | `str` | `"full"` | `full\|index\|semantic` | How tool schemas appear in the prompt |
-| `tool_mode` | `str` | `"brief"` | `instant\|brief\|continuous` | Tool loop behavior |
+| `tool_mode` | `str` | `"brief"` | `instant\|brief\|long_run\|continuous` | Execution mode (see below) |
 | `tool_loop` | `bool` | `True` | -- | (Deprecated) Derived from `tool_mode` |
 | `prompt_caching` | `bool` | `False` | -- | Enable LLM prompt cache breakpoints |
 | `memory_share` | `float` | `0.40` | 0.0-1.0 | Fraction of budget for memories |
@@ -165,11 +165,24 @@ All fields can be set via `kernel.environment.configure(symbiote_id=..., field=v
 - **index**: Compact one-line-per-tool catalog with a `get_tool_schema` meta-tool for lazy schema fetching. Best for medium tool sets (20-100).
 - **semantic**: A cheap LLM pre-filters relevant tool tags per message before assembly. Best for large tool sets (100+). Requires `kernel.set_semantic_llm(llm)`.
 
-### Tool Modes
+### Execution Modes
 
-- **instant**: Single-shot tool call. No loop -- the LLM calls one tool and the result is returned.
-- **brief**: The LLM loops (call tool, get result, call next tool...) for up to `max_tool_iterations` (default 10). Good for most use cases.
-- **continuous**: Like brief but with a higher iteration allowance. For complex multi-step workflows.
+Four modes for different task complexities:
+
+- **instant**: Single-shot. One LLM call, 0-1 tool calls. Fast-path with mode-aware scoring. Best for: Q&A, simple queries.
+- **brief**: Multi-step task loop. 3-10 iterations with compaction, scoring calibrated for compound tasks. Best for: "list clients + email + WhatsApp".
+- **long_run**: Project-scale. Planner decomposes prompt into blocks, Generator executes each block, optional Evaluator grades output with host-defined criteria. Configurable context strategy (compaction/reset/hybrid). Best for: building applications, research projects.
+- **continuous**: Always-on agent (placeholder). Purpose-driven, generates own objectives. Not yet implemented.
+
+#### Long-run mode configuration
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `planner_prompt` | `str\|None` | `None` | Custom planner prompt (None = default or skip) |
+| `evaluator_prompt` | `str\|None` | `None` | Custom evaluator prompt (None = skip evaluator) |
+| `evaluator_criteria` | `list[dict]\|None` | `None` | Gradable criteria: `[{"name": "...", "weight": 1.0, "threshold": 0.7}]` |
+| `context_strategy` | `str` | `"hybrid"` | `compaction\|reset\|hybrid` between blocks |
+| `max_blocks` | `int` | `20` | Max work blocks per session |
 
 ### Context Modes
 

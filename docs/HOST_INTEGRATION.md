@@ -277,18 +277,30 @@ ToolDescriptor(
 Configure how the agent loop handles tool calls:
 
 ```python
-# instant: Single tool call, no loop
+# instant: Single-shot, 0-1 tool calls, fast-path
 kernel.environment.configure(symbiote_id=sym.id, tool_mode="instant")
 
-# brief: Loop up to max_tool_iterations (default 10)
+# brief: Multi-step task loop, 3-10 iterations (default)
 kernel.environment.configure(symbiote_id=sym.id, tool_mode="brief")
 
-# continuous: Loop with higher iteration allowance
+# long_run: Project-scale with Planner/Generator/Evaluator
 kernel.environment.configure(
     symbiote_id=sym.id,
-    tool_mode="continuous",
-    max_tool_iterations=30,
+    tool_mode="long_run",
+    planner_prompt="Expand this into a detailed project plan...",
+    evaluator_prompt="Evaluate strictly against criteria...",
+    evaluator_criteria=[
+        {"name": "completeness", "weight": 1.0, "threshold": 0.7,
+         "description": "All requested features implemented"},
+        {"name": "quality", "weight": 0.8, "threshold": 0.6,
+         "description": "Code quality and design"},
+    ],
+    context_strategy="hybrid",  # compaction within blocks, reset between
+    max_blocks=15,
 )
+
+# continuous: Always-on agent (placeholder, not yet implemented)
+kernel.environment.configure(symbiote_id=sym.id, tool_mode="continuous")
 ```
 
 ---
