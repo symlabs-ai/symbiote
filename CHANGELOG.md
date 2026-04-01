@@ -3,6 +3,19 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [v0.2.25] - 2026-04-01
+
+### Added — Harness Evolution (Meta-Harness Fase 2)
+
+- [B-32/B-65] max_tool_iterations configurable — per symbiote via EnvironmentConfig (default 10, cap 50); propagates through ContextAssembler → AssembledContext → ChatRunner (`core/models.py`, `core/context.py`, `runners/chat.py`)
+- [B-64] harness_versions table + HarnessVersionRepository — version evolvable texts per symbiote with score tracking and rollback (`harness/versions.py`, `adapters/storage/sqlite.py`)
+- [B-65] ParameterTuner — tiered auto-calibration: Tier 0 (0 sessions, no change), Tier 1 (5+, safe only), Tier 2 (20+, statistical), Tier 3 (50+, fine tuning). Rules: max_iterations adjustment, compaction threshold, memory share. Safety caps + logging (`harness/tuner.py`)
+
+### Changed
+
+- `ChatRunner.run()`/`run_async()` now read `context.max_tool_iterations` instead of `_MAX_TOOL_ITERATIONS` constant
+- `EnvironmentManager.configure()` accepts `max_tool_iterations` parameter
+
 ## [v0.2.24] - 2026-04-01
 
 ### Added — Harness Foundations (Meta-Harness Fase 1)

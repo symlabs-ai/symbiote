@@ -114,6 +114,14 @@ Symbiote é um kernel Python para construir entidades cognitivas persistentes. M
 | Context splits configuráveis — memory_share/knowledge_share per symbiote | B-63 | ✅ Entregue | harness-foundations |
 | LoopTrace persistence — execution_traces table no SQLite | B-66 | ✅ Entregue | harness-foundations |
 
+### Pós-MVP (Sprint Harness Evolution — 2026-04-01)
+
+| Feature | Backlog | Status | Sprint |
+|---------|---------|--------|--------|
+| max_tool_iterations configurável — per symbiote via EnvironmentConfig | B-32/B-65 | ✅ Entregue | harness-evolution |
+| harness_versions — versionamento de textos evolvable por symbiote | B-64 | ✅ Entregue | harness-evolution |
+| ParameterTuner — auto-calibração tiered (Tier 0-3) com safety caps | B-65 | ✅ Entregue | harness-evolution |
+
 ### O que está fora do escopo
 
 - Multi-tenant completo

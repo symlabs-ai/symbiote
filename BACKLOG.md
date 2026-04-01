@@ -9,7 +9,6 @@
 | B-27 | Tool Loop — streaming mid-loop | 2026-03-19, dev | média | |
 | B-29 | Tool Loop — human-in-the-loop | 2026-03-19, dev | média | |
 | B-30 | Tool Loop — working memory intermediária | 2026-03-19, dev | média | |
-| B-32 | Tool Loop — max_iterations configurável | 2026-03-19, dev | baixa | |
 | B-33 | Tool Loop — timeout | 2026-03-19, dev | alta | |
 | B-34 | Tool Loop — index mode cache | 2026-03-19, dev | média | |
 | B-35 | Tool Loop — teste multi-modelo | 2026-03-19, dev | média | |
@@ -19,8 +18,6 @@
 | B-42 | Tool descriptions genéricas — melhorar summaries no OpenAPI do YouNews (ex: "Item Action" → "Change item status") | 2026-03-20, harness | média | cross-repo:younews |
 | B-44 | Validar supressão de narração intermediária no YouNews staging após deploy v0.17.31+ | 2026-03-20, harness | média | cross-repo:younews |
 | B-45 | Test harness pytest — validar tests/e2e/test_kimi_tool_loop.py (requer YouNews + SymGateway rodando) | 2026-03-20, harness | baixa | |
-| B-64 | harness_versions — versionamento de textos evolvable por symbiote | 2026-04-01, meta-harness | média | |
-| B-65 | Nível 1 Parameter Tuning — auto-calibração de parâmetros baseada em scores | 2026-04-01, meta-harness | média | |
 | B-67 | Nível 2 HarnessEvolver — proposer LLM evolui _TOOL_INSTRUCTIONS offline | 2026-04-01, meta-harness | alta | |
 | B-68 | Memory/Knowledge on-demand — search_memories como tool em vez de pre-packed | 2026-04-01, meta-harness | média | |
 
@@ -52,6 +49,9 @@ Documentação completa em `~/dev/kb/engenharia/meta_harness.md`, seção 4 (Bac
 
 | # | Descrição | Implementada em | Versão |
 |---|-----------|-----------------|--------|
+| B-32 | max_tool_iterations configurável — per symbiote via EnvironmentConfig, cap 50 | 2026-04-01 | 0.2.25 |
+| B-64 | harness_versions — versionamento de textos evolvable por symbiote com rollback | 2026-04-01 | 0.2.25 |
+| B-65 | ParameterTuner — auto-calibração tiered (Tier 0-3) com safety caps e logging | 2026-04-01 | 0.2.25 |
 | B-60 | SessionScore — auto_score from LoopTrace + user feedback composition | 2026-04-01 | 0.2.24 |
 | B-61 | FeedbackPort — protocol para host reportar qualidade de sessão | 2026-04-01 | 0.2.24 |
 | B-62 | MemoryEntry de falha — fato procedural determinístico quando loop falha | 2026-04-01 | 0.2.24 |
