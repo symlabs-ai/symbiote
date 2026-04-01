@@ -18,7 +18,6 @@
 | B-42 | Tool descriptions genéricas — melhorar summaries no OpenAPI do YouNews (ex: "Item Action" → "Change item status") | 2026-03-20, harness | média | cross-repo:younews |
 | B-44 | Validar supressão de narração intermediária no YouNews staging após deploy v0.17.31+ | 2026-03-20, harness | média | cross-repo:younews |
 | B-45 | Test harness pytest — validar tests/e2e/test_kimi_tool_loop.py (requer YouNews + SymGateway rodando) | 2026-03-20, harness | baixa | |
-| B-67 | Nível 2 HarnessEvolver — proposer LLM evolui _TOOL_INSTRUCTIONS offline | 2026-04-01, meta-harness | alta | |
 | B-68 | Memory/Knowledge on-demand — search_memories como tool em vez de pre-packed | 2026-04-01, meta-harness | média | |
 
 ### Detalhamento dos itens pendentes
@@ -49,6 +48,7 @@ Documentação completa em `~/dev/kb/engenharia/meta_harness.md`, seção 4 (Bac
 
 | # | Descrição | Implementada em | Versão |
 |---|-----------|-----------------|--------|
+| B-67 | HarnessEvolver — LLM proposer evolui tool_instructions com guard rails + auto-rollback | 2026-04-01 | 0.2.26 |
 | B-32 | max_tool_iterations configurável — per symbiote via EnvironmentConfig, cap 50 | 2026-04-01 | 0.2.25 |
 | B-64 | harness_versions — versionamento de textos evolvable por symbiote com rollback | 2026-04-01 | 0.2.25 |
 | B-65 | ParameterTuner — auto-calibração tiered (Tier 0-3) com safety caps e logging | 2026-04-01 | 0.2.25 |

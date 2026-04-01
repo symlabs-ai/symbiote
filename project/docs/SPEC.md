@@ -122,6 +122,14 @@ Symbiote é um kernel Python para construir entidades cognitivas persistentes. M
 | harness_versions — versionamento de textos evolvable por symbiote | B-64 | ✅ Entregue | harness-evolution |
 | ParameterTuner — auto-calibração tiered (Tier 0-3) com safety caps | B-65 | ✅ Entregue | harness-evolution |
 
+### Pós-MVP (Sprint Prompt Evolution — 2026-04-01)
+
+| Feature | Backlog | Status | Sprint |
+|---------|---------|--------|--------|
+| HarnessEvolver — LLM proposer evolui tool_instructions offline com guard rails | B-67 | ✅ Entregue | prompt-evolution |
+| Evolvable text bridge — overrides flow ContextAssembler → ChatRunner → LoopController | B-67 | ✅ Entregue | prompt-evolution |
+| kernel.set_evolver_llm() — host injeta proposer LLM separado (opção 3) | B-67 | ✅ Entregue | prompt-evolution |
+
 ### O que está fora do escopo
 
 - Multi-tenant completo

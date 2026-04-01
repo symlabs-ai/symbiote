@@ -3,6 +3,20 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [v0.2.26] - 2026-04-01
+
+### Added — Prompt Evolution (Meta-Harness Fase 3)
+
+- [B-67] HarnessEvolver — LLM proposer analyzes session traces (failed vs successful) and proposes improved harness texts; guard rails (max 2x length, CRITICAL preservation, format check); auto-rollback if score drops after 50 sessions (`harness/evolver.py`)
+- [B-67] Evolvable text bridge — `AssembledContext` gains `tool_instructions_override`, `injection_stagnation_override`, `injection_circuit_breaker_override`; `ContextAssembler` resolves from `harness_versions`; `ChatRunner` and `LoopController` use overrides with fallback to defaults (`core/context.py`, `runners/chat.py`, `runners/loop_control.py`)
+- [B-67] `kernel.set_evolver_llm(llm)` — host injects separate proposer LLM (option 3: accepts both, default to main LLM); `kernel.evolve_harness()` and `kernel.check_harness_rollback()` for batch invocation (`core/kernel.py`)
+
+### Changed
+
+- `LoopController` accepts `stagnation_msg` and `circuit_breaker_msg` parameters for customizable injection messages
+- `_persist_score()` now tracks score per active harness version via `update_score()` for evolution rollback decisions
+- 3 evolvable components defined: `tool_instructions`, `injection_stagnation`, `injection_circuit_breaker`
+
 ## [v0.2.25] - 2026-04-01
 
 ### Added — Harness Evolution (Meta-Harness Fase 2)
