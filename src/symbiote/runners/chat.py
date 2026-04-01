@@ -123,6 +123,7 @@ class ChatRunner:
         )
 
         all_tool_results: list[ToolCallResult] = []
+        schema_cache: dict[str, dict] = {}  # loop-local cache for index mode
         final_text = ""
         loop_start = time.monotonic()
         loop_timeout = context.loop_timeout
@@ -164,11 +165,17 @@ class ChatRunner:
             if not tool_calls or self._tool_gateway is None:
                 break
 
+            # Schema cache: intercept repeated get_tool_schema in index mode
+            cached_results, remaining_calls = self._split_cached_schema_calls(
+                tool_calls, schema_cache, context.tool_loading,
+            )
+            all_tool_results.extend(cached_results.values())
+
             # Approval gate: check high-risk tools before execution
-            approved_calls, denial_results = self._check_approval(tool_calls)
+            approved_calls, denial_results = self._check_approval(remaining_calls)
             all_tool_results.extend(denial_results)
 
-            results: list[ToolCallResult] = list(denial_results)
+            gateway_results: list[ToolCallResult] = list(denial_results)
             if approved_calls:
                 exec_results = self._tool_gateway.execute_tool_calls(
                     symbiote_id=context.symbiote_id,
@@ -176,8 +183,14 @@ class ChatRunner:
                     calls=approved_calls,
                     timeout=context.tool_call_timeout,
                 )
-                results.extend(exec_results)
+                gateway_results.extend(exec_results)
                 all_tool_results.extend(exec_results)
+
+            # Update schema cache with new results
+            self._update_schema_cache(remaining_calls, gateway_results, schema_cache)
+
+            # Merge cached + gateway results in original order
+            results = self._merge_tool_results(tool_calls, cached_results, gateway_results)
 
             # Record each tool call in the loop controller
             for tc, tr in zip(tool_calls, results, strict=False):
@@ -245,6 +258,7 @@ class ChatRunner:
         )
 
         all_tool_results: list[ToolCallResult] = []
+        schema_cache: dict[str, dict] = {}  # loop-local cache for index mode
         trace = LoopTrace()
         final_text = ""
         loop_start = time.monotonic()
@@ -283,12 +297,18 @@ class ChatRunner:
             if not tool_calls or self._tool_gateway is None:
                 break
 
+            # Schema cache: intercept repeated get_tool_schema in index mode
+            cached_results, remaining_calls = self._split_cached_schema_calls(
+                tool_calls, schema_cache, context.tool_loading,
+            )
+            all_tool_results.extend(cached_results.values())
+
             # Approval gate: check high-risk tools before execution
-            approved_calls, denial_results = self._check_approval(tool_calls)
+            approved_calls, denial_results = self._check_approval(remaining_calls)
             all_tool_results.extend(denial_results)
 
             step_start = time.monotonic()
-            results: list[ToolCallResult] = list(denial_results)
+            gateway_results: list[ToolCallResult] = list(denial_results)
             if approved_calls:
                 exec_results = await self._tool_gateway.execute_tool_calls_async(
                     symbiote_id=context.symbiote_id,
@@ -296,9 +316,15 @@ class ChatRunner:
                     calls=approved_calls,
                     timeout=context.tool_call_timeout,
                 )
-                results.extend(exec_results)
+                gateway_results.extend(exec_results)
                 all_tool_results.extend(exec_results)
             step_elapsed = int((time.monotonic() - step_start) * 1000)
+
+            # Update schema cache with new results
+            self._update_schema_cache(remaining_calls, gateway_results, schema_cache)
+
+            # Merge cached + gateway results in original order
+            results = self._merge_tool_results(tool_calls, cached_results, gateway_results)
 
             # Record trace for each tool call
             for tc, tr in zip(tool_calls, results, strict=False):
@@ -407,6 +433,66 @@ class ChatRunner:
             approved.append(call)
 
         return approved, denied
+
+    # ── Index mode schema cache ────────────────────────────────────────
+
+    @staticmethod
+    def _split_cached_schema_calls(
+        tool_calls: list[ToolCall],
+        schema_cache: dict[str, dict],
+        tool_loading: str,
+    ) -> tuple[dict[int, ToolCallResult], list[ToolCall]]:
+        """Intercept get_tool_schema calls that are already cached."""
+        if tool_loading != "index":
+            return {}, list(tool_calls)
+
+        cached: dict[int, ToolCallResult] = {}
+        remaining: list[ToolCall] = []
+        for idx, call in enumerate(tool_calls):
+            if call.tool_id == "get_tool_schema":
+                lookup_id = call.params.get("tool_id", "")
+                if lookup_id in schema_cache:
+                    cached[idx] = ToolCallResult(
+                        tool_id="get_tool_schema",
+                        success=True,
+                        output=schema_cache[lookup_id],
+                    )
+                    logger.debug("[schema-cache] hit for %s", lookup_id)
+                    continue
+            remaining.append(call)
+        return cached, remaining
+
+    @staticmethod
+    def _update_schema_cache(
+        remaining_calls: list[ToolCall],
+        gateway_results: list[ToolCallResult],
+        schema_cache: dict[str, dict],
+    ) -> None:
+        """Cache successful get_tool_schema results from the gateway."""
+        for call, result in zip(remaining_calls, gateway_results, strict=False):
+            if call.tool_id == "get_tool_schema" and result.success:
+                lookup_id = call.params.get("tool_id", "")
+                if lookup_id:
+                    schema_cache[lookup_id] = result.output
+
+    @staticmethod
+    def _merge_tool_results(
+        original_calls: list[ToolCall],
+        cached: dict[int, ToolCallResult],
+        gateway_results: list[ToolCallResult],
+    ) -> list[ToolCallResult]:
+        """Merge cached and gateway results in the original call order."""
+        if not cached:
+            return list(gateway_results)
+
+        merged: list[ToolCallResult] = []
+        gw_iter = iter(gateway_results)
+        for idx in range(len(original_calls)):
+            if idx in cached:
+                merged.append(cached[idx])
+            else:
+                merged.append(next(gw_iter))
+        return merged
 
     # ── internal ─────────────────────────────────────────────────────────
 
