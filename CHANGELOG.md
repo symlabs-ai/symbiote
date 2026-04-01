@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [v0.3.4] - 2026-04-01
+
+- feat: API config endpoint — PUT/GET /symbiotes/{id}/config (tool_mode, long-run config, timeouts)
+- docs: Clark migration guide — execution modes, routing strategies, long-run editorial example
+- docs: update all docs for 4-mode execution taxonomy
+
+---
+
 ## [v0.3.3] - 2026-04-01
 
 - feat: long-run mode — Planner/Generator/Evaluator architecture
