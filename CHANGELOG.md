@@ -3,6 +3,22 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [v0.2.27] - 2026-04-01
+
+### Added — Final Horizon Sprint
+
+- [B-33] Per-tool timeout (30s default) + loop timeout (300s default) configurable per symbiote (`environment/tools.py`, `runners/chat.py`)
+- [B-29] Human-in-the-loop — `risk_level` on ToolDescriptor + `on_before_tool_call` approval callback on ChatRunner (`environment/descriptors.py`, `runners/chat.py`)
+- [B-34] Index mode schema cache — loop-local cache avoids redundant get_tool_schema calls (`runners/chat.py`)
+- [B-35] Multi-model test matrix — E2E infrastructure with 3 scenarios across 3 models (`tests/e2e/test_multi_model.py`)
+- [B-40] Tool Mode — `tool_mode: Literal["instant", "brief", "continuous"]` replaces binary `tool_loop` (`core/models.py`, `runners/chat.py`)
+- [B-27] Streaming mid-loop — `on_progress(event, iter, total)` + `on_stream(text, iter)` callbacks (`runners/chat.py`)
+- [B-30] Working memory intermediária — loop summary prepended to WorkingMemory assistant message (`runners/chat.py`)
+- [B-68] Memory/Knowledge on-demand — `context_mode: packed|on_demand`, `search_memories`/`search_knowledge` builtin tools (`environment/tools.py`, `core/context.py`)
+- [H-11] BenchmarkRunner — task grading (tool_called, param_match, custom) (`harness/benchmark.py`)
+- [H-12] StructuralEvolver — pluggable strategy registry with proposal/apply (`harness/structural.py`)
+- [H-13] CrossSymbioteLearner — tool overlap detection + harness version transfer (`harness/cross_learning.py`)
+
 ## [v0.2.26] - 2026-04-01
 
 ### Added — Prompt Evolution (Meta-Harness Fase 3)

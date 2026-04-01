@@ -6,19 +6,11 @@
 
 | # | Descrição | Origem | Prioridade | Status |
 |---|-----------|--------|------------|--------|
-| B-27 | Tool Loop — streaming mid-loop | 2026-03-19, dev | média | |
-| B-29 | Tool Loop — human-in-the-loop | 2026-03-19, dev | média | |
-| B-30 | Tool Loop — working memory intermediária | 2026-03-19, dev | média | |
-| B-33 | Tool Loop — timeout | 2026-03-19, dev | alta | |
-| B-34 | Tool Loop — index mode cache | 2026-03-19, dev | média | |
-| B-35 | Tool Loop — teste multi-modelo | 2026-03-19, dev | média | |
 | B-36 | Tool Loop — custo tracking | 2026-03-19, dev | alta | |
-| B-40 | Tool Mode — refatorar tool_loop:bool para tool_mode:Literal["instant","brief","continuous"] | 2026-03-19, dev | alta | |
 | B-41 | Kimi K2 context limit — plano pago resolveu o 500, mas context_length_exceeded persiste com 75+ tools no index; queries multi-step estouram. Bloqueador para tool loops complexos. Precisa de semantic loading ou redução de tags | 2026-03-20, harness | alta | monitoramento |
 | B-42 | Tool descriptions genéricas — melhorar summaries no OpenAPI do YouNews (ex: "Item Action" → "Change item status") | 2026-03-20, harness | média | cross-repo:younews |
 | B-44 | Validar supressão de narração intermediária no YouNews staging após deploy v0.17.31+ | 2026-03-20, harness | média | cross-repo:younews |
 | B-45 | Test harness pytest — validar tests/e2e/test_kimi_tool_loop.py (requer YouNews + SymGateway rodando) | 2026-03-20, harness | baixa | |
-| B-68 | Memory/Knowledge on-demand — search_memories como tool em vez de pre-packed | 2026-04-01, meta-harness | média | |
 
 ### Detalhamento dos itens pendentes
 
@@ -48,6 +40,17 @@ Documentação completa em `~/dev/kb/engenharia/meta_harness.md`, seção 4 (Bac
 
 | # | Descrição | Implementada em | Versão |
 |---|-----------|-----------------|--------|
+| B-33 | Timeout — per-tool (30s) + loop total (300s) configuráveis per symbiote | 2026-04-01 | 0.2.27 |
+| B-29 | Human-in-the-loop — risk_level + approval callback | 2026-04-01 | 0.2.27 |
+| B-34 | Index mode cache — loop-local schema cache para index mode | 2026-04-01 | 0.2.27 |
+| B-35 | Multi-model test matrix — E2E infra com 3 cenários × 3 modelos | 2026-04-01 | 0.2.27 |
+| B-40 | Tool Mode — instant/brief/continuous replaces binary tool_loop | 2026-04-01 | 0.2.27 |
+| B-27 | Streaming mid-loop — on_progress + on_stream callbacks | 2026-04-01 | 0.2.27 |
+| B-30 | Working memory intermediária — loop summary in WorkingMemory | 2026-04-01 | 0.2.27 |
+| B-68 | Memory/Knowledge on-demand — search_memories/search_knowledge tools | 2026-04-01 | 0.2.27 |
+| H-11 | BenchmarkRunner — task grading (tool_called, param_match, custom) | 2026-04-01 | 0.2.27 |
+| H-12 | StructuralEvolver — pluggable strategy registry | 2026-04-01 | 0.2.27 |
+| H-13 | CrossSymbioteLearner — tool overlap + version transfer | 2026-04-01 | 0.2.27 |
 | B-67 | HarnessEvolver — LLM proposer evolui tool_instructions com guard rails + auto-rollback | 2026-04-01 | 0.2.26 |
 | B-32 | max_tool_iterations configurável — per symbiote via EnvironmentConfig, cap 50 | 2026-04-01 | 0.2.25 |
 | B-64 | harness_versions — versionamento de textos evolvable por symbiote com rollback | 2026-04-01 | 0.2.25 |

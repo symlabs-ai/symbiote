@@ -130,6 +130,22 @@ Symbiote é um kernel Python para construir entidades cognitivas persistentes. M
 | Evolvable text bridge — overrides flow ContextAssembler → ChatRunner → LoopController | B-67 | ✅ Entregue | prompt-evolution |
 | kernel.set_evolver_llm() — host injeta proposer LLM separado (opção 3) | B-67 | ✅ Entregue | prompt-evolution |
 
+### Pós-MVP (Sprint Horizon — 2026-04-01)
+
+| Feature | Backlog | Status | Sprint |
+|---------|---------|--------|--------|
+| Timeout — per-tool (30s) + loop total (300s) configuráveis | B-33 | ✅ Entregue | horizon |
+| Human-in-the-loop — risk_level + approval callback | B-29 | ✅ Entregue | horizon |
+| Index mode cache — loop-local schema cache | B-34 | ✅ Entregue | horizon |
+| Multi-model test matrix — E2E test infra | B-35 | ✅ Entregue | horizon |
+| Tool Mode — instant/brief/continuous | B-40 | ✅ Entregue | horizon |
+| Streaming mid-loop — on_progress + on_stream callbacks | B-27 | ✅ Entregue | horizon |
+| Working memory intermediária — loop summary in WorkingMemory | B-30 | ✅ Entregue | horizon |
+| Memory/Knowledge on-demand — search tools | B-68 | ✅ Entregue | horizon |
+| Benchmark Suite — BenchmarkRunner with task grading | H-11 | ✅ Entregue | horizon |
+| Structural Evolution — StructuralEvolver with strategy registry | H-12 | ✅ Entregue | horizon |
+| Cross-Symbiote Learning — tool overlap + version transfer | H-13 | ✅ Entregue | horizon |
+
 ### O que está fora do escopo
 
 - Multi-tenant completo
