@@ -160,6 +160,8 @@ class EnvironmentConfig(BaseModel):
     memory_share: float = Field(default=0.40, ge=0.0, le=1.0)
     knowledge_share: float = Field(default=0.25, ge=0.0, le=1.0)
     max_tool_iterations: int = Field(default=10, ge=1, le=50)
+    tool_call_timeout: float = Field(default=30.0, ge=1.0, le=300.0)
+    loop_timeout: float = Field(default=300.0, ge=10.0, le=3600.0)
 
 
 # ── Decision ─────────────────────────────────────────────────────────────────

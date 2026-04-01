@@ -108,6 +108,7 @@ class ToolGateway:
         tool_id: str,
         params: dict,
         workspace_id: str | None = None,
+        timeout: float = 30.0,
     ) -> ToolResult:
         """Async variant of execute() — awaits coroutine handlers via the policy gate."""
         if tool_id not in self._registry:
@@ -125,6 +126,7 @@ class ToolGateway:
             params=params,
             action_fn=self._registry[tool_id],
             workspace_id=workspace_id,
+            timeout=timeout,
         )
 
     async def execute_tool_calls_async(
@@ -133,6 +135,7 @@ class ToolGateway:
         session_id: str | None,
         calls: list,
         workspace_id: str | None = None,
+        timeout: float = 30.0,
     ) -> list[ToolCallResult]:
         """Async variant of execute_tool_calls() — runs calls concurrently via asyncio.gather."""
         if not calls:
@@ -145,6 +148,7 @@ class ToolGateway:
                 tool_id=call.tool_id,
                 params=call.params,
                 workspace_id=workspace_id,
+                timeout=timeout,
             )
             for call in calls
         ]
@@ -197,6 +201,7 @@ class ToolGateway:
         tool_id: str,
         params: dict,
         workspace_id: str | None = None,
+        timeout: float = 30.0,
     ) -> ToolResult:
         """Execute a tool through the policy gate."""
         if tool_id not in self._registry:
@@ -213,6 +218,7 @@ class ToolGateway:
             params=params,
             action_fn=self._registry[tool_id],
             workspace_id=workspace_id,
+            timeout=timeout,
         )
 
     def execute_tool_calls(
@@ -221,6 +227,7 @@ class ToolGateway:
         session_id: str | None,
         calls: list,
         workspace_id: str | None = None,
+        timeout: float = 30.0,
     ) -> list[ToolCallResult]:
         """Execute a list of ToolCall objects in parallel via ThreadPoolExecutor.
 
@@ -254,6 +261,7 @@ class ToolGateway:
                 tool_id=calls[0].tool_id,
                 params=calls[0].params,
                 workspace_id=workspace_id,
+                timeout=timeout,
             )
             return [_to_call_result(calls[0], result)]
 
@@ -297,7 +305,8 @@ class ToolGateway:
             for idx, (call, fn) in enumerate(zip(calls, handler_fns, strict=False)):
                 if fn is not None:
                     futures[idx] = pool.submit(fn, call.params)
-            pool.shutdown(wait=True)
+            # Don't wait=True here — we collect results with timeout below
+            pool.shutdown(wait=False)
 
         # Collect results and write audit logs (main thread)
         results: list[ToolCallResult] = []
@@ -308,7 +317,7 @@ class ToolGateway:
 
             fut = futures[idx]
             try:
-                output = fut.result()
+                output = fut.result(timeout=timeout)
                 self._gate._write_audit(
                     symbiote_id=symbiote_id, session_id=session_id,
                     tool_id=call.tool_id, action="execute",
@@ -316,6 +325,16 @@ class ToolGateway:
                 )
                 results.append(_to_call_result(call, ToolResult(
                     success=True, tool_id=call.tool_id, output=output,
+                )))
+            except TimeoutError:
+                self._gate._write_audit(
+                    symbiote_id=symbiote_id, session_id=session_id,
+                    tool_id=call.tool_id, action="execute",
+                    params=call.params, result="error:TimeoutError",
+                )
+                results.append(_to_call_result(call, ToolResult(
+                    success=False, tool_id=call.tool_id,
+                    error=f"Tool execution timed out after {timeout}s",
                 )))
             except Exception as exc:
                 self._gate._write_audit(

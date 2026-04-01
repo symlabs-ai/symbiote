@@ -122,8 +122,15 @@ class ChatRunner:
 
         all_tool_results: list[ToolCallResult] = []
         final_text = ""
+        loop_start = time.monotonic()
+        loop_timeout = context.loop_timeout
 
         for _ in range(max_iters):
+            # Check loop timeout before each iteration
+            if time.monotonic() - loop_start > loop_timeout:
+                logger.info("[tool-loop] loop timeout exceeded (%.1fs)", loop_timeout)
+                break
+
             try:
                 response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
             except Exception as exc:
@@ -159,6 +166,7 @@ class ChatRunner:
                 symbiote_id=context.symbiote_id,
                 session_id=context.session_id,
                 calls=tool_calls,
+                timeout=context.tool_call_timeout,
             )
             all_tool_results.extend(results)
 
@@ -231,8 +239,15 @@ class ChatRunner:
         trace = LoopTrace()
         final_text = ""
         loop_start = time.monotonic()
+        loop_timeout = context.loop_timeout
 
         for iteration in range(max_iters):
+            # Check loop timeout before each iteration
+            if time.monotonic() - loop_start > loop_timeout:
+                logger.info("[tool-loop] loop timeout exceeded (%.1fs)", loop_timeout)
+                trace.stop_reason = "timeout"
+                break
+
             try:
                 response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
             except Exception as exc:
@@ -264,6 +279,7 @@ class ChatRunner:
                 symbiote_id=context.symbiote_id,
                 session_id=context.session_id,
                 calls=tool_calls,
+                timeout=context.tool_call_timeout,
             )
             step_elapsed = int((time.monotonic() - step_start) * 1000)
             all_tool_results.extend(results)

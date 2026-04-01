@@ -6,6 +6,8 @@ import asyncio
 import inspect
 import json
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -64,6 +66,7 @@ class PolicyGate:
         params: dict,
         action_fn: Callable,
         workspace_id: str | None = None,
+        timeout: float = 30.0,
     ) -> ToolResult:
         """Check policy, execute if allowed, and always write to audit_log."""
         policy = self.check(symbiote_id, tool_id, workspace_id)
@@ -84,7 +87,9 @@ class PolicyGate:
             )
 
         try:
-            output = action_fn(params)
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(action_fn, params)
+                output = future.result(timeout=timeout)
             self._write_audit(
                 symbiote_id=symbiote_id,
                 session_id=session_id,
@@ -94,6 +99,20 @@ class PolicyGate:
                 result="success",
             )
             return ToolResult(success=True, tool_id=tool_id, output=output)
+        except FuturesTimeoutError:
+            self._write_audit(
+                symbiote_id=symbiote_id,
+                session_id=session_id,
+                tool_id=tool_id,
+                action="execute",
+                params=params,
+                result="error:TimeoutError",
+            )
+            return ToolResult(
+                success=False,
+                tool_id=tool_id,
+                error=f"Tool execution timed out after {timeout}s",
+            )
         except Exception as exc:
             self._write_audit(
                 symbiote_id=symbiote_id,
@@ -117,6 +136,7 @@ class PolicyGate:
         params: dict,
         action_fn: Callable,
         workspace_id: str | None = None,
+        timeout: float = 30.0,
     ) -> ToolResult:
         """Async variant: check policy, execute (awaiting coroutines), and audit."""
         policy = self.check(symbiote_id, tool_id, workspace_id)
@@ -138,9 +158,10 @@ class PolicyGate:
 
         try:
             if inspect.iscoroutinefunction(action_fn):
-                output = await action_fn(params)
+                coro = action_fn(params)
             else:
-                output = await asyncio.to_thread(action_fn, params)
+                coro = asyncio.to_thread(action_fn, params)
+            output = await asyncio.wait_for(coro, timeout=timeout)
             self._write_audit(
                 symbiote_id=symbiote_id,
                 session_id=session_id,
@@ -150,6 +171,20 @@ class PolicyGate:
                 result="success",
             )
             return ToolResult(success=True, tool_id=tool_id, output=output)
+        except TimeoutError:
+            self._write_audit(
+                symbiote_id=symbiote_id,
+                session_id=session_id,
+                tool_id=tool_id,
+                action="execute",
+                params=params,
+                result="error:TimeoutError",
+            )
+            return ToolResult(
+                success=False,
+                tool_id=tool_id,
+                error=f"Tool execution timed out after {timeout}s",
+            )
         except Exception as exc:
             self._write_audit(
                 symbiote_id=symbiote_id,

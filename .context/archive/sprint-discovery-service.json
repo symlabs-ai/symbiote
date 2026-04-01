@@ -1,0 +1,13 @@
+{
+  "id": "sprint-discovery-service",
+  "started": "2026-03-18T00:00:00Z",
+  "features": [
+    {"index": 1, "name": "Schema discovered_tools + modelo", "status": "done"},
+    {"index": 2, "name": "DiscoveryService backend", "status": "done"},
+    {"index": 3, "name": "API endpoints discover + aprovação", "status": "done"},
+    {"index": 4, "name": "CLI symbiote init + discover", "status": "done"},
+    {"index": 5, "name": "Dashboard seção Tools", "status": "done"}
+  ],
+  "current": 5,
+  "total": 5
+}

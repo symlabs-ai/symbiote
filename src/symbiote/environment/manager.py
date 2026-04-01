@@ -32,6 +32,8 @@ class EnvironmentManager:
         memory_share: float | None = None,
         knowledge_share: float | None = None,
         max_tool_iterations: int | None = None,
+        tool_call_timeout: float | None = None,
+        loop_timeout: float | None = None,
     ) -> EnvironmentConfig:
         """Create or update an environment config for a symbiote+workspace combo."""
         existing = self._fetch_exact(symbiote_id, workspace_id)
@@ -54,13 +56,16 @@ class EnvironmentManager:
                 memory_share=memory_share if memory_share is not None else existing.memory_share,
                 knowledge_share=knowledge_share if knowledge_share is not None else existing.knowledge_share,
                 max_tool_iterations=max_tool_iterations if max_tool_iterations is not None else existing.max_tool_iterations,
+                tool_call_timeout=tool_call_timeout if tool_call_timeout is not None else existing.tool_call_timeout,
+                loop_timeout=loop_timeout if loop_timeout is not None else existing.loop_timeout,
             )
             self._storage.execute(
                 "UPDATE environment_configs SET "
                 "tools_json = ?, services_json = ?, humans_json = ?, "
                 "policies_json = ?, resources_json = ?, tool_tags_json = ?, "
                 "tool_loading = ?, tool_loop = ?, prompt_caching = ?, "
-                "memory_share = ?, knowledge_share = ?, max_tool_iterations = ? "
+                "memory_share = ?, knowledge_share = ?, max_tool_iterations = ?, "
+                "tool_call_timeout = ?, loop_timeout = ? "
                 "WHERE id = ?",
                 (
                     json.dumps(cfg.tools),
@@ -75,6 +80,8 @@ class EnvironmentManager:
                     cfg.memory_share,
                     cfg.knowledge_share,
                     cfg.max_tool_iterations,
+                    cfg.tool_call_timeout,
+                    cfg.loop_timeout,
                     cfg.id,
                 ),
             )
@@ -96,13 +103,16 @@ class EnvironmentManager:
             memory_share=memory_share if memory_share is not None else 0.40,
             knowledge_share=knowledge_share if knowledge_share is not None else 0.25,
             max_tool_iterations=max_tool_iterations if max_tool_iterations is not None else 10,
+            tool_call_timeout=tool_call_timeout if tool_call_timeout is not None else 30.0,
+            loop_timeout=loop_timeout if loop_timeout is not None else 300.0,
         )
         self._storage.execute(
             "INSERT INTO environment_configs "
             "(id, symbiote_id, workspace_id, tools_json, services_json, "
             "humans_json, policies_json, resources_json, tool_tags_json, "
-            "tool_loading, tool_loop, prompt_caching, memory_share, knowledge_share, max_tool_iterations) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "tool_loading, tool_loop, prompt_caching, memory_share, knowledge_share, "
+            "max_tool_iterations, tool_call_timeout, loop_timeout) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 cfg.id,
                 cfg.symbiote_id,
@@ -119,6 +129,8 @@ class EnvironmentManager:
                 cfg.memory_share,
                 cfg.knowledge_share,
                 cfg.max_tool_iterations,
+                cfg.tool_call_timeout,
+                cfg.loop_timeout,
             ),
         )
         return cfg
@@ -212,6 +224,24 @@ class EnvironmentManager:
             return 10
         return cfg.max_tool_iterations
 
+    def get_tool_call_timeout(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> float:
+        """Return tool_call_timeout from config, or 30.0 if no config."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return 30.0
+        return cfg.tool_call_timeout
+
+    def get_loop_timeout(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> float:
+        """Return loop_timeout from config, or 300.0 if no config."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return 300.0
+        return cfg.loop_timeout
+
     # ── private helpers ────────────────────────────────────────────────
 
     def _fetch_exact(
@@ -252,4 +282,6 @@ class EnvironmentManager:
             memory_share=float(row.get("memory_share", 0.40) or 0.40),
             knowledge_share=float(row.get("knowledge_share", 0.25) or 0.25),
             max_tool_iterations=int(row.get("max_tool_iterations", 10) or 10),
+            tool_call_timeout=float(row.get("tool_call_timeout", 30.0) or 30.0),
+            loop_timeout=float(row.get("loop_timeout", 300.0) or 300.0),
         )

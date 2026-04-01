@@ -31,6 +31,8 @@ class AssembledContext(BaseModel):
     tool_loading: str = "full"
     tool_loop: bool = True
     max_tool_iterations: int = 10
+    tool_call_timeout: float = 30.0
+    loop_timeout: float = 300.0
     # Evolvable text overrides (resolved by ContextAssembler from harness_versions)
     tool_instructions_override: str | None = None
     injection_stagnation_override: str | None = None
@@ -146,6 +148,8 @@ class ContextAssembler:
         memory_share = _MEMORIES_SHARE
         knowledge_share = _KNOWLEDGE_SHARE
         max_tool_iterations = 10
+        tool_call_timeout = 30.0
+        loop_timeout = 300.0
         if self._environment is not None:
             loading_mode = self._environment.get_tool_loading(symbiote_id)
             loop_enabled = self._environment.get_tool_loop(symbiote_id)
@@ -153,6 +157,8 @@ class ContextAssembler:
             memory_share = self._environment.get_memory_share(symbiote_id)
             knowledge_share = self._environment.get_knowledge_share(symbiote_id)
             max_tool_iterations = self._environment.get_max_tool_iterations(symbiote_id)
+            tool_call_timeout = self._environment.get_tool_call_timeout(symbiote_id)
+            loop_timeout = self._environment.get_loop_timeout(symbiote_id)
 
         tool_dicts: list[dict] = []
         if self._tool_gateway is not None:
@@ -198,6 +204,8 @@ class ContextAssembler:
             tool_loading=loading_mode,
             tool_loop=loop_enabled,
             max_tool_iterations=max_tool_iterations,
+            tool_call_timeout=tool_call_timeout,
+            loop_timeout=loop_timeout,
             tool_instructions_override=tool_instr_override,
             injection_stagnation_override=stag_override,
             injection_circuit_breaker_override=cb_override,

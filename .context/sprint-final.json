@@ -1,0 +1,34 @@
+{
+  "id": "sprint-final-horizon-2026-04-01",
+  "started": "2026-04-01T12:00:00Z",
+  "base_version": "0.2.26",
+  "base_tests": 1054,
+  "waves": [
+    {
+      "index": 1,
+      "features": [
+        {"name": "B-33 Timeout", "status": "pending", "files": ["environment/tools.py", "runners/chat.py"]},
+        {"name": "B-29 Human-in-the-loop", "status": "pending", "files": ["environment/descriptors.py", "environment/tools.py", "runners/chat.py"]},
+        {"name": "B-34 Index mode cache", "status": "pending", "files": ["runners/chat.py"]},
+        {"name": "B-35 Teste multi-modelo", "status": "pending", "files": ["tests/"]}
+      ]
+    },
+    {
+      "index": 2,
+      "features": [
+        {"name": "B-40 Tool Mode", "status": "pending", "files": ["core/models.py", "core/context.py", "runners/chat.py", "environment/manager.py"]},
+        {"name": "B-27 Streaming mid-loop", "status": "pending", "files": ["runners/chat.py"]},
+        {"name": "B-30 Working memory intermediária", "status": "pending", "files": ["runners/chat.py", "memory/working.py"]}
+      ]
+    },
+    {
+      "index": 3,
+      "features": [
+        {"name": "B-68 Memory on-demand", "status": "pending", "files": ["environment/tools.py", "core/context.py"]},
+        {"name": "H-11+H-12+H-13 Benchmark+Evolution+Cross", "status": "pending", "files": ["harness/benchmark.py", "harness/structural.py"]}
+      ]
+    }
+  ],
+  "current_wave": 1,
+  "total": 9
+}

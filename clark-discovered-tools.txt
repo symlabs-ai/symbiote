@@ -1,0 +1,1817 @@
+# Clark — Discovered Tools
+# Symbiote ID: 94fc476b-81f4-409d-a304-cbe1e9ec9bd9
+# Total: 240 | Approved: 240 | Pending: 0
+# Tags: ['API', 'Admin', 'Admin Branding', 'Admin Newsletter Templates', 'Admin Site Templates', 'Admin Templates', 'Admin Variables', 'Analytics', 'Authentication', 'Bug Reports', 'Capture', 'Clark', 'Compose', 'Config', 'Health', 'Inbox', 'Items', 'Journals', 'Newsletter', 'Newsletter Tracking', 'Plugins', 'Public', 'Push', 'Root', 'Search', 'Sources', 'View']
+
+## [API] — 1 tools (1 approved)
+
+  ✓ api_info_api_get
+    Nome: Api Info
+    Desc: API info - shows available endpoints.
+    GET http://localhost:8000/api
+    Params: (sem params)
+    Status: approved
+
+
+## [Admin] — 3 tools (3 approved)
+
+  ✓ admin_analytics_admin_analytics_get
+    Nome: Admin Analytics
+    Desc: Analytics dashboard with GA4 and Search Console data.
+    GET http://localhost:8000/admin/analytics
+    Params: (sem params)
+    Status: approved
+
+  ✓ admin_dashboard_admin_get
+    Nome: Admin Dashboard
+    Desc: Admin dashboard with user listing.
+    GET http://localhost:8000/admin
+    Params: page
+    Status: approved
+
+  ✓ admin_user_detail_admin_user_user_id_get
+    Nome: Admin User Detail
+    Desc: Admin view of user details.
+    GET http://localhost:8000/admin/user/{user_id}
+    Params: user_id
+    Status: approved
+
+
+## [Admin Branding] — 3 tools (3 approved)
+
+  ✓ branding_page_admin_branding_get
+    Nome: Branding Page
+    Desc: Show branding configuration form.
+    GET http://localhost:8000/admin/branding
+    Params: (sem params)
+    Status: approved
+
+  ✓ delete_logo_admin_branding_logo_delete_post
+    Nome: Delete Logo
+    Desc: Remove custom logo and revert to default SVG.
+    POST http://localhost:8000/admin/branding/logo/delete
+    Params: (sem params)
+    Status: approved
+
+  ✓ save_branding_admin_branding_post
+    Nome: Save Branding
+    Desc: Save branding configuration.
+    POST http://localhost:8000/admin/branding
+    Params: (sem params)
+    Status: approved
+
+
+## [Admin Newsletter Templates] — 7 tools (7 approved)
+
+  ✓ create_newsletter_template_admin_newsletter_templates_new_post
+    Nome: Create Newsletter Template
+    Desc: Create a new global newsletter template.
+    POST http://localhost:8000/admin/newsletter-templates/new
+    Params: (sem params)
+    Status: approved
+
+  ✓ delete_newsletter_template_admin_newsletter_templates_template_id_delete_post
+    Nome: Delete Newsletter Template
+    Desc: Delete a newsletter template.
+    POST http://localhost:8000/admin/newsletter-templates/{template_id}/delete
+    Params: template_id
+    Status: approved
+
+  ✓ edit_newsletter_template_admin_newsletter_templates_template_id_get
+    Nome: Edit Newsletter Template
+    Desc: Edit a global newsletter template.
+    GET http://localhost:8000/admin/newsletter-templates/{template_id}
+    Params: template_id
+    Status: approved
+
+  ✓ list_newsletter_templates_admin_newsletter_templates_get
+    Nome: List Newsletter Templates
+    Desc: List all global newsletter templates.
+    GET http://localhost:8000/admin/newsletter-templates
+    Params: (sem params)
+    Status: approved
+
+  ✓ new_newsletter_template_admin_newsletter_templates_new_get
+    Nome: New Newsletter Template
+    Desc: Form to create a new newsletter template.
+    GET http://localhost:8000/admin/newsletter-templates/new
+    Params: (sem params)
+    Status: approved
+
+  ✓ save_newsletter_template_admin_newsletter_templates_template_id_post
+    Nome: Save Newsletter Template
+    Desc: Save a global newsletter template.
+    POST http://localhost:8000/admin/newsletter-templates/{template_id}
+    Params: template_id
+    Status: approved
+
+  ✓ send_test_newsletter_admin_newsletter_templates_template_id_test_post
+    Nome: Send Test Newsletter
+    Desc: Send a test email using this template to the admin's email.
+    POST http://localhost:8000/admin/newsletter-templates/{template_id}/test
+    Params: template_id
+    Status: approved
+
+
+## [Admin Site Templates] — 11 tools (11 approved)
+
+  ✓ create_site_template_admin_templates_sites_new_post
+    Nome: Create Site Template
+    Desc: Create a new site template.
+    POST http://localhost:8000/admin/templates-sites/new
+    Params: (sem params)
+    Status: approved
+
+  ✓ debug_preview_combined_admin_templates_sites_debug_preview_get
+    Nome: Debug Preview Combined
+    Desc: Debug endpoint: Preview combined using filesystem templates and real Sandbox data.
+No authentication required for testin
+    GET http://localhost:8000/admin/templates-sites/debug-preview
+    Params: (sem params)
+    Status: approved
+
+  ✓ delete_site_template_admin_templates_sites_template_id_delete_post
+    Nome: Delete Site Template
+    Desc: Delete a custom site template.
+    POST http://localhost:8000/admin/templates-sites/{template_id}/delete
+    Params: template_id
+    Status: approved
+
+  ✓ edit_site_template_admin_templates_sites_template_id_get
+    Nome: Edit Site Template
+    Desc: Form to edit an existing site template.
+    GET http://localhost:8000/admin/templates-sites/{template_id}
+    Params: template_id
+    Status: approved
+
+  ✓ list_site_templates_admin_templates_sites_get
+    Nome: List Site Templates
+    Desc: List all site templates.
+    GET http://localhost:8000/admin/templates-sites
+    Params: (sem params)
+    Status: approved
+
+  ✓ new_site_template_admin_templates_sites_new_get
+    Nome: New Site Template
+    Desc: Form to create a new site template.
+    GET http://localhost:8000/admin/templates-sites/new
+    Params: (sem params)
+    Status: approved
+
+  ✓ revert_site_template_admin_templates_sites_template_id_revert_post
+    Nome: Revert Site Template
+    Desc: Revert a system site template to its original filesystem version.
+    POST http://localhost:8000/admin/templates-sites/{template_id}/revert
+    Params: template_id
+    Status: approved
+
+  ✓ template_ai_chat_admin_templates_sites_ai_chat_post
+    Nome: Template Ai Chat
+    Desc: Chat with AI assistant for template editing.
+
+Full-template mode streams ndjson progress events.
+Legacy mode returns pla
+    POST http://localhost:8000/admin/templates-sites/ai-chat
+    Params: (sem params)
+    Status: approved
+
+  ✓ template_preview_admin_templates_sites_preview_post
+    Nome: Template Preview
+    Desc: Preview a template with mock data matching the real site.
+    POST http://localhost:8000/admin/templates-sites/preview
+    Params: (sem params)
+    Status: approved
+
+  ✓ template_preview_combined_admin_templates_sites_preview_combined_post
+    Nome: Template Preview Combined
+    Desc: Preview principal + partial templates combined using real Sandbox journal data.
+    POST http://localhost:8000/admin/templates-sites/preview-combined
+    Params: (sem params)
+    Status: approved
+
+  ✓ update_site_template_admin_templates_sites_template_id_post
+    Nome: Update Site Template
+    Desc: Update an existing site template.
+    POST http://localhost:8000/admin/templates-sites/{template_id}
+    Params: template_id
+    Status: approved
+
+
+## [Admin Templates] — 3 tools (3 approved)
+
+  ✓ edit_template_admin_templates_content_type_get
+    Nome: Edit Template
+    Desc: Edit a global template.
+    GET http://localhost:8000/admin/templates/{content_type}
+    Params: content_type
+    Status: approved
+
+  ✓ list_templates_admin_templates_get
+    Nome: List Templates
+    Desc: List all global content type templates.
+    GET http://localhost:8000/admin/templates
+    Params: (sem params)
+    Status: approved
+
+  ✓ save_template_admin_templates_content_type_post
+    Nome: Save Template
+    Desc: Save a global template.
+    POST http://localhost:8000/admin/templates/{content_type}
+    Params: content_type
+    Status: approved
+
+
+## [Admin Variables] — 6 tools (6 approved)
+
+  ✓ create_variable_admin_variables_new_post
+    Nome: Create Variable
+    Desc: Create a new template variable.
+    POST http://localhost:8000/admin/variables/new
+    Params: (sem params)
+    Status: approved
+
+  ✓ delete_variable_admin_variables_var_id_delete_post
+    Nome: Delete Variable
+    Desc: Delete a template variable (non-system only).
+    POST http://localhost:8000/admin/variables/{var_id}/delete
+    Params: var_id
+    Status: approved
+
+  ✓ edit_variable_admin_variables_var_id_get
+    Nome: Edit Variable
+    Desc: Edit a template variable.
+    GET http://localhost:8000/admin/variables/{var_id}
+    Params: var_id
+    Status: approved
+
+  ✓ list_variables_admin_variables_get
+    Nome: List Variables
+    Desc: List all template variables.
+    GET http://localhost:8000/admin/variables
+    Params: (sem params)
+    Status: approved
+
+  ✓ new_variable_admin_variables_new_get
+    Nome: New Variable
+    Desc: Form to create a new variable.
+    GET http://localhost:8000/admin/variables/new
+    Params: (sem params)
+    Status: approved
+
+  ✓ update_variable_admin_variables_var_id_post
+    Nome: Update Variable
+    Desc: Update a template variable.
+    POST http://localhost:8000/admin/variables/{var_id}
+    Params: var_id
+    Status: approved
+
+
+## [Analytics] — 12 tools (12 approved)
+
+  ✓ analytics_countries_analytics_countries_get
+    Nome: Analytics Countries
+    Desc: Top countries by users.
+    GET http://localhost:8000/analytics/countries
+    Params: days, limit
+    Status: approved
+
+  ✓ analytics_daily_trend_analytics_daily_trend_get
+    Nome: Analytics Daily Trend
+    Desc: Daily users and pageviews trend.
+    GET http://localhost:8000/analytics/daily-trend
+    Params: days
+    Status: approved
+
+  ✓ analytics_devices_analytics_devices_get
+    Nome: Analytics Devices
+    Desc: Device category breakdown.
+    GET http://localhost:8000/analytics/devices
+    Params: days
+    Status: approved
+
+  ✓ analytics_overview_analytics_overview_get
+    Nome: Analytics Overview
+    Desc: Overview metrics: users, sessions, pageviews.
+    GET http://localhost:8000/analytics/overview
+    Params: days
+    Status: approved
+
+  ✓ analytics_realtime_analytics_realtime_get
+    Nome: Analytics Realtime
+    Desc: Real-time active users.
+    GET http://localhost:8000/analytics/realtime
+    Params: (sem params)
+    Status: approved
+
+  ✓ analytics_search_pages_analytics_search_pages_get
+    Nome: Analytics Search Pages
+    Desc: Top pages in Google search results.
+    GET http://localhost:8000/analytics/search-pages
+    Params: days, limit
+    Status: approved
+
+  ✓ analytics_search_queries_analytics_search_queries_get
+    Nome: Analytics Search Queries
+    Desc: Top search queries from Google Search Console.
+    GET http://localhost:8000/analytics/search-queries
+    Params: days, limit
+    Status: approved
+
+  ✓ analytics_search_trend_analytics_search_trend_get
+    Nome: Analytics Search Trend
+    Desc: Daily search performance trend.
+    GET http://localhost:8000/analytics/search-trend
+    Params: days
+    Status: approved
+
+  ✓ analytics_top_articles_analytics_top_articles_get
+    Nome: Analytics Top Articles
+    Desc: Most viewed articles and journals (public pages only).
+    GET http://localhost:8000/analytics/top-articles
+    Params: days, limit
+    Status: approved
+
+  ✓ analytics_top_journals_analytics_top_journals_get
+    Nome: Analytics Top Journals
+    Desc: Most viewed journals.
+    GET http://localhost:8000/analytics/top-journals
+    Params: days, limit
+    Status: approved
+
+  ✓ analytics_top_pages_analytics_top_pages_get
+    Nome: Analytics Top Pages
+    Desc: Most viewed pages.
+    GET http://localhost:8000/analytics/top-pages
+    Params: days, limit
+    Status: approved
+
+  ✓ analytics_traffic_sources_analytics_traffic_sources_get
+    Nome: Analytics Traffic Sources
+    Desc: Traffic sources breakdown.
+    GET http://localhost:8000/analytics/traffic-sources
+    Params: days, limit
+    Status: approved
+
+
+## [Authentication] — 7 tools (7 approved)
+
+  ✓ login_auth_login_post
+    Nome: Login
+    Desc: Login user (handles both JSON and form data).
+    POST http://localhost:8000/auth/login
+    Params: (sem params)
+    Status: approved
+
+  ✓ login_page_auth_login_get
+    Nome: Login Page
+    Desc: Display login form.
+    GET http://localhost:8000/auth/login
+    Params: next, error
+    Status: approved
+
+  ✓ logout_auth_logout_get
+    Nome: Logout
+    Desc: Logout user by clearing cookie.
+    GET http://localhost:8000/auth/logout
+    Params: next
+    Status: approved
+
+  ✓ profile_page_auth_profile_get
+    Nome: Profile Page
+    Desc: Display user profile page.
+    GET http://localhost:8000/auth/profile
+    Params: (sem params)
+    Status: approved
+
+  ✓ register_auth_register_post
+    Nome: Register
+    Desc: Register a new user (handles both JSON and form data).
+    POST http://localhost:8000/auth/register
+    Params: (sem params)
+    Status: approved
+
+  ✓ register_page_auth_register_get
+    Nome: Register Page
+    Desc: Display registration form.
+    GET http://localhost:8000/auth/register
+    Params: next, error
+    Status: approved
+
+  ✓ update_profile_auth_profile_post
+    Nome: Update Profile
+    Desc: Update user profile.
+    POST http://localhost:8000/auth/profile
+    Params: (sem params)
+    Status: approved
+
+
+## [Bug Reports] — 6 tools (6 approved)
+
+  ✓ add_comment_config_bug_reports_report_id_comment_post
+    Nome: Add Comment
+    Desc: Add a comment to a bug report.
+    POST http://localhost:8000/config/bug-reports/{report_id}/comment
+    Params: report_id
+    Status: approved
+
+  ✓ bug_reports_page_config_bug_reports_get
+    Nome: Bug Reports Page
+    Desc: Display bug reports page.
+    GET http://localhost:8000/config/bug-reports
+    Params: page
+    Status: approved
+
+  ✓ check_symdoctor_config_config_bug_reports_check_config_get
+    Nome: Check Symdoctor Config
+    Desc: Check if SymDoctor is properly configured.
+    GET http://localhost:8000/config/bug-reports/check-config
+    Params: (sem params)
+    Status: approved
+
+  ✓ create_bug_report_config_bug_reports_create_post
+    Nome: Create Bug Report
+    Desc: Create a new bug report from error log.
+    POST http://localhost:8000/config/bug-reports/create
+    Params: (sem params)
+    Status: approved
+
+  ✓ get_bug_report_config_bug_reports_report_id_get
+    Nome: Get Bug Report
+    Desc: Get bug report details including comments from SymDoctor.
+    GET http://localhost:8000/config/bug-reports/{report_id}
+    Params: report_id
+    Status: approved
+
+  ✓ get_bug_reports_status_config_bug_reports_status_get
+    Nome: Get Bug Reports Status
+    Desc: Get bug reports status (unread count) for current user.
+    GET http://localhost:8000/config/bug-reports/status
+    Params: (sem params)
+    Status: approved
+
+
+## [Capture] — 12 tools (12 approved)
+
+  ✓ capture_page_capture_get
+    Nome: Capture Page
+    Desc: Display capture form (GET - for share target redirect).
+    GET http://localhost:8000/capture
+    Params: url, title, text, share_image
+    Status: approved
+
+  ✓ capture_submit_capture_post
+    Nome: Capture Submit
+    Desc: Process capture form submission (POST - from form or share target).
+    POST http://localhost:8000/capture
+    Params: (sem params)
+    Status: approved
+
+  ✓ get_autocomplete_options_capture_autocomplete_get
+    Nome: Get Autocomplete Options
+    Desc: Get autocomplete options for template editor.
+
+Returns variables ($), functions (!), and placeholders (%).
+    GET http://localhost:8000/capture/autocomplete
+    Params: (sem params)
+    Status: approved
+
+  ✓ get_template_for_url_capture_template_get
+    Nome: Get Template For Url
+    Desc: Get content template for a URL based on domain detection (fast, no metadata fetch).
+    GET http://localhost:8000/capture/template
+    Params: url
+    Status: approved
+
+  ✓ image_proxy_capture_image_proxy_get
+    Nome: Image Proxy
+    Desc: Proxy for external images to avoid CORS/referrer restrictions.
+
+Security: Validates URL, blocks internal IPs, enforces c
+    GET http://localhost:8000/capture/image-proxy
+    Params: url
+    Status: approved
+
+  ✓ preview_url_capture_preview_get
+    Nome: Preview Url
+    Desc: Fetch URL metadata for preview (AJAX endpoint).
+
+This endpoint returns quickly with just metadata.
+Use /capture/suggest-
+    GET http://localhost:8000/capture/preview
+    Params: url
+    Status: approved
+
+  ✓ serve_shared_image_capture_shared_image_share_id_get
+    Nome: Serve Shared Image
+    Desc: Serve a shared image from the shares directory.
+    GET http://localhost:8000/capture/shared-image/{share_id}
+    Params: share_id
+    Status: approved
+
+  ✓ share_target_get_capture_share_get
+    Nome: Share Target Get
+    Desc: Handle PWA share target GET - extract URL and redirect to capture form.
+    GET http://localhost:8000/capture/share
+    Params: url, title, text
+    Status: approved
+
+  ✓ share_target_post_capture_share_post
+    Nome: Share Target Post
+    Desc: Handle PWA share target POST - can receive files (images).
+    POST http://localhost:8000/capture/share
+    Params: (sem params)
+    Status: approved
+
+  ✓ suggest_description_capture_suggest_description_get
+    Nome: Suggest Description
+    Desc: Generate a TLDR description for a YouTube video using LLM (AJAX endpoint).
+
+Called separately from preview for faster UX
+    GET http://localhost:8000/capture/suggest-description
+    Params: title, channel_name, description
+    Status: approved
+
+  ✓ suggest_image_title_capture_suggest_title_share_id_get
+    Nome: Suggest Image Title
+    Desc: Generate a suggested title for a shared image using AI.
+    GET http://localhost:8000/capture/suggest-title/{share_id}
+    Params: share_id
+    Status: approved
+
+  ✓ suggest_tags_capture_suggest_tags_get
+    Nome: Suggest Tags
+    Desc: Suggest tags for an item using LLM (AJAX endpoint).
+
+Called separately from preview for faster UX.
+    GET http://localhost:8000/capture/suggest-tags
+    Params: title, description
+    Status: approved
+
+
+## [Clark] — 4 tools (4 approved)
+
+  ✓ clark_chat_clark_chat_post
+    Nome: Clark Chat
+    Desc: Chat with Clark AI assistant.
+    POST http://localhost:8000/clark/chat
+    Params: (sem params)
+    Status: approved
+
+  ✓ clark_chat_stream_clark_chat_stream_post
+    Nome: Clark Chat Stream
+    Desc: Chat with Clark AI assistant via SSE streaming.
+
+Emits events:
+- tool_start: {tool_id} — badge should appear with pendin
+    POST http://localhost:8000/clark/chat/stream
+    Params: (sem params)
+    Status: approved
+
+  ✓ clark_clear_clark_clear_post
+    Nome: Clark Clear
+    Desc: Clear conversation for a URL.
+    POST http://localhost:8000/clark/clear
+    Params: url_key
+    Status: approved
+
+  ✓ clark_history_clark_history_get
+    Nome: Clark History
+    Desc: Load conversation history for a URL.
+    GET http://localhost:8000/clark/history
+    Params: url_key
+    Status: approved
+
+
+## [Compose] — 14 tools (14 approved)
+
+  ✓ compose_edit_form_compose_edit_item_id_get
+    Nome: Compose Edit Form
+    Desc: Display edit form for an existing compose item.
+    GET http://localhost:8000/compose/edit/{item_id}
+    Params: item_id
+    Status: approved
+
+  ✓ compose_edit_submit_compose_edit_item_id_post
+    Nome: Compose Edit Submit
+    Desc: Update an existing item (compose or captured).
+    POST http://localhost:8000/compose/edit/{item_id}
+    Params: item_id
+    Status: approved
+
+  ✓ compose_form_compose_get
+    Nome: Compose Form
+    Desc: Display compose form for creating original content.
+    GET http://localhost:8000/compose
+    Params: journal_id
+    Status: approved
+
+  ✓ compose_posts_compose_posts_get
+    Nome: Compose Posts
+    Desc: List all user's compose items.
+    GET http://localhost:8000/compose/posts
+    Params: (sem params)
+    Status: approved
+
+  ✓ compose_submit_compose_post
+    Nome: Compose Submit
+    Desc: Create a composed item (original content).
+    POST http://localhost:8000/compose
+    Params: (sem params)
+    Status: approved
+
+  ✓ generate_description_compose_generate_description_post
+    Nome: Generate Description
+    Desc: Generate a description based on content using template variables.
+    POST http://localhost:8000/compose/generate-description
+    Params: (sem params)
+    Status: approved
+
+  ✓ generate_tags_compose_generate_tags_post
+    Nome: Generate Tags
+    Desc: Generate tags based on title and description using LLM.
+    POST http://localhost:8000/compose/generate-tags
+    Params: (sem params)
+    Status: approved
+
+  ✓ generate_title_compose_generate_title_post
+    Nome: Generate Title
+    Desc: Generate a title based on content using template variables.
+    POST http://localhost:8000/compose/generate-title
+    Params: (sem params)
+    Status: approved
+
+  ✓ get_temp_image_compose_temp_image_filename_get
+    Nome: Get Temp Image
+    Desc: Serve a temporary AI-generated image.
+    GET http://localhost:8000/compose/temp-image/{filename}
+    Params: filename
+    Status: approved
+
+  ✓ recent_items_compose_recent_items_get
+    Nome: Recent Items
+    Desc: Return the user's most recent items for pre-populating the sources tab.
+    GET http://localhost:8000/compose/recent-items
+    Params: (sem params)
+    Status: approved
+
+  ✓ search_images_compose_search_images_post
+    Nome: Search Images
+    Desc: Generate images using OpenAI DALL-E API and save locally.
+    POST http://localhost:8000/compose/search-images
+    Params: (sem params)
+    Status: approved
+
+  ✓ search_items_compose_search_items_get
+    Nome: Search Items
+    Desc: Search user's items for source selection in compose.
+
+Uses the same hybrid search (text + semantic) as the main /search
+    GET http://localhost:8000/compose/search-items
+    Params: q, journal_id
+    Status: approved
+
+  ✓ suggest_outline_compose_suggest_outline_post
+    Nome: Suggest Outline
+    Desc: Generate outline based on source items using LLM.
+    POST http://localhost:8000/compose/suggest-outline
+    Params: (sem params)
+    Status: approved
+
+  ✓ upload_editor_image_compose_edit_item_id_editor_image_post
+    Nome: Upload Editor Image
+    Desc: Upload a local image for inline use inside the markdown editor.
+    POST http://localhost:8000/compose/edit/{item_id}/editor-image
+    Params: item_id
+    Status: approved
+
+
+## [Config] — 22 tools (22 approved)
+
+  ✓ cancel_retag_task_config_tags_retag_cancel_post
+    Nome: Cancel Retag Task
+    Desc: Cancel running retag task.
+    POST http://localhost:8000/config/tags/retag/cancel
+    Params: (sem params)
+    Status: approved
+
+  ✓ cleanup_orphans_config_audit_cleanup_post
+    Nome: Cleanup Orphans
+    Desc: Remove orphan records from database.
+    POST http://localhost:8000/config/audit/cleanup
+    Params: entity
+    Status: approved
+
+  ✓ clear_logs_config_logs_clear_post
+    Nome: Clear Logs
+    Desc: Clear all error logs.
+    POST http://localhost:8000/config/logs/clear
+    Params: (sem params)
+    Status: approved
+
+  ✓ config_detail_page_config_detail_get
+    Nome: Config Detail Page
+    Desc: Display detail page for attachments or semantic documents by status.
+    GET http://localhost:8000/config/detail
+    Params: type, status, page
+    Status: approved
+
+  ✓ config_page_config_get
+    Nome: Config Page
+    Desc: Display system configuration and background task status.
+    GET http://localhost:8000/config
+    Params: (sem params)
+    Status: approved
+
+  ✓ config_status_config_status_get
+    Nome: Config Status
+    Desc: Get current status of all background tasks (for polling).
+    GET http://localhost:8000/config/status
+    Params: (sem params)
+    Status: approved
+
+  ✓ create_global_tag_config_tags_post
+    Nome: Create Global Tag
+    Desc: Create a new global tag.
+    POST http://localhost:8000/config/tags
+    Params: (sem params)
+    Status: approved
+
+  ✓ delete_tag_config_tags_tag_id_delete
+    Nome: Delete Tag
+    Desc: Delete a tag.
+    DELETE http://localhost:8000/config/tags/{tag_id}
+    Params: tag_id
+    Status: approved
+
+  ✓ get_attachments_by_status_config_attachments_get
+    Nome: Get Attachments By Status
+    Desc: Get attachments by status with item title.
+    GET http://localhost:8000/config/attachments
+    Params: status, limit, offset
+    Status: approved
+
+  ✓ get_audit_status_config_audit_get
+    Nome: Get Audit Status
+    Desc: Get last audit result (cached, instant response).
+    GET http://localhost:8000/config/audit
+    Params: (sem params)
+    Status: approved
+
+  ✓ get_logs_config_logs_get
+    Nome: Get Logs
+    Desc: Get recent error logs, optionally filtered by error type.
+    GET http://localhost:8000/config/logs
+    Params: limit, error_type
+    Status: approved
+
+  ✓ get_logs_grouped_config_logs_grouped_get
+    Nome: Get Logs Grouped
+    Desc: Get error logs grouped by error type.
+    GET http://localhost:8000/config/logs/grouped
+    Params: (sem params)
+    Status: approved
+
+  ✓ get_retag_status_config_tags_retag_status_get
+    Nome: Get Retag Status
+    Desc: Get current retag task status.
+    GET http://localhost:8000/config/tags/retag/status
+    Params: (sem params)
+    Status: approved
+
+  ✓ get_semantic_documents_by_status_config_semantic_documents_get
+    Nome: Get Semantic Documents By Status
+    Desc: Get semantic documents by status with attachment and item info.
+    GET http://localhost:8000/config/semantic-documents
+    Params: status, limit, offset
+    Status: approved
+
+  ✓ get_untagged_count_config_tags_untagged_count_get
+    Nome: Get Untagged Count
+    Desc: Get count of items without tags.
+    GET http://localhost:8000/config/tags/untagged-count
+    Params: (sem params)
+    Status: approved
+
+  ✓ list_global_tags_config_tags_list_get
+    Nome: List Global Tags
+    Desc: Get all global tags with usage count (JSON API).
+    GET http://localhost:8000/config/tags/list
+    Params: (sem params)
+    Status: approved
+
+  ✓ merge_tags_config_tags_merge_post
+    Nome: Merge Tags
+    Desc: Merge source tag into target tag.
+    POST http://localhost:8000/config/tags/merge
+    Params: (sem params)
+    Status: approved
+
+  ✓ run_audit_config_audit_post
+    Nome: Run Audit
+    Desc: Run consistency audit (may take a few seconds).
+    POST http://localhost:8000/config/audit
+    Params: (sem params)
+    Status: approved
+
+  ✓ start_retag_task_config_tags_retag_post
+    Nome: Start Retag Task
+    Desc: Start background retag task.
+    POST http://localhost:8000/config/tags/retag
+    Params: (sem params)
+    Status: approved
+
+  ✓ tags_page_config_tags_get
+    Nome: Tags Page
+    Desc: Display global tags management page.
+    GET http://localhost:8000/config/tags
+    Params: (sem params)
+    Status: approved
+
+  ✓ toggle_scheduler_config_scheduler_scheduler_id_toggle_post
+    Nome: Toggle Scheduler
+    Desc: Toggle a scheduler between paused and running states.
+    POST http://localhost:8000/config/scheduler/{scheduler_id}/toggle
+    Params: scheduler_id
+    Status: approved
+
+  ✓ update_tag_config_tags_tag_id_put
+    Nome: Update Tag
+    Desc: Update a tag's name and/or color.
+    PUT http://localhost:8000/config/tags/{tag_id}
+    Params: tag_id
+    Status: approved
+
+
+## [Health] — 2 tools (2 approved)
+
+  ✓ health_check_health_get
+    Nome: Health Check
+    Desc: Health check endpoint.
+    GET http://localhost:8000/health
+    Params: (sem params)
+    Status: approved
+
+  ✓ service_worker_sw_js_get
+    Nome: Service Worker
+    Desc: Serve service worker from root with correct scope.
+    GET http://localhost:8000/sw.js
+    Params: (sem params)
+    Status: approved
+
+
+## [Inbox] — 4 tools (4 approved)
+
+  ✓ bulk_action_inbox_bulk_action_post
+    Nome: Bulk Action
+    Desc: Execute bulk action on multiple items.
+    POST http://localhost:8000/inbox/bulk-action
+    Params: (sem params)
+    Status: approved
+
+  ✓ inbox_page_inbox_get
+    Nome: Inbox Page
+    Desc: Display inbox with captured links.
+    GET http://localhost:8000/inbox
+    Params: journal_id, status
+    Status: approved
+
+  ✓ item_action_inbox_action_post
+    Nome: Item Action
+    Desc: Handle item actions (archive, publish, delete, not_spam).
+    POST http://localhost:8000/inbox/action
+    Params: (sem params)
+    Status: approved
+
+  ✓ move_item_inbox_move_post
+    Nome: Move Item
+    Desc: Move item to another journal.
+    POST http://localhost:8000/inbox/move
+    Params: (sem params)
+    Status: approved
+
+
+## [Items] — 7 tools (7 approved)
+
+  ✓ archive_item_items_item_id_archive_post
+    Nome: Archive Item
+    Desc: Archive an item.
+    POST http://localhost:8000/items/{item_id}/archive
+    Params: item_id
+    Status: approved
+
+  ✓ capture_item_items_capture_post
+    Nome: Capture Item
+    Desc: Capture a new item (link) to inbox.
+    POST http://localhost:8000/items/capture
+    Params: (sem params)
+    Status: approved
+
+  ✓ delete_item_items_item_id_delete
+    Nome: Delete Item
+    Desc: Delete an item.
+    DELETE http://localhost:8000/items/{item_id}
+    Params: item_id
+    Status: approved
+
+  ✓ get_related_items_items_item_id_related_get
+    Nome: Get Related Items
+    Desc: Get semantically related items for a given item.
+
+Returns items that are semantically similar based on content.
+Requires
+    GET http://localhost:8000/items/{item_id}/related
+    Params: item_id, limit
+    Status: approved
+
+  ✓ list_items_items_get
+    Nome: List Items
+    Desc: List items for a journal.
+    GET http://localhost:8000/items
+    Params: journal_id, status, limit, offset
+    Status: approved
+
+  ✓ publish_item_items_item_id_publish_post
+    Nome: Publish Item
+    Desc: Publish an item to the public journal.
+    POST http://localhost:8000/items/{item_id}/publish
+    Params: item_id
+    Status: approved
+
+  ✓ toggle_highlight_items_item_id_highlight_post
+    Nome: Toggle Highlight
+    Desc: Toggle highlight status of an item.
+    POST http://localhost:8000/items/{item_id}/highlight
+    Params: item_id
+    Status: approved
+
+
+## [Journals] — 25 tools (25 approved)
+
+  ✓ archive_all_items_journals_journal_id_archive_all_post
+    Nome: Archive All Items
+    Desc: Archive all inbox items in a journal.
+    POST http://localhost:8000/journals/{journal_id}/archive-all
+    Params: journal_id
+    Status: approved
+
+  ✓ create_journal_form_journals_new_post
+    Nome: Create Journal Form
+    Desc: Handle journal creation from form.
+    POST http://localhost:8000/journals/new
+    Params: (sem params)
+    Status: approved
+
+  ✓ create_journal_journals_post
+    Nome: Create Journal
+    Desc: Create a new journal.
+    POST http://localhost:8000/journals
+    Params: (sem params)
+    Status: approved
+
+  ✓ create_journal_tag_journals_journal_id_tags_post
+    Nome: Create Journal Tag
+    Desc: Create a tag specific to this journal.
+    POST http://localhost:8000/journals/{journal_id}/tags
+    Params: journal_id
+    Status: approved
+
+  ✓ create_section_journals_journal_id_sections_post
+    Nome: Create Section
+    Desc: Create a new journal section.
+    POST http://localhost:8000/journals/{journal_id}/sections
+    Params: journal_id
+    Status: approved
+
+  ✓ delete_all_items_journals_journal_id_delete_all_items_post
+    Nome: Delete All Items
+    Desc: Delete all items from a journal. This action is irreversible.
+    POST http://localhost:8000/journals/{journal_id}/delete-all-items
+    Params: journal_id
+    Status: approved
+
+  ✓ delete_journal_journals_journal_id_delete_journal_post
+    Nome: Delete Journal
+    Desc: Delete a journal and all its items. This action is irreversible.
+    POST http://localhost:8000/journals/{journal_id}/delete-journal
+    Params: journal_id
+    Status: approved
+
+  ✓ delete_journal_tag_journals_journal_id_tags_tag_id_delete
+    Nome: Delete Journal Tag
+    Desc: Delete a journal-specific tag.
+    DELETE http://localhost:8000/journals/{journal_id}/tags/{tag_id}
+    Params: journal_id, tag_id
+    Status: approved
+
+  ✓ delete_section_journals_journal_id_sections_section_id_delete
+    Nome: Delete Section
+    Desc: Delete a journal section.
+    DELETE http://localhost:8000/journals/{journal_id}/sections/{section_id}
+    Params: journal_id, section_id
+    Status: approved
+
+  ✓ generate_section_filter_journals_journal_id_sections_section_id_generate_filter_post
+    Nome: Generate Section Filter
+    Desc: Use AI to generate a filter spec from the section's natural language description.
+    POST http://localhost:8000/journals/{journal_id}/sections/{section_id}/generate-filter
+    Params: journal_id, section_id
+    Status: approved
+
+  ✓ generate_sections_template_journals_journal_id_sections_generate_template_post
+    Nome: Generate Sections Template
+    Desc: Use AI to regenerate the journal HTML template based on defined sections.
+    POST http://localhost:8000/journals/{journal_id}/sections/generate-template
+    Params: journal_id
+    Status: approved
+
+  ✓ get_journal_journals_journal_id_get
+    Nome: Get Journal
+    Desc: Get a specific journal.
+    GET http://localhost:8000/journals/{journal_id}
+    Params: journal_id
+    Status: approved
+
+  ✓ get_journal_tags_journals_journal_id_tags_get
+    Nome: Get Journal Tags
+    Desc: Get all tags available for a journal (global + journal-specific).
+    GET http://localhost:8000/journals/{journal_id}/tags
+    Params: journal_id
+    Status: approved
+
+  ✓ init_sections_from_template_journals_journal_id_sections_init_from_template_post
+    Nome: Init Sections From Template
+    Desc: Initialize sections from template defaults (only if journal has no sections yet).
+    POST http://localhost:8000/journals/{journal_id}/sections/init-from-template
+    Params: journal_id
+    Status: approved
+
+  ✓ journal_sections_page_journals_journal_id_sections_get
+    Nome: Journal Sections Page
+    Desc: Journal section rules management page.
+    GET http://localhost:8000/journals/{journal_id}/sections
+    Params: journal_id
+    Status: approved
+
+  ✓ journal_settings_page_journals_journal_id_settings_get
+    Nome: Journal Settings Page
+    Desc: Display journal settings page.
+    GET http://localhost:8000/journals/{journal_id}/settings
+    Params: journal_id
+    Status: approved
+
+  ✓ list_journals_journals_get
+    Nome: List Journals
+    Desc: List all journals for current user.
+    GET http://localhost:8000/journals
+    Params: (sem params)
+    Status: approved
+
+  ✓ list_sections_journals_journal_id_sections_list_get
+    Nome: List Sections
+    Desc: List journal sections (JSON).
+    GET http://localhost:8000/journals/{journal_id}/sections/list
+    Params: journal_id
+    Status: approved
+
+  ✓ new_journal_page_journals_new_get
+    Nome: New Journal Page
+    Desc: Display create journal form.
+    GET http://localhost:8000/journals/new
+    Params: (sem params)
+    Status: approved
+
+  ✓ publish_all_items_journals_journal_id_publish_all_post
+    Nome: Publish All Items
+    Desc: Publish all inbox items in a journal.
+    POST http://localhost:8000/journals/{journal_id}/publish-all
+    Params: journal_id
+    Status: approved
+
+  ✓ reorder_sections_journals_journal_id_sections_reorder_post
+    Nome: Reorder Sections
+    Desc: Reorder journal sections.
+    POST http://localhost:8000/journals/{journal_id}/sections/reorder
+    Params: journal_id
+    Status: approved
+
+  ✓ update_journal_settings_journals_journal_id_settings_post
+    Nome: Update Journal Settings
+    Desc: Update journal settings.
+    POST http://localhost:8000/journals/{journal_id}/settings
+    Params: journal_id
+    Status: approved
+
+  ✓ update_journal_tag_journals_journal_id_tags_tag_id_put
+    Nome: Update Journal Tag
+    Desc: Update a journal-specific tag.
+    PUT http://localhost:8000/journals/{journal_id}/tags/{tag_id}
+    Params: journal_id, tag_id
+    Status: approved
+
+  ✓ update_section_journals_journal_id_sections_section_id_put
+    Nome: Update Section
+    Desc: Update a journal section.
+    PUT http://localhost:8000/journals/{journal_id}/sections/{section_id}
+    Params: journal_id, section_id
+    Status: approved
+
+  ✓ upload_logo_journals_journal_id_upload_logo_post
+    Nome: Upload Logo
+    Desc: Upload a logo image for the journal.
+    POST http://localhost:8000/journals/{journal_id}/upload-logo
+    Params: journal_id
+    Status: approved
+
+
+## [Newsletter] — 18 tools (18 approved)
+
+  ✓ confirm_subscription_newsletters_confirm_confirm_token_get
+    Nome: Confirm Subscription
+    Desc: Confirm a subscription via email link — returns HTML page.
+    GET http://localhost:8000/newsletters/confirm/{confirm_token}
+    Params: confirm_token
+    Status: approved
+
+  ✓ create_edition_newsletters_journal_id_editions_post
+    Nome: Create Edition
+    Desc: Create a draft edition (owner only).
+    POST http://localhost:8000/newsletters/{journal_id}/editions
+    Params: journal_id
+    Status: approved
+
+  ✓ get_edition_newsletters_journal_id_editions_edition_id_get
+    Nome: Get Edition
+    Desc: Get edition detail with rendered preview (owner only).
+    GET http://localhost:8000/newsletters/{journal_id}/editions/{edition_id}
+    Params: journal_id, edition_id
+    Status: approved
+
+  ✓ list_editions_newsletters_journal_id_editions_get
+    Nome: List Editions
+    Desc: List editions for a journal (owner only).
+    GET http://localhost:8000/newsletters/{journal_id}/editions
+    Params: journal_id, limit
+    Status: approved
+
+  ✓ list_subscribers_newsletters_journal_id_subscribers_get
+    Nome: List Subscribers
+    Desc: List subscribers for a journal (owner only).
+    GET http://localhost:8000/newsletters/{journal_id}/subscribers
+    Params: journal_id, limit, offset
+    Status: approved
+
+  ✓ new_edition_page_newsletters_journal_id_editions_new_get
+    Nome: New Edition Page
+    Desc: Render new edition creation page with preview.
+
+Query params:
+    items: Optional comma-separated list of item IDs.
+
+    GET http://localhost:8000/newsletters/{journal_id}/editions/new
+    Params: journal_id, items, max_items, content_mode
+    Status: approved
+
+  ✓ newsletter_dashboard_newsletters_dashboard_journal_id_get
+    Nome: Newsletter Dashboard
+    Desc: Newsletter dashboard overview with stats and recent editions.
+    GET http://localhost:8000/newsletters/dashboard/{journal_id}
+    Params: journal_id
+    Status: approved
+
+  ✓ newsletter_editions_page_newsletters_dashboard_journal_id_editions_get
+    Nome: Newsletter Editions Page
+    Desc: Edition list page.
+    GET http://localhost:8000/newsletters/dashboard/{journal_id}/editions
+    Params: journal_id
+    Status: approved
+
+  ✓ newsletter_subscribers_page_newsletters_dashboard_journal_id_subscribers_get
+    Nome: Newsletter Subscribers Page
+    Desc: Subscriber list page with filtering.
+    GET http://localhost:8000/newsletters/dashboard/{journal_id}/subscribers
+    Params: journal_id, status_filter
+    Status: approved
+
+  ✓ remove_subscriber_newsletters_journal_id_subscribers_sub_id_delete
+    Nome: Remove Subscriber
+    Desc: Remove a subscriber from a journal (owner only).
+    DELETE http://localhost:8000/newsletters/{journal_id}/subscribers/{sub_id}
+    Params: journal_id, sub_id
+    Status: approved
+
+  ✓ send_edition_newsletters_journal_id_editions_edition_id_send_post
+    Nome: Send Edition
+    Desc: Send edition to all active subscribers (owner only).
+    POST http://localhost:8000/newsletters/{journal_id}/editions/{edition_id}/send
+    Params: journal_id, edition_id
+    Status: approved
+
+  ✓ send_test_edition_newsletters_journal_id_editions_edition_id_test_post
+    Nome: Send Test Edition
+    Desc: Send a test edition to the owner's email (owner only).
+    POST http://localhost:8000/newsletters/{journal_id}/editions/{edition_id}/test
+    Params: journal_id, edition_id
+    Status: approved
+
+  ✓ subscribe_me_newsletters_journal_id_subscribe_me_post
+    Nome: Subscribe Me
+    Desc: Subscribe the currently authenticated user to a journal's newsletter.
+    POST http://localhost:8000/newsletters/{journal_id}/subscribe-me
+    Params: journal_id
+    Status: approved
+
+  ✓ subscribe_newsletters_journal_id_subscribe_post
+    Nome: Subscribe
+    Desc: Subscribe an email to a journal's newsletter.
+    POST http://localhost:8000/newsletters/{journal_id}/subscribe
+    Params: journal_id
+    Status: approved
+
+  ✓ unsubscribe_newsletters_unsubscribe_unsubscribe_token_get
+    Nome: Unsubscribe
+    Desc: Unsubscribe via email link — returns HTML page.
+    GET http://localhost:8000/newsletters/unsubscribe/{unsubscribe_token}
+    Params: unsubscribe_token
+    Status: approved
+
+  ✓ unsubscribe_one_click_newsletters_unsubscribe_unsubscribe_token_post
+    Nome: Unsubscribe One Click
+    Desc: RFC 8058 one-click unsubscribe via POST (used by Gmail/Outlook).
+    POST http://localhost:8000/newsletters/unsubscribe/{unsubscribe_token}
+    Params: unsubscribe_token
+    Status: approved
+
+  ✓ update_edition_preview_newsletters_journal_id_editions_edition_id_preview_post
+    Nome: Update Edition Preview
+    Desc: Update edition template/subject and return re-rendered preview HTML.
+    POST http://localhost:8000/newsletters/{journal_id}/editions/{edition_id}/preview
+    Params: journal_id, edition_id
+    Status: approved
+
+  ✓ update_preferences_newsletters_subscription_id_preferences_patch
+    Nome: Update Preferences
+    Desc: Update subscription delivery preferences.
+    PATCH http://localhost:8000/newsletters/{subscription_id}/preferences
+    Params: subscription_id
+    Status: approved
+
+
+## [Newsletter Tracking] — 3 tools (3 approved)
+
+  ✓ edition_stats_newsletters_journal_id_editions_edition_id_stats_get
+    Nome: Edition Stats
+    Desc: Return engagement stats for a newsletter edition (owner only).
+    GET http://localhost:8000/newsletters/{journal_id}/editions/{edition_id}/stats
+    Params: journal_id, edition_id
+    Status: approved
+
+  ✓ track_click_newsletters_track_click_edition_id_unsub_token_get
+    Nome: Track Click
+    Desc: Validate click URL, record it, and redirect to the original URL.
+    GET http://localhost:8000/newsletters/track/click/{edition_id}/{unsub_token}
+    Params: edition_id, unsub_token, url
+    Status: approved
+
+  ✓ track_open_newsletters_track_open_edition_id_unsub_token_get
+    Nome: Track Open
+    Desc: Record an email open and return a 1x1 transparent pixel.
+    GET http://localhost:8000/newsletters/track/open/{edition_id}/{unsub_token}
+    Params: edition_id, unsub_token
+    Status: approved
+
+
+## [Plugins] — 15 tools (15 approved)
+
+  ✓ delete_journal_plugin_config_api_api_journals_journal_id_plugins_plugin_name_config_delete
+    Nome: Delete Journal Plugin Config Api
+    Desc: Delete plugin config for a journal.
+    DELETE http://localhost:8000/api/journals/{journal_id}/plugins/{plugin_name}/config
+    Params: journal_id, plugin_name
+    Status: approved
+
+  ✓ get_journal_plugin_config_api_api_journals_journal_id_plugins_plugin_name_config_get
+    Nome: Get Journal Plugin Config Api
+    Desc: Get plugin config for a journal.
+    GET http://localhost:8000/api/journals/{journal_id}/plugins/{plugin_name}/config
+    Params: journal_id, plugin_name
+    Status: approved
+
+  ✓ get_plugin_info_api_api_plugins_plugin_name_get
+    Nome: Get Plugin Info Api
+    Desc: Get detailed info about a specific plugin.
+    GET http://localhost:8000/api/plugins/{plugin_name}
+    Params: plugin_name
+    Status: approved
+
+  ✓ get_webhook_url_api_webhooks_plugin_type_journal_id_url_get
+    Nome: Get Webhook Url
+    Desc: Get the webhook URL for a plugin/journal combination.
+    GET http://localhost:8000/api/webhooks/{plugin_type}/{journal_id}/url
+    Params: plugin_type, journal_id
+    Status: approved
+
+  ✓ install_plugin_api_api_plugins_install_post
+    Nome: Install Plugin Api
+    Desc: Install a plugin from a .zip file.
+    POST http://localhost:8000/api/plugins/install
+    Params: (sem params)
+    Status: approved
+
+  ✓ journal_plugin_config_page_journals_journal_id_plugins_plugin_name_config_get
+    Nome: Journal Plugin Config Page
+    Desc: Plugin config form for a journal.
+    GET http://localhost:8000/journals/{journal_id}/plugins/{plugin_name}/config
+    Params: journal_id, plugin_name
+    Status: approved
+
+  ✓ journal_plugins_page_journals_journal_id_plugins_get
+    Nome: Journal Plugins Page
+    Desc: Plugin config page for a journal.
+    GET http://localhost:8000/journals/{journal_id}/plugins
+    Params: journal_id
+    Status: approved
+
+  ✓ list_journal_plugins_api_api_journals_journal_id_plugins_get
+    Nome: List Journal Plugins Api
+    Desc: List plugins and their configs for a journal.
+    GET http://localhost:8000/api/journals/{journal_id}/plugins
+    Params: journal_id
+    Status: approved
+
+  ✓ list_plugins_api_api_plugins_get
+    Nome: List Plugins Api
+    Desc: List all available plugins (built-in and installed).
+    GET http://localhost:8000/api/plugins
+    Params: (sem params)
+    Status: approved
+
+  ✓ plugins_list_page_config_plugins_get
+    Nome: Plugins List Page
+    Desc: Plugin management page (admin only).
+    GET http://localhost:8000/config/plugins
+    Params: (sem params)
+    Status: approved
+
+  ✓ receive_webhook_api_webhooks_plugin_type_journal_id_post
+    Nome: Receive Webhook
+    Desc: Receive webhook from external service (forge_message, etc).
+
+External services send messages here, and YouNews processes
+    POST http://localhost:8000/api/webhooks/{plugin_type}/{journal_id}
+    Params: plugin_type, journal_id
+    Status: approved
+
+  ✓ save_journal_plugin_config_api_api_journals_journal_id_plugins_plugin_name_config_post
+    Nome: Save Journal Plugin Config Api
+    Desc: Save plugin config for a journal.
+    POST http://localhost:8000/api/journals/{journal_id}/plugins/{plugin_name}/config
+    Params: journal_id, plugin_name
+    Status: approved
+
+  ✓ save_journal_plugin_config_form_journals_journal_id_plugins_plugin_name_config_post
+    Nome: Save Journal Plugin Config Form
+    Desc: Save plugin config from form.
+    POST http://localhost:8000/journals/{journal_id}/plugins/{plugin_name}/config
+    Params: journal_id, plugin_name
+    Status: approved
+
+  ✓ uninstall_plugin_api_api_plugins_plugin_name_uninstall_post
+    Nome: Uninstall Plugin Api
+    Desc: Uninstall a plugin.
+    POST http://localhost:8000/api/plugins/{plugin_name}/uninstall
+    Params: plugin_name
+    Status: approved
+
+  ✓ validate_plugin_api_api_plugins_validate_post
+    Nome: Validate Plugin Api
+    Desc: Validate a plugin .zip file without installing.
+
+Returns detailed validation results including:
+- Manifest validation
+-
+    POST http://localhost:8000/api/plugins/validate
+    Params: (sem params)
+    Status: approved
+
+
+## [Public] — 14 tools (14 approved)
+
+  ✓ discover_journals_discover_get
+    Nome: Discover Journals
+    Desc: Discover public journals.
+    GET http://localhost:8000/discover
+    Params: (sem params)
+    Status: approved
+
+  ✓ get_item_likers_item_item_id_likers_get
+    Nome: Get Item Likers
+    Desc: Get users who liked an item. Only available to journal owner.
+    GET http://localhost:8000/item/{item_id}/likers
+    Params: item_id
+    Status: approved
+
+  ✓ google_verification_google4dde3b93d4482152_html_get
+    Nome: Google Verification
+    Desc: Google Search Console verification file.
+    GET http://localhost:8000/google4dde3b93d4482152.html
+    Params: (sem params)
+    Status: approved
+
+  ✓ journal_rss_feed_j_slug_feed_xml_get
+    Nome: Journal Rss Feed
+    Desc: Generate RSS feed for a public journal.
+    GET http://localhost:8000/j/{slug}/feed.xml
+    Params: slug
+    Status: approved
+
+  ✓ load_more_items_j_slug_items_get
+    Nome: Load More Items
+    Desc: Load more items for infinite scroll. Returns partial HTML.
+    GET http://localhost:8000/j/{slug}/items
+    Params: slug, offset, limit, tag
+    Status: approved
+
+  ✓ privacy_policy_privacy_get
+    Nome: Privacy Policy
+    Desc: Privacy policy page.
+    GET http://localhost:8000/privacy
+    Params: (sem params)
+    Status: approved
+
+  ✓ proxy_image_img_get
+    Nome: Proxy Image
+    Desc: Proxy external images for OG sharing.
+
+Security: Validates URL, blocks internal IPs, enforces content-type.
+    GET http://localhost:8000/img
+    Params: url
+    Status: approved
+
+  ✓ proxy_pdf_pdf_proxy_get
+    Nome: Proxy Pdf
+    Desc: Proxy external PDFs to serve from same origin (avoids CORS/download issues).
+    GET http://localhost:8000/pdf-proxy
+    Params: url
+    Status: approved
+
+  ✓ public_attachment_attachment_item_id_attachment_id_get
+    Nome: Public Attachment
+    Desc: Serve image attachments publicly for og:image sharing.
+
+Only serves IMAGE type attachments for security.
+Used by social
+    GET http://localhost:8000/attachment/{item_id}/{attachment_id}
+    Params: item_id, attachment_id
+    Status: approved
+
+  ✓ robots_txt_robots_txt_get
+    Nome: Robots Txt
+    Desc: Serve robots.txt for search engine crawlers.
+    GET http://localhost:8000/robots.txt
+    Params: (sem params)
+    Status: approved
+
+  ✓ sitemap_xml_sitemap_xml_get
+    Nome: Sitemap Xml
+    Desc: Generate dynamic sitemap.xml with public journals.
+    GET http://localhost:8000/sitemap.xml
+    Params: (sem params)
+    Status: approved
+
+  ✓ toggle_item_like_item_item_id_like_post
+    Nome: Toggle Item Like
+    Desc: Toggle like on an item. Requires authentication.
+    POST http://localhost:8000/item/{item_id}/like
+    Params: item_id
+    Status: approved
+
+  ✓ view_public_journal_j_slug_get
+    Nome: View Public Journal
+    Desc: View a public journal by slug.
+    GET http://localhost:8000/j/{slug}
+    Params: slug, tag
+    Status: approved
+
+  ✓ view_tag_tag_tag_name_get
+    Nome: View Tag
+    Desc: View all public published items with a specific tag.
+    GET http://localhost:8000/tag/{tag_name}
+    Params: tag_name
+    Status: approved
+
+
+## [Push] — 6 tools (6 approved)
+
+  ✓ get_push_status_push_status_get
+    Nome: Get Push Status
+    Desc: Get push notification status for current user.
+    GET http://localhost:8000/push/status
+    Params: (sem params)
+    Status: approved
+
+  ✓ get_vapid_key_push_vapid_key_get
+    Nome: Get Vapid Key
+    Desc: Get VAPID public key for push subscription.
+    GET http://localhost:8000/push/vapid-key
+    Params: (sem params)
+    Status: approved
+
+  ✓ send_test_notification_push_test_get
+    Nome: Send Test Notification
+    Desc: Send a test push notification to current user.
+    GET http://localhost:8000/push/test
+    Params: (sem params)
+    Status: approved
+
+  ✓ subscribe_push_subscribe_post
+    Nome: Subscribe
+    Desc: Subscribe to push notifications.
+    POST http://localhost:8000/push/subscribe
+    Params: (sem params)
+    Status: approved
+
+  ✓ unsubscribe_push_unsubscribe_post
+    Nome: Unsubscribe
+    Desc: Unsubscribe from push notifications.
+    POST http://localhost:8000/push/unsubscribe
+    Params: (sem params)
+    Status: approved
+
+  ✓ validate_subscription_push_validate_post
+    Nome: Validate Subscription
+    Desc: Validate if current browser's push subscription is registered on server.
+
+This helps detect when a subscription has expi
+    POST http://localhost:8000/push/validate
+    Params: (sem params)
+    Status: approved
+
+
+## [Root] — 1 tools (1 approved)
+
+  ✓ root_get
+    Nome: Root
+    Desc: Home page with chronological feed.
+    GET http://localhost:8000/
+    Params: (sem params)
+    Status: approved
+
+
+## [Search] — 1 tools (1 approved)
+
+  ✓ search_page_search_get
+    Nome: Search Page
+    Desc: Display search page with results.
+    GET http://localhost:8000/search
+    Params: q, journal_id, has_pdf, has_transcript, has_summary, limit
+    Status: approved
+
+
+## [Sources] — 21 tools (21 approved)
+
+  ✓ cancel_task_journals_journal_id_tasks_task_id_cancel_post
+    Nome: Cancel Task
+    Desc: Cancel a running task.
+    POST http://localhost:8000/journals/{journal_id}/tasks/{task_id}/cancel
+    Params: journal_id, task_id
+    Status: approved
+
+  ✓ create_source_journals_journal_id_sources_new_post
+    Nome: Create Source
+    Desc: Handle source creation from form.
+    POST http://localhost:8000/journals/{journal_id}/sources/new
+    Params: journal_id
+    Status: approved
+
+  ✓ delete_source_sources_source_id_delete_post
+    Nome: Delete Source
+    Desc: Delete a source.
+    POST http://localhost:8000/sources/{source_id}/delete
+    Params: source_id
+    Status: approved
+
+  ✓ edit_source_page_sources_source_id_edit_get
+    Nome: Edit Source Page
+    Desc: Display form to edit a source.
+    GET http://localhost:8000/sources/{source_id}/edit
+    Params: source_id
+    Status: approved
+
+  ✓ get_import_progress_journals_journal_id_sources_import_progress_get
+    Nome: Get Import Progress
+    Desc: Get import progress for a journal (legacy - uses new task system).
+    GET http://localhost:8000/journals/{journal_id}/sources/import-progress
+    Params: journal_id
+    Status: approved
+
+  ✓ get_task_progress_journals_journal_id_tasks_task_id_get
+    Nome: Get Task Progress
+    Desc: Get progress for a specific task.
+    GET http://localhost:8000/journals/{journal_id}/tasks/{task_id}
+    Params: journal_id, task_id
+    Status: approved
+
+  ✓ import_csv_journals_journal_id_sources_import_csv_post
+    Nome: Import Csv
+    Desc: Import links from a CSV file with one URL per line.
+
+URLs are imported as Items (links) in the inbox, not as RSS sources
+    POST http://localhost:8000/journals/{journal_id}/sources/import-csv
+    Params: journal_id
+    Status: approved
+
+  ✓ import_csv_source_journals_journal_id_sources_import_csv_source_post
+    Nome: Import Csv Source
+    Desc: Handle CSV import from source form (redirects to import-csv logic).
+    POST http://localhost:8000/journals/{journal_id}/sources/import-csv-source
+    Params: journal_id
+    Status: approved
+
+  ✓ list_active_tasks_journals_journal_id_tasks_get
+    Nome: List Active Tasks
+    Desc: List all active background tasks for a journal.
+    GET http://localhost:8000/journals/{journal_id}/tasks
+    Params: journal_id
+    Status: approved
+
+  ✓ list_sources_page_journals_journal_id_sources_get
+    Nome: List Sources Page
+    Desc: Display list of sources for a journal.
+    GET http://localhost:8000/journals/{journal_id}/sources
+    Params: journal_id
+    Status: approved
+
+  ✓ new_source_form_page_journals_journal_id_sources_new_source_type_get
+    Nome: New Source Form Page
+    Desc: Display form to add a new source of specific type.
+    GET http://localhost:8000/journals/{journal_id}/sources/new/{source_type}
+    Params: journal_id, source_type
+    Status: approved
+
+  ✓ pause_task_journals_journal_id_tasks_task_id_pause_post
+    Nome: Pause Task
+    Desc: Pause a running task.
+    POST http://localhost:8000/journals/{journal_id}/tasks/{task_id}/pause
+    Params: journal_id, task_id
+    Status: approved
+
+  ✓ preview_feed_sources_preview_post
+    Nome: Preview Feed
+    Desc: Preview a source URL and return its metadata.
+
+Supports RSS feeds and YouTube channels/playlists.
+    POST http://localhost:8000/sources/preview
+    Params: (sem params)
+    Status: approved
+
+  ✓ refetch_metadata_journals_journal_id_sources_refetch_metadata_post
+    Nome: Refetch Metadata
+    Desc: Re-fetch metadata for items missing title or image_url.
+
+Creates a background task to update items.
+    POST http://localhost:8000/journals/{journal_id}/sources/refetch-metadata
+    Params: journal_id
+    Status: approved
+
+  ✓ resume_task_journals_journal_id_tasks_task_id_resume_post
+    Nome: Resume Task
+    Desc: Resume a paused task.
+    POST http://localhost:8000/journals/{journal_id}/tasks/{task_id}/resume
+    Params: journal_id, task_id
+    Status: approved
+
+  ✓ select_source_type_page_journals_journal_id_sources_new_get
+    Nome: Select Source Type Page
+    Desc: Display source type selection page.
+    GET http://localhost:8000/journals/{journal_id}/sources/new
+    Params: journal_id
+    Status: approved
+
+  ✓ sync_source_sources_source_id_sync_post
+    Nome: Sync Source
+    Desc: Sync a source manually.
+    POST http://localhost:8000/sources/{source_id}/sync
+    Params: source_id
+    Status: approved
+
+  ✓ update_source_sources_source_id_edit_post
+    Nome: Update Source
+    Desc: Handle source update from form.
+    POST http://localhost:8000/sources/{source_id}/edit
+    Params: source_id
+    Status: approved
+
+  ✓ whatsapp_finalize_upload_journals_journal_id_sources_whatsapp_finalize_upload_id_post
+    Nome: Whatsapp Finalize Upload
+    Desc: Finalize upload and start WhatsApp import in background.
+    POST http://localhost:8000/journals/{journal_id}/sources/whatsapp/finalize/{upload_id}
+    Params: journal_id, upload_id
+    Status: approved
+
+  ✓ whatsapp_start_upload_journals_journal_id_sources_whatsapp_start_upload_post
+    Nome: Whatsapp Start Upload
+    Desc: Start a chunked WhatsApp upload.
+    POST http://localhost:8000/journals/{journal_id}/sources/whatsapp/start-upload
+    Params: journal_id
+    Status: approved
+
+  ✓ whatsapp_upload_chunk_journals_journal_id_sources_whatsapp_upload_chunk_upload_id_post
+    Nome: Whatsapp Upload Chunk
+    Desc: Receive a chunk of the WhatsApp ZIP file.
+    POST http://localhost:8000/journals/{journal_id}/sources/whatsapp/upload-chunk/{upload_id}
+    Params: journal_id, upload_id
+    Status: approved
+
+
+## [View] — 12 tools (12 approved)
+
+  ✓ archive_item_view_item_id_archive_post
+    Nome: Archive Item
+    Desc: Archive an item from the view page.
+    POST http://localhost:8000/view/{item_id}/archive
+    Params: item_id
+    Status: approved
+
+  ✓ get_item_processing_status_view_item_id_processing_status_get
+    Nome: Get Item Processing Status
+    Desc: Get current processing status for polling.
+    GET http://localhost:8000/view/{item_id}/processing-status
+    Params: item_id
+    Status: approved
+
+  ✓ item_ai_chat_view_item_id_ai_chat_post
+    Nome: Item Ai Chat
+    Desc: Chat with AI about a specific item.
+    POST http://localhost:8000/view/{item_id}/ai-chat
+    Params: item_id
+    Status: approved
+
+  ✓ publish_item_view_item_id_publish_post
+    Nome: Publish Item
+    Desc: Publish an item from the view page.
+    POST http://localhost:8000/view/{item_id}/publish
+    Params: item_id
+    Status: approved
+
+  ✓ reprocess_item_view_item_id_reprocess_post
+    Nome: Reprocess Item
+    Desc: Reprocess item metadata (fetch og:image, title, description again).
+    POST http://localhost:8000/view/{item_id}/reprocess
+    Params: item_id
+    Status: approved
+
+  ✓ retry_summary_view_item_id_retry_summary_post
+    Nome: Retry Summary
+    Desc: Retry summary generation by deleting attachments and reprocessing.
+
+This endpoint:
+1. Deletes any FAILED or COMPLETED tr
+    POST http://localhost:8000/view/{item_id}/retry-summary
+    Params: item_id
+    Status: approved
+
+  ✓ serve_attachment_view_item_id_attachment_attachment_id_get
+    Nome: Serve Attachment
+    Desc: Serve an attachment file for download or viewing.
+    GET http://localhost:8000/view/{item_id}/attachment/{attachment_id}
+    Params: item_id, attachment_id
+    Status: approved
+
+  ✓ unarchive_item_view_item_id_unarchive_post
+    Nome: Unarchive Item
+    Desc: Unarchive an item (move back to inbox) from the view page.
+    POST http://localhost:8000/view/{item_id}/unarchive
+    Params: item_id
+    Status: approved
+
+  ✓ update_content_view_item_id_update_content_post
+    Nome: Update Content
+    Desc: Update article text or transcript content inline.
+    POST http://localhost:8000/view/{item_id}/update-content
+    Params: item_id
+    Status: approved
+
+  ✓ update_summary_view_item_id_update_summary_post
+    Nome: Update Summary
+    Desc: Update summary content inline.
+    POST http://localhost:8000/view/{item_id}/update-summary
+    Params: item_id
+    Status: approved
+
+  ✓ update_template_view_item_id_update_template_post
+    Nome: Update Template
+    Desc: Update item template and reprocess content.
+
+This endpoint:
+1. Updates the item.note field with the new template
+2. Dele
+    POST http://localhost:8000/view/{item_id}/update-template
+    Params: item_id
+    Status: approved
+
+  ✓ view_item_view_slug_or_id_get
+    Nome: View Item
+    Desc: Display detailed view of an item with attachments.
+    GET http://localhost:8000/view/{slug_or_id}
+    Params: slug_or_id
+    Status: approved

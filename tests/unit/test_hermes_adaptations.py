@@ -245,7 +245,7 @@ class TestContextCompaction:
                 return "Done!"
 
         class MockGateway:
-            def execute_tool_calls(self, symbiote_id, session_id, calls):
+            def execute_tool_calls(self, symbiote_id, session_id, calls, timeout=30.0):
                 return [ToolCallResult(tool_id="test_tool", success=True, output="ok")]
 
         runner = ChatRunner(LoopingLLM(), tool_gateway=MockGateway())

@@ -194,6 +194,8 @@ class SQLiteAdapter:
             "ALTER TABLE environment_configs ADD COLUMN memory_share REAL DEFAULT 0.40",
             "ALTER TABLE environment_configs ADD COLUMN knowledge_share REAL DEFAULT 0.25",
             "ALTER TABLE environment_configs ADD COLUMN max_tool_iterations INTEGER DEFAULT 10",
+            "ALTER TABLE environment_configs ADD COLUMN tool_call_timeout REAL DEFAULT 30.0",
+            "ALTER TABLE environment_configs ADD COLUMN loop_timeout REAL DEFAULT 300.0",
         ):
             try:
                 self._conn.execute(stmt)

@@ -1,0 +1,22 @@
+{
+  "id": "sprint-resilience-2026-03-31",
+  "started": "2026-03-31T00:00:00Z",
+  "waves": [
+    {
+      "index": 1,
+      "features": [
+        {"name": "Parallel tool execution", "status": "pending", "backlog_id": "B-55"},
+        {"name": "LLM retry with backoff", "status": "pending", "backlog_id": "B-56"},
+        {"name": "Diminishing returns detection", "status": "pending", "backlog_id": "B-57"}
+      ]
+    },
+    {
+      "index": 2,
+      "features": [
+        {"name": "Multi-layer compaction", "status": "pending", "backlog_id": "B-58", "depends_on": ["B-55", "B-56", "B-57"]}
+      ]
+    }
+  ],
+  "current_wave": 1,
+  "total": 4
+}
