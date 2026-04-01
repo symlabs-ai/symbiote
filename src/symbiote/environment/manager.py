@@ -277,6 +277,21 @@ class EnvironmentManager:
             return "packed"
         return cfg.context_mode
 
+    def get_long_run_config(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> dict:
+        """Return long-run specific config fields as a dict."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return {}
+        return {
+            "planner_prompt": cfg.planner_prompt,
+            "evaluator_prompt": cfg.evaluator_prompt,
+            "evaluator_criteria": cfg.evaluator_criteria,
+            "context_strategy": cfg.context_strategy,
+            "max_blocks": cfg.max_blocks,
+        }
+
     # ── private helpers ────────────────────────────────────────────────
 
     def _fetch_exact(

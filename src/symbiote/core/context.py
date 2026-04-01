@@ -39,6 +39,12 @@ class AssembledContext(BaseModel):
     injection_stagnation_override: str | None = None
     injection_circuit_breaker_override: str | None = None
     context_mode: str = "packed"
+    # Long-run mode fields
+    planner_prompt: str | None = None
+    evaluator_prompt: str | None = None
+    evaluator_criteria: list[dict] | None = None
+    context_strategy: str = "hybrid"
+    max_blocks: int = 20
     extra_context: dict | None = None
     generation_settings: dict | None = None  # from GenerationSettings.to_config_dict()
     user_input: str
@@ -154,6 +160,11 @@ class ContextAssembler:
         tool_call_timeout = 30.0
         loop_timeout = 300.0
         context_mode = "packed"
+        planner_prompt = None
+        evaluator_prompt = None
+        evaluator_criteria = None
+        context_strategy = "hybrid"
+        max_blocks = 20
         if self._environment is not None:
             loading_mode = self._environment.get_tool_loading(symbiote_id)
             tool_mode = self._environment.get_tool_mode(symbiote_id)
@@ -165,6 +176,20 @@ class ContextAssembler:
             tool_call_timeout = self._environment.get_tool_call_timeout(symbiote_id)
             loop_timeout = self._environment.get_loop_timeout(symbiote_id)
             context_mode = self._environment.get_context_mode(symbiote_id)
+            # Long-run fields (via getter — only resolve for long_run mode)
+            if tool_mode == "long_run":
+                _get = getattr(self._environment, "get_long_run_config", None)
+                if _get is not None:
+                    try:
+                        lr_cfg = _get(symbiote_id)
+                        if isinstance(lr_cfg, dict):
+                            planner_prompt = lr_cfg.get("planner_prompt")
+                            evaluator_prompt = lr_cfg.get("evaluator_prompt")
+                            evaluator_criteria = lr_cfg.get("evaluator_criteria")
+                            context_strategy = lr_cfg.get("context_strategy", "hybrid")
+                            max_blocks = lr_cfg.get("max_blocks", 20)
+                    except Exception:
+                        pass  # keep defaults
 
         # On-demand mode: skip memory/knowledge injection (available as tools)
         if context_mode == "on_demand":
@@ -235,6 +260,11 @@ class ContextAssembler:
             injection_stagnation_override=stag_override,
             injection_circuit_breaker_override=cb_override,
             context_mode=context_mode,
+            planner_prompt=planner_prompt,
+            evaluator_prompt=evaluator_prompt,
+            evaluator_criteria=evaluator_criteria,
+            context_strategy=context_strategy,
+            max_blocks=max_blocks,
             extra_context=extra_context,
             user_input=user_input,
             total_tokens_estimate=total,

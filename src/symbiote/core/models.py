@@ -155,7 +155,7 @@ class EnvironmentConfig(BaseModel):
     resources: dict = Field(default_factory=dict)
     tool_tags: list[str] = Field(default_factory=list)
     tool_loading: Literal["full", "index", "semantic"] = "full"
-    tool_mode: Literal["instant", "brief", "continuous"] = "brief"
+    tool_mode: Literal["instant", "brief", "long_run", "continuous"] = "brief"
     tool_loop: bool = True  # deprecated — derived from tool_mode
     prompt_caching: bool = False
     memory_share: float = Field(default=0.40, ge=0.0, le=1.0)
@@ -164,6 +164,12 @@ class EnvironmentConfig(BaseModel):
     tool_call_timeout: float = Field(default=30.0, ge=1.0, le=300.0)
     context_mode: Literal["packed", "on_demand"] = "packed"
     loop_timeout: float = Field(default=300.0, ge=10.0, le=3600.0)
+    # Long-run mode configuration
+    planner_prompt: str | None = None
+    evaluator_prompt: str | None = None
+    evaluator_criteria: list[dict] | None = None
+    context_strategy: Literal["compaction", "reset", "hybrid"] = "hybrid"
+    max_blocks: int = Field(default=20, ge=1, le=100)
 
 
 # ── Decision ─────────────────────────────────────────────────────────────────

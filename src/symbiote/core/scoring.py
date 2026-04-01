@@ -74,6 +74,10 @@ def compute_auto_score(
     if tool_mode == "instant":
         return _score_instant(trace, has_tools)
 
+    # ── Long-run mode scoring ─────────────────────────────────────────
+    if tool_mode == "long_run":
+        return _score_long_run(trace)
+
     # ── Brief / continuous scoring ────────────────────────────────────
     # Base score by stop_reason
     reason_scores = {
@@ -137,6 +141,37 @@ def _score_instant(trace: LoopTrace, has_tools: bool) -> float:
 
     # Tool call failed
     return 0.3  # single chance, failed — significant penalty
+
+
+def _score_long_run(trace: LoopTrace) -> float:
+    """Scoring logic specific to long-run mode.
+
+    Long-run tasks are projects — many iterations are expected and normal.
+    The signal that matters is completion rate (blocks done / total) and
+    block failure rate, NOT iteration count.
+
+    stop_reason mapping:
+    - end_turn: all blocks completed = 1.0
+    - block_failure: partial completion, score by ratio
+    - stagnation/circuit_breaker: underlying tool issues = low score
+    """
+    reason_scores = {
+        "end_turn": 1.0,
+        "block_failure": 0.6,  # partial completion is still valuable
+        "stagnation": 0.2,
+        "circuit_breaker": 0.1,
+        "max_iterations": 0.3,  # may have completed many blocks
+        "timeout": 0.3,
+    }
+    base = reason_scores.get(trace.stop_reason or "end_turn", 0.5)
+
+    # Penalize by block failure rate (from steps where tool_id starts with "block:")
+    block_steps = [s for s in trace.steps if s.tool_id.startswith("block:")]
+    if block_steps:
+        success_rate = sum(1 for s in block_steps if s.success) / len(block_steps)
+        base *= (0.4 + 0.6 * success_rate)  # 40% floor + 60% from success
+
+    return round(max(0.0, min(1.0, base)), 2)
 
 
 def compute_final_score(
