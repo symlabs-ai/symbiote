@@ -174,112 +174,399 @@ O sistema trabalha com zero dados e melhora conforme coleta. Tiers de ativacao g
 
 ---
 
-## Trabalho Futuro
+## Taxonomia de Modos de Execucao (v0.4.0+)
 
-> Insights extraidos do artigo "Effective Harnesses for Long-Running Agents" (Anthropic, 2025)
-> e de gaps identificados durante a implementacao.
->
-> O artigo da Anthropic descreve um harness para coding agents especificamente.
-> O Symbiote e um kernel agnostico de dominio — as generalizacoes abaixo abstraem
-> os padroes do artigo para aplicabilidade em qualquer host.
+> Evolucao do `tool_mode` original de 3 para 4 modos, refletindo
+> a real diversidade de tarefas que agentes LLM enfrentam.
+> Decisao tomada em 2026-04-01 apos analise de literatura.
 
-### F-01: Orientacao automatica na primeira mensagem da sessao
+### A distinção fundamental
 
-**Origem:** Artigo Anthropic — "initializer agent" vs "coding agent" com prompts diferentes.
+```
+tool_mode: Literal["instant", "brief", "long_run", "continuous"]
+```
 
-**Generalizacao:** A primeira mensagem de uma sessao deveria receber contexto extra automaticamente. Hoje o `ContextAssembler` monta o mesmo contexto para toda mensagem. Um `is_session_start: bool` no AssembledContext permitiria injetar um bloco de orientacao: ultimas N sessoes resumidas (via SessionRecallPort), memorias procedurais relevantes, e instrucao de "antes de agir, entenda o estado atual".
+| Mode | Natureza | Tem fim? | Motivador | Duração | Exemplo |
+|---|---|---|---|---|---|
+| **Instant** | Pergunta → resposta | Sim, imediato | Pergunta | Segundos | "Capital de Buenos Aires?" |
+| **Brief** | Tarefa composta | Sim, minutos | Tarefa | Minutos | "Liste clientes + email + WhatsApp" |
+| **Long-run** | Projeto bounded | Sim, horas | **Objetivo** | Horas | "Construa um PDV completo" |
+| **Continuous** | Agente always-on | **Nao** | **Proposito** | Indefinido | Assistente pessoal proativo |
 
-**Impacto:** Alto. Resolve o problema generico de "agente comeca do zero" sem o host ter que microgerenciar o prompt da primeira mensagem.
+**Long-run vs Continuous — a distincao filosofica:**
+- Long-run tem **objetivo** — "construa X". Termina quando X esta pronto.
+- Continuous tem **proposito** — "mantenha a redacao produtiva". Nunca termina.
+  O continuous **gera seus proprios objetivos** derivados do proposito conforme
+  o contexto muda. Quando ocioso, nao e erro — e oportunidade.
 
-**Esforco:** Baixo. Flag booleano + condicional no ContextAssembler.
+---
 
-### F-02: Handoff note estruturado (separado da reflection)
+## Implementacao dos Modos (estado atual)
 
-**Origem:** Artigo Anthropic — "progress file" atualizado ao final de cada sessao.
+### Instant Mode (v0.3.1) — Implementado
 
-**Generalizacao:** Hoje o `close_session()` faz reflection (aprendizado) + scoring. Falta um artefato de **continuidade** — um resumo curto focado em: "o que estava fazendo, onde parou, o que a proxima sessao deve fazer primeiro". Isso e diferente da reflection, que e sobre aprender padroes.
+Fast-path: single LLM call, scoring mode-aware, context seletivo (memory_share
+capped 0.25, procedurais primeiro), evolucao per-mode, tuner filtering.
 
-**Implementacao proposta:**
-- Nova `MemoryCategory.handoff` no enum existente
-- Geracao automatica no `close_session()`, apos reflection, antes de fechar
-- Template: `"Sessao encerrada. Estado: {status}. Ultimo trabalho: {summary}. Proximo passo sugerido: {next_step}."`
-- O SessionRecallPort prioriza memorias handoff no inicio da proxima sessao (complementa F-01)
+### Brief Mode (v0.3.2) — Implementado
 
-**Impacto:** Alto. Bridging entre sessoes e o problema central do artigo.
+Loop com trace sync completo, scoring calibrado para multi-step (<=3=1.0,
+<=7=0.85, <=10=0.7), tool instructions com continuidade multi-step.
 
-**Esforco:** Medio. Nova categoria + geracao no close_session + priorizacao no recall.
+### Long-run Mode — Design
 
-### F-03: Self-verification gate antes do end_turn
+> Fontes que embasam este design:
+> - Anthropic "Effective Harnesses for Long-Running Agents" (2025)
+> - Anthropic "Harness Design for Long-Running Application Development" (2026)
+> - Meta-Harness paper (Stanford/CMU, 2026) + Berman commentary
+> - Hermes Agent analysis (`kb/2026-03-30_hermes-recommendations-for-symbiote.md`)
+> - Ralph Loop research (`kb/ralph-loop-analysis.md`)
+> - Claude Code source analysis (`~/dev/research/claude-code`)
 
-**Origem:** Artigo Anthropic — "Claude marks features as done without proper testing".
+#### Filosofia
 
-**Generalizacao:** Antes de aceitar `end_turn`, o LoopController poderia injetar uma mensagem de verificacao: "antes de encerrar, verifique se o resultado esta correto usando as ferramentas disponiveis". Nao e human-in-the-loop (que ja temos), e **self-audit pelo proprio agente**.
+O long-run e um **projeto** — tem inicio, planejamento, execucao em blocos,
+verificacao em marcos, e entrega. Pode spanar multiplas sessoes ou um unico
+context window longo. Diferente do brief (que acumula contexto e compacta),
+o long-run pode optar por **context reset** entre blocos de trabalho.
 
-**Implementacao proposta:**
-- Novo `injection_verification` como 4o texto evolvable no HarnessEvolver
-- Mensagem default: "Antes de encerrar, verifique se a tarefa foi concluida corretamente."
-- Ativacao condicional: so injeta se a sessao usou tools (evita overhead em respostas diretas)
-- O HarnessEvolver pode evoluir este texto como os outros 3
+A literatura converge em 3 pilares:
 
-**Impacto:** Alto. Diferente de tudo que temos. Reduz false positives (agente diz que fez, nao fez).
+1. **Decompor antes de executar** — Planner expande prompt em spec/plano
+2. **Verificar com agente separado** — Evaluator testa o que o Generator fez
+3. **Estado persiste em artefatos, nao em mensagens** — handoff estruturado
 
-**Esforco:** Medio. Nova injection no LoopController + texto evolvable.
+#### Arquitetura: 3 fases modulares
 
-### F-04: Session phases explicitas
+```
+┌──────────────────────────────────────────────────────────────┐
+│                      LONG-RUN MODE                           │
+│                                                              │
+│  ┌──────────┐    ┌──────────────┐    ┌──────────────┐       │
+│  │ PLANNER  │───>│  GENERATOR   │───>│  EVALUATOR   │       │
+│  │          │    │              │    │              │       │
+│  │ Expande  │    │ Executa em   │    │ Testa via    │       │
+│  │ prompt   │    │ blocos de    │    │ tools e      │       │
+│  │ em spec  │    │ trabalho     │    │ criterios    │       │
+│  │ completo │    │ (sprints)    │    │ do host      │       │
+│  └──────────┘    └──────┬───────┘    └──────┬───────┘       │
+│                         │                    │               │
+│                         │    feedback        │               │
+│                         │<───────────────────┘               │
+│                         │                                    │
+│  Artefatos persistidos: │                                    │
+│  ├─ plan.json (spec/plano do planner)                        │
+│  ├─ progress.json (blocos feitos/pendentes)                  │
+│  ├─ evaluation.json (feedback do evaluator)                  │
+│  └─ handoff.json (estado para proxima sessao)                │
+│                                                              │
+│  Context strategy: compaction OU reset (configuravel)        │
+│  Stop condition: completion_criteria OU max_iterations       │
+│  Human checkpoints: a cada N blocos OU antes de alto risco   │
+└──────────────────────────────────────────────────────────────┘
+```
 
-**Origem:** Artigo Anthropic — fluxo implicito de orientation -> work -> verification -> handoff.
+Cada fase e **opcional** — o host ativa o que precisa:
+- Sem planner: o host fornece o spec diretamente
+- Sem evaluator: o generator se auto-avalia (menos robusto, mais barato)
+- Com evaluator: GAN-inspired — quem faz nao julga, quem julga nao faz
 
-**Generalizacao:** O kernel poderia ter um `SessionPhase` (orientation, working, verification, handoff) que o ContextAssembler usa para ajustar o que injeta. Na fase orientation, mais memoria e recall. Na fase handoff, instrucao de continuidade. Hoje a sessao e um fluxo livre.
+#### L-01: Planner Phase
 
-**Impacto:** Medio. Melhora qualidade de sessoes longas.
+**O que faz:** Recebe prompt curto (1-4 frases) e expande em spec completo com:
+- Lista de blocos de trabalho (features/sprints)
+- Criterios de sucesso por bloco
+- Dependencias entre blocos
+- Estimativa de complexidade
 
-**Esforco:** Medio-alto. Novo conceito no kernel, deteccao automatica de fase, ajuste no ContextAssembler.
+**Inspiracao:** Artigo Anthropic v2 — "I wanted to automate [the spec] step,
+so I created a planner agent that took a simple 1-4 sentence prompt and
+expanded it into a full product spec."
 
-**Dependencia:** F-01 e F-02 cobrem 80% do valor sem a complexidade de phases explicitas. Avaliar se phases sao necessarias apos F-01/F-02 estarem em producao.
+**Implementacao:**
+- Prompt de planner customizavel pelo host (nao hardcoded para coding)
+- Output persistido como artefato JSON (plan.json) — source of truth entre sessoes
+- O planner roda como chamada LLM separada (sem tool loop) antes do generator iniciar
+- Host pode fornecer criterios de avaliacao que o planner incorpora ao spec
 
-### F-05: Scope control evolvable por sessao
+**Exemplos por dominio:**
+- Coding: "Construa um PDV" → spec com 16 features em 10 sprints
+- Jornalismo: "Cobertura completa do evento" → spec com apuracao, fontes, redacao, revisao
+- Pesquisa: "Estado da arte em memorias de agentes" → spec com survey, taxonomia, analise, formatacao
 
-**Origem:** Artigo Anthropic — "work on only one feature at a time".
+#### L-02: Generator com blocos de trabalho
 
-**Generalizacao:** Um mecanismo para limitar o escopo por sessao. Poderia ser um `scope_instruction` no EnvironmentConfig que o ContextAssembler injeta, e que o HarnessEvolver aprende a calibrar com base no scoring (sessoes com escopo amplo demais tendem a ter scores piores).
+**O que faz:** Executa o plan bloco a bloco. Cada bloco e uma unidade de trabalho
+que pode ser verificada independentemente.
 
-**Impacto:** Medio. O `tool_instructions` ja pode fazer isso manualmente. A diferenca e que seria automaticamente evolvable.
+**Antes de cada bloco — Sprint Contract:**
+Generator e evaluator negociam o que "done" significa antes de comecar.
+O generator propoe o que vai fazer e como verificar; o evaluator (ou o planner)
+valida que os criterios sao adequados.
 
-**Esforco:** Baixo. Novo campo no EnvironmentConfig + texto no ContextAssembler.
+**Context strategy (configuravel por symbiote):**
 
-### F-06: Heuristica "declared victory too early" no scoring
+| Estrategia | Quando usar | Como funciona |
+|---|---|---|
+| **Compaction** | Modelos fortes (Opus 4.6+) | Compaction agressiva (70% threshold), manter ultimas 10 mensagens |
+| **Context reset** | Modelos com "context anxiety" | Limpar mensagens entre blocos, re-ler plan.json + progress.json |
+| **Hybrid** | Default | Compaction dentro do bloco, reset entre blocos |
 
-**Origem:** Artigo Anthropic — agente ve progresso e declara que terminou.
+O artigo Anthropic v2 confirma: "Opus 4.6 largely removed [context anxiety],
+so I was able to drop context resets entirely. The agents were run as one
+continuous session with automatic compaction." Mas para outros modelos,
+context reset continua essencial.
 
-**Generalizacao:** O `compute_auto_score()` poderia penalizar sessoes com `stop_reason=end_turn` + muito poucas iteracoes quando o contexto sugere que havia mais trabalho. Dificil de implementar de forma generica sem conhecer o dominio.
+**Progresso persistido:** Apos cada bloco, atualizar progress.json com:
+- Blocos completados (com timestamp e metricas)
+- Bloco atual (em andamento ou proximo)
+- Decisoes tecnicas tomadas
+- Problemas encontrados
 
-**Implementacao proposta:** Sinal simples — se o host reportou feedback negativo (score < 0.3) E o auto_score era alto (> 0.7), registrar como "false positive" na memoria procedural. O evolver pode aprender com esses casos.
+#### L-03: Evaluator Phase (GAN-inspired)
 
-**Impacto:** Baixo-medio. Depende de feedback do host para ser util.
+**O que faz:** Avalia o trabalho do generator com prompt/modelo separado.
+LLMs sao pessimos em auto-avaliacao — "confidently praise the work, even when
+quality is obviously mediocre" (Anthropic). Separar quem faz de quem julga e
+muito mais tratavel do que fazer o generator ser autocritico.
 
-**Esforco:** Baixo. Condicional no `report_feedback()`.
+**Inspiracao direta:** "Tuning a standalone evaluator to be skeptical turns
+out to be far more tractable than making a generator critical of its own work."
 
-### F-07: JSON estruturado para memorias procedurais
+**Implementacao:**
+- Prompt de evaluator customizavel pelo host com **criterios graduaveis**
+- Cada criterio tem nome, descricao, peso, e threshold minimo
+- O evaluator roda apos cada bloco (ou apos N blocos, configuravel)
+- Se algum criterio abaixo do threshold → bloco reprovado → feedback para generator
+- O evaluator pode usar tools para verificar (ex: Playwright para testar UI)
+- Opcionalmente usa LLM diferente (evaluator_llm separado, como o evolver_llm)
 
-**Origem:** Artigo Anthropic — "JSON because the model is less likely to overwrite JSON".
+**Criterios graduaveis — framework generico:**
+O host define os criterios relevantes para seu dominio:
+- Coding: completude funcional, qualidade de design, testes, bugs
+- Jornalismo: precisao factual, fontes verificadas, qualidade editorial, SEO
+- Pesquisa: rigor metodologico, cobertura da literatura, originalidade, formatacao
+- Atendimento: resolucao do problema, satisfacao, tempo de resolucao
 
-**Generalizacao:** Memorias procedurais e handoff poderiam ser JSON estruturado em vez de texto livre, reduzindo corrupcao pelo LLM em sessoes on-demand.
+**Quando o evaluator NAO vale a pena:**
+"The evaluator is not a fixed yes-or-no decision. It is worth the cost when
+the task sits beyond what the current model does reliably solo." (Anthropic)
+Para tarefas dentro da capability do modelo, o evaluator e overhead.
+O host decide quando ativar.
 
-**Impacto:** Baixo. Guideline para hosts, nao necessariamente mudanca no kernel.
+#### L-04: Handoff entre sessoes
 
+**O que faz:** Quando uma sessao long-run precisa ser interrompida (context
+window cheio, timeout, checkpoint humano), gera artefato de handoff para a
+proxima sessao retomar.
+
+**Handoff artifact (handoff.json):**
+```json
+{
+  "session_id": "...",
+  "plan_ref": "plan.json",
+  "progress_ref": "progress.json",
+  "current_block": 5,
+  "total_blocks": 12,
+  "last_action": "Completou implementacao do modulo de pagamentos",
+  "next_action": "Iniciar modulo de relatorios (bloco 6)",
+  "open_issues": ["Bug no calculo de impostos nao resolvido"],
+  "decisions_made": ["Escolheu PostgreSQL por suportar JSON nativo"],
+  "context_summary": "..."
+}
+```
+
+**Na proxima sessao (orientation):**
+- ContextAssembler detecta `is_session_start` + handoff disponivel
+- Injeta bloco de orientacao: handoff + ultimas N sessoes resumidas
+- Instrucao: "Voce esta retomando um projeto. Leia o estado antes de agir."
+
+#### L-05: Scoring e observabilidade
+
+**Scoring long-run:**
+- Nao penalizar por iteracoes (muitas sao esperadas)
+- Sinal principal: blocos completados / blocos totais (completion rate)
+- Sinal secundario: evaluator scores por bloco
+- Sinal terciario: feedback do host
+
+**Observabilidade:**
+- LoopTrace com tool_mode="long_run"
+- Metricas por bloco: iteracoes, tool calls, elapsed_ms, evaluator score
+- Custo acumulado (via LoopTrace.total_elapsed_ms + token counts)
+- Progress tracking persistido (progress.json)
+
+#### L-06: Configuracao por symbiote
+
+Novos campos no EnvironmentConfig para long-run:
+```python
+# Planner
+planner_prompt: str | None = None          # Prompt do planner (None = skip)
+planner_llm: str | None = None             # LLM do planner (None = usar principal)
+
+# Evaluator
+evaluator_prompt: str | None = None        # Prompt do evaluator (None = skip)
+evaluator_llm: str | None = None           # LLM do evaluator (None = usar principal)
+evaluator_criteria: list[dict] | None = None  # Criterios graduaveis
+evaluator_frequency: int = 1               # Avaliar a cada N blocos
+
+# Context strategy
+context_strategy: Literal["compaction", "reset", "hybrid"] = "hybrid"
+
+# Human checkpoints
+checkpoint_frequency: int = 0              # 0 = sem checkpoints automaticos
+checkpoint_before_high_risk: bool = True    # Pausar antes de tools high-risk
+
+# Completion
+completion_criteria: str | None = None     # Completion promise (ex: "TESTS_PASSED")
+max_blocks: int = 20                       # Max blocos de trabalho
+```
+
+#### Priorizacao de implementacao
+
+| # | Item | Esforco | Impacto | Dependencia |
+|---|---|---|---|---|
+| L-02 | Generator com blocos + context strategy | Alto | Alto | Nenhuma |
+| L-04 | Handoff entre sessoes | Medio | Alto | Nenhuma |
+| L-01 | Planner phase | Medio | Alto | Nenhuma |
+| L-03 | Evaluator phase | Alto | Alto | L-02 |
+| L-05 | Scoring long-run | Baixo | Medio | L-02 |
+| L-06 | Config por symbiote | Medio | Medio | L-01, L-03 |
+
+---
+
+### Continuous Mode (always-on) — Conceito
+
+> Este modo e fundamentalmente diferente dos demais. Nao e uma tarefa
+> com fim — e uma **entidade persistente** com proposito.
+
+#### A distincao proposito vs objetivo
+
+Long-run recebe **objetivos**: "construa X", "pesquise Y". Termina quando cumpre.
+
+Continuous tem **proposito**: "mantenha a redacao produtiva", "apoie a pesquisa
+do usuario", "monitore a saude do sistema". O proposito nao se cumpre — e uma
+direcao permanente. O agente **gera seus proprios objetivos** derivados do
+proposito conforme o contexto muda.
+
+Quando ocioso, o agente nao para. Ele:
+- Identifica oportunidades (matérias em draft há muito tempo, métricas anomalas)
+- Gera objetivos ("sugerir publicacao da materia X", "alertar sobre metrica Y")
+- Prioriza ("X e urgente, Y pode esperar")
+- Age proativamente
+
+#### Arquitetura conceitual
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    CONTINUOUS MODE                            │
+│                                                              │
+│  ┌──────────────────────────────────────────────────┐       │
+│  │ PURPOSE ENGINE                                    │       │
+│  │                                                    │       │
+│  │ Proposito: "mantenha a redacao produtiva"          │       │
+│  │                                                    │       │
+│  │ ┌─────────────┐  ┌─────────────┐  ┌────────────┐ │       │
+│  │ │ Goal        │  │ Priority    │  │ Initiative │ │       │
+│  │ │ Generator   │  │ Queue       │  │ Engine     │ │       │
+│  │ │             │  │             │  │            │ │       │
+│  │ │ Deriva      │  │ Ordena por  │  │ Decide o   │ │       │
+│  │ │ objetivos   │  │ urgencia +  │  │ que fazer  │ │       │
+│  │ │ do contexto │  │ impacto     │  │ quando     │ │       │
+│  │ │             │  │             │  │ ocioso     │ │       │
+│  │ └─────────────┘  └─────────────┘  └────────────┘ │       │
+│  └──────────────────────────────────────────────────┘       │
+│                         │                                    │
+│  Event sources:         │  Execution:                        │
+│  ├─ User messages       │  ├─ Instant (queries simples)      │
+│  ├─ Scheduled tasks     │  ├─ Brief (tarefas compostas)      │
+│  ├─ Webhooks/triggers   │  └─ Long-run (projetos derivados)  │
+│  ├─ Monitoring alerts   │                                    │
+│  └─ Idle detection      │  O continuous ORQUESTRA os demais  │
+│                         │  modos conforme a tarefa exige     │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Insight arquitetural:** O continuous nao e um 4o modo de loop — e um
+**orquestrador** que usa instant, brief e long-run conforme a tarefa exige.
+Uma pergunta simples usa instant. Uma tarefa composta usa brief. Um projeto
+derivado usa long-run. O continuous decide qual modo aplicar.
+
+#### Componentes necessarios (futuro)
+
+| Componente | O que faz | Inspiracao |
+|---|---|---|
+| **Purpose Engine** | Mantem o proposito e gera objetivos | Conceito proprio — nao encontrado na literatura |
+| **Goal Generator** | Deriva objetivos concretos do proposito + contexto | Similar a planning mas continuo |
+| **Priority Queue** | Ordena objetivos por urgencia e impacto | Hermes scheduler + monitoring |
+| **Initiative Engine** | Decide o que fazer quando ocioso | Auto-Dream do Claude Code (consolidacao proativa) |
+| **Event Loop** | Reage a triggers externos e internos | Cron scheduler do Claude Code |
+| **Mode Selector** | Escolhe instant/brief/long_run por tarefa | Novo — baseado em complexidade estimada |
+
+#### Quando implementar
+
+O continuous depende de:
+1. Long-run funcional (para delegar projetos)
+2. Brief e instant estabilizados (para delegar tarefas)
+3. Scheduling/cron no kernel (base do event loop)
+4. Memory consolidation madura (para manter coerencia ao longo do tempo)
+
+E o modo mais ambicioso e diferenciador do Symbiote — um kernel que sustenta
+**entidades que vivem**. Mas precisa dos modos inferiores estabilizados primeiro.
+
+---
+
+## Itens de suporte (cross-mode)
+
+Estes itens beneficiam multiplos modos e podem ser implementados
+independentemente:
+
+### S-01: Orientacao automatica na 1a mensagem
+
+Qualquer modo se beneficia de contexto extra na primeira mensagem da sessao.
+O `ContextAssembler` detecta `is_session_start` e injeta: ultimas N sessoes
+resumidas (via SessionRecallPort), memorias procedurais relevantes, handoff
+(se existir).
+
+**Impacto:** Alto para long-run e continuous. Medio para brief.
 **Esforco:** Baixo.
 
-### Priorizacao sugerida
+### S-02: Handoff note no close_session
 
-| # | Item | Esforco | Impacto | Quando |
-|---|---|---|---|---|
-| F-01 | Orientacao automatica 1a msg | Baixo | Alto | Proximo sprint |
-| F-02 | Handoff note | Medio | Alto | Proximo sprint |
-| F-03 | Self-verification gate | Medio | Alto | Proximo sprint |
-| F-05 | Scope control evolvable | Baixo | Medio | Proximo sprint |
-| F-06 | False positive detection | Baixo | Medio | Segundo sprint |
-| F-04 | Session phases | Medio-alto | Medio | Avaliar apos F-01/F-02 |
-| F-07 | JSON para memorias | Baixo | Baixo | Guideline |
+Nova `MemoryCategory.handoff` — resumo de continuidade gerado no `close_session()`,
+separado da reflection. Foco em: o que estava fazendo, onde parou, proximo passo.
+
+**Impacto:** Alto para long-run (multi-sessao). Medio para brief.
+**Esforco:** Medio.
+
+### S-03: Evaluator injection (GAN-inspired)
+
+Framework generico para injetar uma fase de avaliacao com prompt/modelo separado.
+Nao e self-verification (o mesmo agente se avalia) — e **avaliacao cruzada**
+(agente diferente avalia). Mais robusto porque "tuning a standalone evaluator
+to be skeptical is far more tractable than making a generator critical of its
+own work." (Anthropic)
+
+**Impacto:** Alto para long-run. Medio para brief (tarefas complexas).
+**Esforco:** Alto.
+
+### S-04: Criterios graduaveis definidos pelo host
+
+Framework para o host definir criterios de avaliacao com nome, descricao,
+peso e threshold. Transforma julgamentos subjetivos em gradacoes concretas.
+Usado pelo evaluator (S-03) e pelo scoring.
+
+**Impacto:** Alto para long-run. Medio para brief.
+**Esforco:** Medio.
+
+### S-05: Cost awareness no kernel
+
+Para long-run, o custo total pode ser significativo ($125-200 por sessao
+segundo benchmarks Anthropic). O kernel deve ter awareness de budget:
+campo `max_cost_usd` no EnvironmentConfig, tracking via LoopTrace, pausa
+quando budget se aproxima.
+
+**Impacto:** Alto para long-run. Baixo para instant/brief.
+**Esforco:** Medio (depende de token counting no LoopTrace).
 
 ---
 
@@ -287,8 +574,8 @@ O sistema trabalha com zero dados e melhora conforme coleta. Tiers de ativacao g
 
 | Item | Razao |
 |---|---|
-| **B-36: Cost tracking** | Pertence ao SymGateway, nao ao kernel. O gateway ja mede tokens in/out |
-| **B-41: Kimi K2 context limit** | Problema do provider (Groq), nao do kernel. Monitoramento |
+| **B-36: Cost tracking detalhado** | Pertence ao SymGateway. Kernel tem awareness, gateway mede |
+| **B-41: Kimi K2 context limit** | Problema do provider (Groq), nao do kernel |
 | **B-42: Tool descriptions** | Cross-repo (YouNews). Melhoria no OpenAPI do host |
 | **B-44: Narracao intermediaria** | Cross-repo (YouNews). Validacao pos-deploy |
 | **B-45: Test harness E2E** | Requer YouNews + SymGateway rodando. Baixa prioridade |
@@ -309,8 +596,16 @@ O sistema trabalha com zero dados e melhora conforme coleta. Tiers de ativacao g
 
 5. **Propagacao do LoopTrace:** Opcao 2 escolhida (kernel._last_trace stateful) por ser simples e consistente com o design existente do kernel.
 
+6. **4 modos em vez de 3:** O `tool_mode` original (instant/brief/continuous) foi expandido para 4 modos (instant/brief/long_run/continuous) apos perceber que "long-run" (projeto com fim) e "continuous" (agente always-on) sao conceitos fundamentalmente diferentes. Long-run tem objetivo, continuous tem proposito.
+
+7. **Claude Code e mais simples que os artigos:** Analise do source revelou que o produto real nao implementa planner/evaluator automaticos — os artigos descrevem experimentos de pesquisa. Decisao: implementar o sofisticado, nao copiar o simples.
+
 ### Inspiracoes externas
 
 - **Meta-Harness paper (Stanford/CMU, 2026):** Filesystem-based execution traces, self-evolving harness, feedback signals automaticos. Base conceitual para toda a implementacao.
-- **Berman commentary:** "Bitter lesson" aplicada a harnesses — pare de hardcodar, deixe o sistema aprender. Motivou o design de evolucao automatica.
-- **Anthropic "Effective Harnesses" (2025):** Padroes para agentes long-running — orientacao, progresso incremental, verificacao, handoff. Inspirou os itens F-01 a F-07 do trabalho futuro.
+- **Berman commentary:** "Bitter lesson" aplicada a harnesses — pare de hardcodar, deixe o sistema aprender.
+- **Anthropic "Effective Harnesses" (2025):** Context management, progress files, incremental progress, handoff.
+- **Anthropic "Harness Design for Long-Running Apps" (2026):** Planner/Generator/Evaluator, sprint contracts, criterios graduaveis, GAN-inspired separation, context reset vs compaction.
+- **Ralph Loop research:** Fresh context philosophy, completion promise, context rot como inimigo. Implementacao descartada (bash loop), filosofia absorvida.
+- **Hermes Agent:** Session recall, procedural memory, compressao de contexto preservando decisoes.
+- **Claude Code source:** Auto-dream (consolidacao proativa), cron scheduler (scheduled tasks), coordinator mode (orquestracao), compaction simples (90% threshold, keep 10 recent). Produto prioriza simplicidade; nos priorizamos sofisticacao.
