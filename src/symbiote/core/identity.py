@@ -105,9 +105,44 @@ class IdentityManager:
 
         return self.get(symbiote_id)  # type: ignore[return-value]
 
+    def update(
+        self,
+        symbiote_id: str,
+        name: str | None = None,
+        role: str | None = None,
+        persona: dict | None = None,
+    ) -> Symbiote:
+        """Update name/role and optionally persona. Raises EntityNotFoundError if not found."""
+        existing = self.get(symbiote_id)
+        if existing is None:
+            raise EntityNotFoundError("Symbiote", symbiote_id)
+        new_name = name if name is not None else existing.name
+        new_role = role if role is not None else existing.role
+        now = _utcnow()
+        self._storage.execute(
+            "UPDATE symbiotes SET name=?, role=?, updated_at=? WHERE id=?",
+            (new_name, new_role, now.isoformat(), symbiote_id),
+        )
+        if persona is not None:
+            return self.update_persona(symbiote_id, persona)
+        return self.get(symbiote_id)  # type: ignore[return-value]
+
+    def delete(self, symbiote_id: str) -> None:
+        """Soft-delete a symbiote (status='deleted'). Raises EntityNotFoundError if not found."""
+        existing = self.get(symbiote_id)
+        if existing is None:
+            raise EntityNotFoundError("Symbiote", symbiote_id)
+        now = _utcnow()
+        self._storage.execute(
+            "UPDATE symbiotes SET status='deleted', updated_at=? WHERE id=?",
+            (now.isoformat(), symbiote_id),
+        )
+
     def list_all(self) -> list[Symbiote]:
-        """Return all symbiotes."""
-        rows = self._storage.fetch_all("SELECT * FROM symbiotes")
+        """Return all non-deleted symbiotes."""
+        rows = self._storage.fetch_all(
+            "SELECT * FROM symbiotes WHERE status != 'deleted'"
+        )
         return [self._row_to_symbiote(r) for r in rows]
 
     # ── private helpers ────────────────────────────────────────────────

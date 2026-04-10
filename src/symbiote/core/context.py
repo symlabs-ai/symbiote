@@ -168,6 +168,10 @@ class ContextAssembler:
         if self._environment is not None:
             loading_mode = self._environment.get_tool_loading(symbiote_id)
             tool_mode = self._environment.get_tool_mode(symbiote_id)
+            if tool_mode == "auto":
+                tool_mode = self._resolve_auto_mode(
+                    symbiote_id, user_input,
+                )
             loop_enabled = tool_mode != "instant"
             prompt_caching = self._environment.get_prompt_caching(symbiote_id)
             memory_share = self._environment.get_memory_share(symbiote_id)
@@ -282,6 +286,38 @@ class ContextAssembler:
         )
 
     # ── internal helpers ──────────────────────────────────────────────────
+
+    def _resolve_auto_mode(
+        self,
+        symbiote_id: str,
+        user_input: str,
+    ) -> str:
+        """Resolve ``auto`` tool_mode to a concrete mode based on heuristics.
+
+        Rules (evaluated in order):
+        1. If long-run config exists (planner_prompt set) → ``long_run``
+        2. If no tools are enabled for the symbiote → ``instant``
+        3. If user input is short (≤80 chars, single line) → ``brief``
+        4. Default → ``brief``
+        """
+        # Check if long-run planner is configured
+        if self._environment is not None:
+            _get = getattr(self._environment, "get_long_run_config", None)
+            if _get is not None:
+                try:
+                    lr_cfg = _get(symbiote_id)
+                    if isinstance(lr_cfg, dict) and lr_cfg.get("planner_prompt"):
+                        return "long_run"
+                except Exception:
+                    pass
+
+            # No tools enabled → instant (no loop needed)
+            tools = self._environment.list_tools(symbiote_id)
+            if not tools:
+                return "instant"
+
+        # Default
+        return "brief"
 
     def _build_tool_dicts(
         self,

@@ -11,7 +11,7 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, HTTPException, Query
 
 # ── FastAPI app ───────────────────────────────────────────────────────────
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 from starlette.requests import Request
 
@@ -115,11 +115,18 @@ class CreateSymbioteRequest(BaseModel):
     persona_json: dict | None = None
 
 
+class UpdateSymbioteRequest(BaseModel):
+    name: str | None = None
+    role: str | None = None
+    persona_json: dict | None = None
+
+
 class SymbioteResponse(BaseModel):
     id: str
     name: str
     role: str
     status: str
+    persona_json: dict | None = None
 
 
 class CreateSessionRequest(BaseModel):
@@ -213,6 +220,7 @@ class ToolTagsRequest(BaseModel):
 class ConfigRequest(BaseModel):
     """Full environment configuration for a symbiote."""
 
+    tools: list[str] | None = None  # explicit tool allowlist (PolicyGate)
     tool_mode: str | None = None  # "instant" | "brief" | "long_run" | "continuous"
     tool_loading: str | None = None  # "full" | "index" | "semantic"
     tool_tags: list[str] | None = None
@@ -234,6 +242,7 @@ class ConfigRequest(BaseModel):
 class ConfigResponse(BaseModel):
     """Current environment configuration."""
 
+    tools: list[str] = []
     tool_mode: str = "brief"
     tool_loading: str = "full"
     tool_tags: list[str] = []
@@ -412,6 +421,7 @@ def create_symbiote(
         name=sym.name,
         role=sym.role,
         status=sym.status,
+        persona_json=sym.persona_json,
     )
 
 
@@ -431,7 +441,50 @@ def get_symbiote(
         name=sym.name,
         role=sym.role,
         status=sym.status,
+        persona_json=sym.persona_json,
     )
+
+
+@app.put("/symbiotes/{symbiote_id}", response_model=SymbioteResponse)
+def update_symbiote(
+    symbiote_id: str,
+    body: UpdateSymbioteRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    identity: Annotated[IdentityManager, Depends(get_identity_manager)],
+) -> SymbioteResponse:
+    sym = identity.get(symbiote_id)
+    if sym is None:
+        raise HTTPException(status_code=404, detail="Symbiote not found")
+    if sym.owner_id and sym.owner_id != auth.tenant_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    sym = identity.update(
+        symbiote_id,
+        name=body.name,
+        role=body.role,
+        persona=body.persona_json,
+    )
+    return SymbioteResponse(
+        id=sym.id,
+        name=sym.name,
+        role=sym.role,
+        status=sym.status,
+        persona_json=sym.persona_json,
+    )
+
+
+@app.delete("/symbiotes/{symbiote_id}")
+def delete_symbiote(
+    symbiote_id: str,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    identity: Annotated[IdentityManager, Depends(get_identity_manager)],
+) -> Response:
+    sym = identity.get(symbiote_id)
+    if sym is None:
+        raise HTTPException(status_code=404, detail="Symbiote not found")
+    if sym.owner_id and sym.owner_id != auth.tenant_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    identity.delete(symbiote_id)
+    return Response(status_code=204)
 
 
 # ── Session endpoints ────────────────────────────────────────────────────
@@ -914,7 +967,7 @@ def set_config(
     # Build kwargs from non-None fields
     kwargs: dict[str, Any] = {}
     for field_name in (
-        "tool_mode", "tool_loading", "tool_tags", "max_tool_iterations",
+        "tools", "tool_mode", "tool_loading", "tool_tags", "max_tool_iterations",
         "tool_call_timeout", "loop_timeout", "memory_share", "knowledge_share",
         "context_mode", "prompt_caching",
     ):
@@ -964,6 +1017,7 @@ def _build_config_response(env: EnvironmentManager, symbiote_id: str) -> ConfigR
 
     lr_cfg = env.get_long_run_config(symbiote_id)
     return ConfigResponse(
+        tools=cfg.tools,
         tool_mode=cfg.tool_mode,
         tool_loading=cfg.tool_loading,
         tool_tags=cfg.tool_tags,
@@ -1123,7 +1177,7 @@ def api_list_symbiotes(
     """List all symbiotes (admin console)."""
     rows = adapter.fetch_all(
         "SELECT id, name, role, owner_id, status, created_at, updated_at "
-        "FROM symbiotes ORDER BY created_at DESC"
+        "FROM symbiotes WHERE status != 'deleted' ORDER BY created_at DESC"
     )
     return [dict(r) for r in rows]
 
@@ -1244,7 +1298,8 @@ def dashboard_data(
 ) -> dict:
     """Aggregate data for the admin dashboard (no auth — read-only summary)."""
     symbiotes = adapter.fetch_all(
-        "SELECT id, name, role, status, created_at FROM symbiotes ORDER BY created_at DESC"
+        "SELECT id, name, role, status, created_at FROM symbiotes "
+        "WHERE status != 'deleted' ORDER BY created_at DESC"
     )
     sessions = adapter.fetch_all(
         "SELECT s.id, s.symbiote_id, s.status, s.goal, s.started_at, sym.name as symbiote_name "
@@ -1264,7 +1319,7 @@ def dashboard_data(
         "ORDER BY dt.discovered_at DESC"
     )
     stats = {
-        "symbiotes": adapter.fetch_one("SELECT COUNT(*) as c FROM symbiotes")["c"],
+        "symbiotes": adapter.fetch_one("SELECT COUNT(*) as c FROM symbiotes WHERE status != 'deleted'")["c"],
         "sessions": adapter.fetch_one("SELECT COUNT(*) as c FROM sessions")["c"],
         "sessions_active": adapter.fetch_one(
             "SELECT COUNT(*) as c FROM sessions WHERE status = 'active'"

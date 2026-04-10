@@ -219,7 +219,7 @@ class TestToolCount:
             identity, memory, knowledge, gw, env, symbiote_id, session_id,
             "publique a matéria",
         )
-        total_registered = len(_make_tools()) + 3  # +3 builtins (fs_read, fs_write, fs_list)
+        total_registered = len(_make_tools()) + 4  # +4 builtins (fs_read, fs_write, fs_list, bash) (fs_read, fs_write, fs_list)
         assert len(ctx.available_tools) == total_registered
 
     def test_full_mode_with_tags_reduces_count(
@@ -246,7 +246,7 @@ class TestToolCount:
             "publique a matéria",
         )
         # All tools + builtins + get_tool_schema meta-tool
-        total_registered = len(_make_tools()) + 3 + 1
+        total_registered = len(_make_tools()) + 4 + 1  # +4 builtins + get_tool_schema
         assert len(ctx.available_tools) == total_registered
 
     def test_semantic_mode_reduces_to_relevant_tags(
@@ -542,7 +542,7 @@ class TestFallback:
             identity, memory, knowledge, gw, env, symbiote_id, session_id,
             "hello",
         )
-        total_registered = len(_make_tools()) + 3  # +3 builtins
+        total_registered = len(_make_tools()) + 4  # +4 builtins (fs_read, fs_write, fs_list, bash)
         assert len(ctx.available_tools) == total_registered
 
     def test_semantic_with_failing_llm_falls_back(
@@ -775,3 +775,67 @@ class TestSummaryComparison:
         # Index has 1 extra tool (get_tool_schema) but much smaller prompt
         assert len(ctx_index.available_tools) == len(ctx_full.available_tools) + 1
         assert len(prompt_index) < len(prompt_full)
+
+
+# ── Auto tool_mode resolution ─────────────────────────────────────────────
+
+
+class TestAutoToolMode:
+    """Verify that tool_mode='auto' resolves to a concrete mode."""
+
+    def test_auto_resolves_to_brief_with_tools(
+        self, identity, memory, knowledge, gw, env, symbiote_id, session_id,
+    ) -> None:
+        env.configure(
+            symbiote_id=symbiote_id,
+            tool_mode="auto",
+            tools=["fs_read"],
+        )
+        ctx = _build_context(
+            identity, memory, knowledge, gw, env, symbiote_id, session_id,
+            "list my files",
+        )
+        assert ctx.tool_mode == "brief"
+
+    def test_auto_resolves_to_instant_without_tools(
+        self, identity, memory, knowledge, gw, env, symbiote_id, session_id,
+    ) -> None:
+        env.configure(
+            symbiote_id=symbiote_id,
+            tool_mode="auto",
+            tools=[],
+        )
+        ctx = _build_context(
+            identity, memory, knowledge, gw, env, symbiote_id, session_id,
+            "hello",
+        )
+        assert ctx.tool_mode == "instant"
+
+    def test_auto_resolves_to_long_run_with_planner(
+        self, identity, memory, knowledge, gw, env, symbiote_id, session_id,
+    ) -> None:
+        env.configure(
+            symbiote_id=symbiote_id,
+            tool_mode="auto",
+            tools=["fs_read"],
+            planner_prompt="Plan the editorial workflow",
+        )
+        ctx = _build_context(
+            identity, memory, knowledge, gw, env, symbiote_id, session_id,
+            "build the newsletter",
+        )
+        assert ctx.tool_mode == "long_run"
+
+    def test_explicit_mode_not_overridden(
+        self, identity, memory, knowledge, gw, env, symbiote_id, session_id,
+    ) -> None:
+        env.configure(
+            symbiote_id=symbiote_id,
+            tool_mode="continuous",
+            tools=["fs_read"],
+        )
+        ctx = _build_context(
+            identity, memory, knowledge, gw, env, symbiote_id, session_id,
+            "monitor the logs",
+        )
+        assert ctx.tool_mode == "continuous"

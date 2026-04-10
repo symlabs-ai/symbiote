@@ -95,6 +95,38 @@ _BUILTIN_DESCRIPTORS: dict[str, ToolDescriptor] = {
         },
         handler_type="builtin",
     ),
+    "bash": ToolDescriptor(
+        tool_id="bash",
+        name="Execute Shell Command",
+        description=(
+            "Execute a shell command in the workspace. "
+            "Use for tasks that don't have a dedicated tool: running scripts, "
+            "git operations, package managers, searching files, etc. "
+            "Prefer dedicated tools (fs_read, fs_write) for simple file I/O."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The shell command to execute.",
+                },
+                "timeout": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Timeout in seconds (default 30).",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Brief description of what this command does.",
+                },
+            },
+            "required": ["command"],
+        },
+        handler_type="builtin",
+        risk_level="high",
+        tags=["shell", "system"],
+    ),
 }
 
 
@@ -487,6 +519,7 @@ class ToolGateway:
         self.register_descriptor(_BUILTIN_DESCRIPTORS["fs_read"], _fs_read)
         self.register_descriptor(_BUILTIN_DESCRIPTORS["fs_write"], _fs_write)
         self.register_descriptor(_BUILTIN_DESCRIPTORS["fs_list"], _fs_list)
+        self.register_descriptor(_BUILTIN_DESCRIPTORS["bash"], _bash)
 
 
 # ── Memory / Knowledge handler factories ─────────────────────────────────────
@@ -718,3 +751,67 @@ def _fs_list(params: dict) -> list[str]:
     """List filenames in directory. Params: {"path": str, "allowed_root": str (optional)}."""
     p = _validate_path(params)
     return os.listdir(str(p))
+
+
+def _bash(params: dict) -> dict:
+    """Execute a shell command. Params: {command, timeout?, description?}."""
+    import subprocess
+
+    command = params.get("command", "")
+    if not command or not command.strip():
+        raise ValueError("command must be a non-empty string")
+
+    timeout_s = params.get("timeout", 30)
+    if not isinstance(timeout_s, int) or timeout_s < 1:
+        timeout_s = 30
+
+    cwd = params.get("_cwd") or None
+
+    interrupted = False
+    try:
+        result = subprocess.run(
+            ["sh", "-lc", command],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            cwd=cwd,
+        )
+        stdout = result.stdout
+        stderr = result.stderr
+        return_code = result.returncode
+    except subprocess.TimeoutExpired as exc:
+        interrupted = True
+        stdout = (
+            (exc.stdout or b"").decode("utf-8", errors="replace")
+            if isinstance(exc.stdout, bytes)
+            else (exc.stdout or "")
+        )
+        stderr = (
+            (exc.stderr or b"").decode("utf-8", errors="replace")
+            if isinstance(exc.stderr, bytes)
+            else (exc.stderr or "")
+        )
+        stderr += f"\nCommand exceeded timeout of {timeout_s}s"
+        return_code = -1
+
+    # Exit 0 → no return_code field (Claude Code pattern: suppress noise)
+    if interrupted:
+        rc_interp = "timeout"
+    elif return_code == 0:
+        rc_interp = None
+    else:
+        rc_interp = f"exit_code:{return_code}"
+
+    output: dict = {}
+    if stdout:
+        output["stdout"] = stdout
+    if stderr:
+        output["stderr"] = stderr
+    if interrupted:
+        output["interrupted"] = True
+    if rc_interp is not None:
+        output["return_code_interpretation"] = rc_interp
+    if not output:
+        output["stdout"] = ""
+
+    return output

@@ -51,9 +51,27 @@ body::after {
 ::-webkit-scrollbar-track { background: #0a0a0f; }
 ::-webkit-scrollbar-thumb { background: #2a2a3e; border-radius: 2px; }
 input, select, textarea { font-family: 'JetBrains Mono', monospace; }
+@keyframes toast-in { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes toast-out { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
+.toast-enter { animation: toast-in .25s ease-out; }
+.toast-exit { animation: toast-out .2s ease-in forwards; }
 </style>
 </head>
 <body class="bg-bg text-text font-mono text-[13px] leading-relaxed min-h-screen flex flex-col">
+
+<!-- ════════ TOAST CONTAINER ════════ -->
+<div id="toast-container" class="fixed top-4 right-4 z-[10000] flex flex-col gap-2 pointer-events-none"></div>
+
+<!-- ════════ CONFIRM DIALOG ════════ -->
+<div id="confirm-overlay" class="fixed inset-0 z-[10001] bg-black/60 hidden items-center justify-center">
+  <div class="bg-bg-card border border-border rounded-lg p-5 max-w-sm w-full mx-4 shadow-xl">
+    <p id="confirm-message" class="text-[12px] text-text-bright mb-4"></p>
+    <div class="flex justify-end gap-2">
+      <button id="confirm-cancel" class="px-3 py-1.5 text-[11px] text-text-dim border border-border rounded hover:border-border-bright">Cancelar</button>
+      <button id="confirm-ok" class="px-3 py-1.5 text-[11px] text-bg font-semibold bg-red rounded hover:opacity-90">Confirmar</button>
+    </div>
+  </div>
+</div>
 
 <!-- ════════ HEADER ════════ -->
 <header class="bg-bg-card border-b border-border px-6 py-3 flex items-center justify-between shrink-0">
@@ -138,7 +156,7 @@ input, select, textarea { font-family: 'JetBrains Mono', monospace; }
   <div id="tab-symbiotes" class="tab-panel hidden">
     <div class="px-6 py-4 border-b border-border bg-bg-card flex items-center justify-between">
       <span class="font-sans text-sm font-semibold text-text-bright">Symbiotes</span>
-      <button onclick="showModal('create-symbiote-modal')" class="bg-accent text-bg text-[11px] font-semibold px-3 py-1.5 rounded hover:opacity-90">+ Create</button>
+      <button onclick="openWizard()" class="bg-accent text-bg text-[11px] font-semibold px-3 py-1.5 rounded hover:opacity-90">+ Create</button>
     </div>
     <div id="symbiotes-list" class="p-6"><div class="p-10 text-center text-text-dim text-xs">Loading</div></div>
     <!-- Detail view (shown when clicking a symbiote) -->
@@ -271,21 +289,135 @@ input, select, textarea { font-family: 'JetBrains Mono', monospace; }
 
 <!-- ════════ MODALS ════════ -->
 
-<!-- Create Symbiote Modal -->
+<!-- Create Symbiote Wizard -->
 <div id="create-symbiote-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
-  <div class="bg-bg-card border border-border rounded-lg w-[400px] shadow-2xl">
+  <div class="bg-bg-card border border-border rounded-lg w-[540px] shadow-2xl">
     <div class="px-5 py-3 border-b border-border flex items-center justify-between">
       <span class="font-sans text-sm font-semibold text-text-bright">Create Symbiote</span>
       <button onclick="hideModal('create-symbiote-modal')" class="text-text-dim hover:text-text">&times;</button>
     </div>
-    <div class="p-5 space-y-3">
-      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Name</label><input id="new-sym-name" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text-bright focus:border-accent focus:outline-none"></div>
-      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Role</label><input id="new-sym-role" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text-bright focus:border-accent focus:outline-none" placeholder="e.g. assistant, analyst"></div>
-      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Persona (JSON, optional)</label><textarea id="new-sym-persona" rows="3" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text-bright focus:border-accent focus:outline-none font-mono" placeholder='{"tone": "professional"}'></textarea></div>
+    <!-- Progress bar -->
+    <div class="px-5 py-3 border-b border-border flex items-center gap-3">
+      <div id="wiz-step-1" class="flex items-center gap-1.5 text-[11px] font-medium text-accent">
+        <div class="w-5 h-5 rounded-full bg-accent text-bg flex items-center justify-center text-[10px] font-bold">1</div>
+        Identidade
+      </div>
+      <div class="flex-1 h-px bg-border"></div>
+      <div id="wiz-step-2" class="flex items-center gap-1.5 text-[11px] font-medium text-text-dim">
+        <div class="w-5 h-5 rounded-full border border-border text-text-dim flex items-center justify-center text-[10px]">2</div>
+        Configuração
+      </div>
+      <div class="flex-1 h-px bg-border"></div>
+      <div id="wiz-step-3" class="flex items-center gap-1.5 text-[11px] font-medium text-text-dim">
+        <div class="w-5 h-5 rounded-full border border-border text-text-dim flex items-center justify-center text-[10px]">3</div>
+        Ferramentas
+      </div>
     </div>
-    <div class="px-5 py-3 border-t border-border flex justify-end gap-2">
-      <button onclick="hideModal('create-symbiote-modal')" class="text-text-dim text-[11px] px-3 py-1.5 rounded border border-border hover:bg-bg-hover">Cancel</button>
-      <button onclick="createSymbiote()" class="bg-accent text-bg text-[11px] font-semibold px-4 py-1.5 rounded hover:opacity-90">Create</button>
+    <!-- Step 1: Identity -->
+    <div id="wiz-panel-1" class="p-5 space-y-3">
+      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Nome <span class="text-red">*</span></label><input id="wiz-name" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text-bright focus:border-accent focus:outline-none"></div>
+      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Role <span class="text-red">*</span> <span class="text-text-dim font-normal normal-case tracking-normal">— label curto, ex: <code>assistant</code>, <code>analyst</code></span></label><input id="wiz-role" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text-bright focus:border-accent focus:outline-none" placeholder="e.g. assistant, analyst, younews_bot"></div>
+      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Persona JSON <span class="text-text-dim font-normal normal-case tracking-normal">— system prompt e comportamento do LLM (opcional)</span></label><textarea id="wiz-persona" rows="4" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[11px] text-text-bright focus:border-accent focus:outline-none font-mono" placeholder='{"system_prompt": "Você é um assistente...", "tone": "professional"}'></textarea></div>
+    </div>
+    <!-- Step 2: Config -->
+    <div id="wiz-panel-2" class="p-5 space-y-4 hidden">
+      <div>
+        <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-2">Builtin Tools</label>
+        <div class="flex flex-wrap gap-x-4 gap-y-1">
+          <label class="flex items-center gap-1.5 cursor-pointer"><input type="checkbox" value="fs_read" class="accent-accent wiz-builtin-tool" checked><span class="text-[11px] text-text-bright">fs_read</span><span class="text-[9px] text-text-dim">Read files</span></label>
+          <label class="flex items-center gap-1.5 cursor-pointer"><input type="checkbox" value="fs_write" class="accent-accent wiz-builtin-tool" checked><span class="text-[11px] text-text-bright">fs_write</span><span class="text-[9px] text-text-dim">Write files</span></label>
+          <label class="flex items-center gap-1.5 cursor-pointer"><input type="checkbox" value="fs_list" class="accent-accent wiz-builtin-tool" checked><span class="text-[11px] text-text-bright">fs_list</span><span class="text-[9px] text-text-dim">List dirs</span></label>
+          <label class="flex items-center gap-1.5 cursor-pointer"><input type="checkbox" value="bash" class="accent-accent wiz-builtin-tool"><span class="text-[11px] text-text-bright">bash</span><span class="text-[9px] text-text-dim">Shell commands</span></label>
+        </div>
+      </div>
+      <div>
+        <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-2">Tool Mode</label>
+        <div class="grid grid-cols-2 gap-2">
+          <label class="flex items-start gap-2 p-2.5 rounded border border-border hover:border-accent cursor-pointer has-[:checked]:border-accent has-[:checked]:bg-accent-dim col-span-2">
+            <input type="radio" name="wiz-tool-mode" value="auto" checked class="mt-0.5 accent-accent"> <div><div class="text-[11px] font-medium text-text-bright">auto</div><div class="text-[10px] text-text-dim">Decide automaticamente o modo ideal</div></div>
+          </label>
+          <label class="flex items-start gap-2 p-2.5 rounded border border-border hover:border-accent cursor-pointer has-[:checked]:border-accent has-[:checked]:bg-accent-dim">
+            <input type="radio" name="wiz-tool-mode" value="instant" class="mt-0.5 accent-accent"> <div><div class="text-[11px] font-medium text-text-bright">instant</div><div class="text-[10px] text-text-dim">Resposta direta, sem loop</div></div>
+          </label>
+          <label class="flex items-start gap-2 p-2.5 rounded border border-border hover:border-accent cursor-pointer has-[:checked]:border-accent has-[:checked]:bg-accent-dim">
+            <input type="radio" name="wiz-tool-mode" value="brief" class="mt-0.5 accent-accent"> <div><div class="text-[11px] font-medium text-text-bright">brief</div><div class="text-[10px] text-text-dim">Loop curto, finaliza rápido</div></div>
+          </label>
+          <label class="flex items-start gap-2 p-2.5 rounded border border-border hover:border-accent cursor-pointer has-[:checked]:border-accent has-[:checked]:bg-accent-dim">
+            <input type="radio" name="wiz-tool-mode" value="long_run" class="mt-0.5 accent-accent"> <div><div class="text-[11px] font-medium text-text-bright">long_run</div><div class="text-[10px] text-text-dim">Planejamento + avaliação</div></div>
+          </label>
+          <label class="flex items-start gap-2 p-2.5 rounded border border-border hover:border-accent cursor-pointer has-[:checked]:border-accent has-[:checked]:bg-accent-dim">
+            <input type="radio" name="wiz-tool-mode" value="continuous" class="mt-0.5 accent-accent"> <div><div class="text-[11px] font-medium text-text-bright">continuous</div><div class="text-[10px] text-text-dim">Loop contínuo sem parar</div></div>
+          </label>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Tool Loading</label>
+          <select id="wiz-tool-loading" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text focus:border-accent focus:outline-none">
+            <option value="full">full</option><option value="index">index</option><option value="semantic">semantic</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Tool Tags</label>
+          <input id="wiz-tool-tags" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text-bright focus:border-accent focus:outline-none" placeholder="tag1, tag2, ...">
+        </div>
+      </div>
+      <div id="wiz-longrun-fields" class="hidden space-y-3">
+        <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Planner Prompt</label><textarea id="wiz-planner-prompt" rows="3" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[11px] text-text-bright focus:border-accent focus:outline-none"></textarea></div>
+        <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Evaluator Prompt</label><textarea id="wiz-evaluator-prompt" rows="3" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[11px] text-text-bright focus:border-accent focus:outline-none"></textarea></div>
+      </div>
+    </div>
+    <!-- Step 3: Tools -->
+    <div id="wiz-panel-3" class="p-5 space-y-4 hidden">
+      <div class="text-[12px] text-text-bright font-medium">Ferramentas (opcional)</div>
+      <div class="grid grid-cols-2 gap-4">
+        <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Source Path</label><input id="wiz-discover-path" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text-bright focus:border-accent focus:outline-none" placeholder="/path/to/project"></div>
+        <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Server URL (optional)</label><input id="wiz-discover-url" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text-bright focus:border-accent focus:outline-none" placeholder="http://localhost:8000"></div>
+      </div>
+      <button onclick="wizardDiscover()" class="bg-blue text-white text-[11px] font-semibold px-4 py-1.5 rounded hover:opacity-90">Discover</button>
+      <div id="wiz-discovered-tools" class="space-y-2"></div>
+    </div>
+    <!-- Footer -->
+    <div class="px-5 py-3 border-t border-border flex justify-between items-center">
+      <button id="wiz-btn-prev" onclick="wizardPrev()" class="text-text-dim text-[11px] px-3 py-1.5 rounded border border-border hover:bg-bg-hover hidden">← Anterior</button>
+      <div class="flex-1"></div>
+      <div class="flex gap-2">
+        <button onclick="hideModal('create-symbiote-modal')" class="text-text-dim text-[11px] px-3 py-1.5 rounded border border-border hover:bg-bg-hover">Cancelar</button>
+        <button id="wiz-btn-next" onclick="wizardNext()" class="bg-accent text-bg text-[11px] font-semibold px-4 py-1.5 rounded hover:opacity-90">Próximo →</button>
+        <button id="wiz-btn-finish" onclick="wizardFinish(false)" class="bg-accent text-bg text-[11px] font-semibold px-4 py-1.5 rounded hover:opacity-90 hidden">Concluir sem tools</button>
+        <button id="wiz-btn-finish-tools" onclick="wizardFinish(true)" class="bg-blue text-white text-[11px] font-semibold px-4 py-1.5 rounded hover:opacity-90 hidden">Concluir com tools aprovadas</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Symbiote Modal -->
+<div id="edit-symbiote-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
+  <div class="bg-bg-card border border-border rounded-lg w-[560px] shadow-2xl max-h-[90vh] flex flex-col">
+    <div class="px-5 py-3 border-b border-border flex items-center justify-between shrink-0">
+      <span class="font-sans text-sm font-semibold text-text-bright">Editar Symbiote</span>
+      <button onclick="hideModal('edit-symbiote-modal')" class="text-text-dim hover:text-text">&times;</button>
+    </div>
+    <!-- Tabs -->
+    <div class="flex border-b border-border shrink-0">
+      <button id="edit-tab-identity" onclick="switchEditTab('identity')" class="px-5 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 border-accent text-accent">Identidade</button>
+      <button id="edit-tab-config" onclick="switchEditTab('config')" class="px-5 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 border-transparent text-text-dim hover:text-text-bright">Config</button>
+    </div>
+    <!-- Identity tab -->
+    <div id="edit-panel-identity" class="p-5 space-y-3 overflow-y-auto flex-1">
+      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Nome</label><input id="edit-sym-name" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text-bright focus:border-accent focus:outline-none"></div>
+      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Role <span class="text-text-dim font-normal normal-case tracking-normal">— label curto, ex: <code>assistant</code>, <code>analyst</code></span></label><input id="edit-sym-role" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text-bright focus:border-accent focus:outline-none" placeholder="e.g. assistant, analyst"></div>
+      <div><label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Persona JSON <span class="text-text-dim font-normal normal-case tracking-normal">— system prompt e comportamento do LLM</span></label><textarea id="edit-sym-persona" rows="6" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[11px] text-text-bright focus:border-accent focus:outline-none font-mono" placeholder='{"system_prompt": "Você é um assistente...", "tone": "professional"}'></textarea></div>
+    </div>
+    <!-- Config tab -->
+    <div id="edit-panel-config" class="p-5 hidden overflow-y-auto flex-1">
+      <div id="edit-config-form"><div class="py-10 text-center text-text-dim text-xs">Carregando config...</div></div>
+    </div>
+    <!-- Footer -->
+    <div class="px-5 py-3 border-t border-border flex justify-end gap-2 shrink-0">
+      <button onclick="hideModal('edit-symbiote-modal')" class="text-text-dim text-[11px] px-3 py-1.5 rounded border border-border hover:bg-bg-hover">Cancelar</button>
+      <button id="edit-save-identity-btn" onclick="saveEditIdentity()" class="bg-accent text-bg text-[11px] font-semibold px-4 py-1.5 rounded hover:opacity-90">Salvar Identidade</button>
+      <button id="edit-save-config-btn" onclick="saveEditConfig()" class="bg-accent text-bg text-[11px] font-semibold px-4 py-1.5 rounded hover:opacity-90 hidden">Salvar Config</button>
     </div>
   </div>
 </div>
@@ -357,6 +489,45 @@ const state = {
   chatLoading: false,
   refreshTimers: {},
 };
+
+// ── Toast & Confirm ─────────────────────────────────────────────────────
+function toast(msg, type = 'info', duration = 3500) {
+  const colors = {
+    success: 'border-accent text-accent',
+    error: 'border-red text-red',
+    warn: 'border-amber text-amber',
+    info: 'border-blue text-blue',
+  };
+  const el = document.createElement('div');
+  el.className = `pointer-events-auto bg-bg-card border ${colors[type] || colors.info} rounded px-4 py-2.5 text-[11px] font-mono shadow-lg toast-enter max-w-xs`;
+  el.textContent = msg;
+  $('toast-container').appendChild(el);
+  setTimeout(() => {
+    el.classList.remove('toast-enter');
+    el.classList.add('toast-exit');
+    el.addEventListener('animationend', () => el.remove());
+  }, duration);
+}
+
+function confirmDialog(msg) {
+  return new Promise(resolve => {
+    $('confirm-message').textContent = msg;
+    const overlay = $('confirm-overlay');
+    overlay.classList.remove('hidden');
+    overlay.classList.add('flex');
+    function cleanup(result) {
+      overlay.classList.add('hidden');
+      overlay.classList.remove('flex');
+      $('confirm-ok').removeEventListener('click', onOk);
+      $('confirm-cancel').removeEventListener('click', onCancel);
+      resolve(result);
+    }
+    function onOk() { cleanup(true); }
+    function onCancel() { cleanup(false); }
+    $('confirm-ok').addEventListener('click', onOk);
+    $('confirm-cancel').addEventListener('click', onCancel);
+  });
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 function $(id) { return document.getElementById(id); }
@@ -606,7 +777,11 @@ async function loadSymbiotes() {
         renderBadge(s.status, s.status === 'active' ? 'active' : 'closed'),
         `<span class="text-text-dim text-[11px]">${esc(truncate(s.owner_id, 12))}</span>`,
         `<span class="text-text-dim text-[11px]">${fmtDate(s.created_at)}</span>`,
-        `<a href="#symbiotes/${s.id}" class="text-accent text-[11px] hover:underline">View</a>`,
+        `<div class="flex items-center gap-2">
+          <a href="#symbiotes/${s.id}" class="text-accent text-[11px] hover:underline">View</a>
+          <button onclick="openEditModal('${s.id}')" class="text-blue text-[11px] hover:underline px-1" title="Editar">✏️</button>
+          <button onclick="deleteSymbiote('${s.id}', '${esc(s.name)}')" class="text-red text-[11px] hover:underline px-1" title="Deletar">🗑️</button>
+        </div>`,
       ]),
       { empty: 'No symbiotes — click Create to add one' }
     );
@@ -690,25 +865,319 @@ async function loadSymbioteDetail(id) {
   }
 }
 
-async function createSymbiote() {
-  const name = $('new-sym-name').value.trim();
-  const role = $('new-sym-role').value.trim();
-  const personaStr = $('new-sym-persona').value.trim();
-  if (!name || !role) { alert('Name and role are required'); return; }
+// ── Wizard ───────────────────────────────────────────────────────────────
+const wizardState = { step: 1, symbioteId: null };
+
+function openWizard() {
+  wizardState.step = 1;
+  wizardState.symbioteId = null;
+  // Reset fields
+  $('wiz-name').value = '';
+  $('wiz-role').value = '';
+  $('wiz-persona').value = '';
+  document.querySelectorAll('.wiz-builtin-tool').forEach(cb => { cb.checked = cb.value !== 'bash'; });
+  document.querySelectorAll('input[name="wiz-tool-mode"]').forEach(r => { r.checked = r.value === 'auto'; });
+  $('wiz-tool-loading').value = 'full';
+  $('wiz-tool-tags').value = '';
+  $('wiz-planner-prompt').value = '';
+  $('wiz-evaluator-prompt').value = '';
+  $('wiz-discover-path').value = '';
+  $('wiz-discover-url').value = '';
+  $('wiz-discovered-tools').innerHTML = '';
+  $('wiz-longrun-fields').classList.add('hidden');
+  showWizardStep(1);
+  showModal('create-symbiote-modal');
+}
+
+function showWizardStep(step) {
+  wizardState.step = step;
+  [1, 2, 3].forEach(s => {
+    $(`wiz-panel-${s}`).classList.toggle('hidden', s !== step);
+    const stepEl = $(`wiz-step-${s}`);
+    const circle = stepEl.querySelector('div');
+    if (s < step) {
+      stepEl.className = 'flex items-center gap-1.5 text-[11px] font-medium text-accent';
+      circle.className = 'w-5 h-5 rounded-full bg-accent text-bg flex items-center justify-center text-[10px] font-bold';
+      circle.textContent = '✓';
+    } else if (s === step) {
+      stepEl.className = 'flex items-center gap-1.5 text-[11px] font-medium text-accent';
+      circle.className = 'w-5 h-5 rounded-full bg-accent text-bg flex items-center justify-center text-[10px] font-bold';
+      circle.textContent = s;
+    } else {
+      stepEl.className = 'flex items-center gap-1.5 text-[11px] font-medium text-text-dim';
+      circle.className = 'w-5 h-5 rounded-full border border-border text-text-dim flex items-center justify-center text-[10px]';
+      circle.textContent = s;
+    }
+  });
+  $('wiz-btn-prev').classList.toggle('hidden', step === 1);
+  $('wiz-btn-next').classList.toggle('hidden', step >= 3);
+  $('wiz-btn-finish').classList.toggle('hidden', step !== 3);
+  $('wiz-btn-finish-tools').classList.toggle('hidden', step !== 3);
+}
+
+async function wizardNext() {
+  if (wizardState.step === 1) {
+    const name = $('wiz-name').value.trim();
+    const role = $('wiz-role').value.trim();
+    if (!name || !role) { toast('Nome e role são obrigatórios', 'warn'); return; }
+    let persona = null;
+    const personaStr = $('wiz-persona').value.trim();
+    if (personaStr) {
+      try { persona = JSON.parse(personaStr); } catch { toast('JSON inválido para persona', 'warn'); return; }
+    }
+    try {
+      const sym = await api('POST', '/symbiotes', { name, role, persona_json: persona });
+      wizardState.symbioteId = sym.id;
+      showWizardStep(2);
+    } catch (e) { toast('Erro: ' + e.message, 'error'); }
+  } else if (wizardState.step === 2) {
+    await wizardSaveConfig();
+    showWizardStep(3);
+  }
+}
+
+async function wizardSaveConfig() {
+  if (!wizardState.symbioteId) return;
+  const tools = [...document.querySelectorAll('.wiz-builtin-tool:checked')].map(el => el.value);
+  const toolMode = document.querySelector('input[name="wiz-tool-mode"]:checked')?.value || 'brief';
+  const tagsStr = $('wiz-tool-tags').value.trim();
+  const tags = tagsStr ? tagsStr.split(',').map(t => t.trim()).filter(Boolean) : [];
+  const body = {
+    tools,
+    tool_mode: toolMode,
+    tool_loading: $('wiz-tool-loading').value,
+    tool_tags: tags,
+    planner_prompt: $('wiz-planner-prompt').value.trim() || null,
+    evaluator_prompt: $('wiz-evaluator-prompt').value.trim() || null,
+  };
+  try {
+    await api('PUT', `/symbiotes/${wizardState.symbioteId}/config`, body);
+  } catch (e) { toast('Erro ao salvar config: ' + e.message, 'error'); }
+}
+
+function wizardPrev() {
+  if (wizardState.step > 1) showWizardStep(wizardState.step - 1);
+}
+
+async function wizardDiscover() {
+  const symId = wizardState.symbioteId;
+  if (!symId) { toast('Crie o symbiote primeiro (step 1)', 'warn'); return; }
+  const path = $('wiz-discover-path').value.trim();
+  const url = $('wiz-discover-url').value.trim();
+  if (!path) { toast('Source path é obrigatório', 'warn'); return; }
+  try {
+    const result = await api('POST', `/symbiotes/${symId}/discover`, { source_path: path, url: url || null });
+    $('wiz-discovered-tools').innerHTML = result.tools.length === 0
+      ? '<div class="text-[11px] text-text-dim">Nenhuma tool encontrada.</div>'
+      : result.tools.map(t => `
+        <div class="flex items-center justify-between px-3 py-2 bg-bg border border-border rounded">
+          <span class="text-[11px] text-text-bright">${esc(t.name || t.tool_id)}</span>
+          <span class="text-[10px] ${t.status === 'approved' ? 'text-accent' : 'text-amber'}">${t.status}</span>
+        </div>
+      `).join('');
+    if (result.errors.length) toast(`${result.errors.length} erro(s) durante discovery`, 'warn');
+  } catch (e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function wizardFinish(withTools) {
+  hideModal('create-symbiote-modal');
+  loadSymbiotes();
+}
+
+// Observe tool mode changes in wizard to show/hide long_run fields
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('input[name="wiz-tool-mode"]').forEach(r => {
+    r.addEventListener('change', () => {
+      $('wiz-longrun-fields').classList.toggle('hidden', r.value !== 'long_run' || !r.checked);
+    });
+  });
+});
+
+// ── Edit Modal ───────────────────────────────────────────────────────────
+const editState = { symbioteId: null, activeTab: 'identity' };
+
+async function openEditModal(symbioteId) {
+  editState.symbioteId = symbioteId;
+  editState.activeTab = 'identity';
+  switchEditTab('identity');
+  showModal('edit-symbiote-modal');
+
+  try {
+    const sym = await api('GET', `/symbiotes/${symbioteId}`);
+    $('edit-sym-name').value = sym.name || '';
+    $('edit-sym-role').value = sym.role || '';
+    $('edit-sym-persona').value = sym.persona_json && Object.keys(sym.persona_json).length
+      ? JSON.stringify(sym.persona_json, null, 2)
+      : '';
+  } catch (e) {
+    toast('Erro ao carregar symbiote: ' + e.message, 'error');
+  }
+}
+
+function switchEditTab(tab) {
+  editState.activeTab = tab;
+  const showIdentity = tab === 'identity';
+  $('edit-panel-identity').classList.toggle('hidden', !showIdentity);
+  $('edit-panel-config').classList.toggle('hidden', showIdentity);
+  $('edit-save-identity-btn').classList.toggle('hidden', !showIdentity);
+  $('edit-save-config-btn').classList.toggle('hidden', showIdentity);
+
+  $('edit-tab-identity').className = `px-5 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 ${showIdentity ? 'border-accent text-accent' : 'border-transparent text-text-dim hover:text-text-bright'}`;
+  $('edit-tab-config').className = `px-5 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 ${!showIdentity ? 'border-accent text-accent' : 'border-transparent text-text-dim hover:text-text-bright'}`;
+
+  if (tab === 'config' && editState.symbioteId) loadEditConfig();
+}
+
+async function loadEditConfig() {
+  const symId = editState.symbioteId;
+  if (!symId) return;
+  try {
+    const cfg = await api('GET', `/symbiotes/${symId}/config`);
+    $('edit-config-form').innerHTML = `
+      <div class="grid grid-cols-2 gap-6">
+        <div class="space-y-3">
+          <h3 class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim">Builtin Tools</h3>
+          <div class="flex flex-wrap gap-x-4 gap-y-1">
+            ${[
+              {id:'fs_read', label:'fs_read', desc:'Read files'},
+              {id:'fs_write', label:'fs_write', desc:'Write files'},
+              {id:'fs_list', label:'fs_list', desc:'List dirs'},
+              {id:'bash', label:'bash', desc:'Shell commands'},
+            ].map(t => `
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" id="ecfg-tool-${t.id}" value="${t.id}" class="accent-accent ecfg-builtin-tool" ${(cfg.tools||[]).includes(t.id) ? 'checked' : ''}>
+                <span class="text-[11px] text-text-bright">${t.label}</span>
+                <span class="text-[9px] text-text-dim">${t.desc}</span>
+              </label>
+            `).join('')}
+          </div>
+
+          <h3 class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim pt-2">Execução</h3>
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Tool Mode</label>
+            <select id="ecfg-tool-mode" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text focus:border-accent focus:outline-none">
+              <option value="auto" ${cfg.tool_mode === 'auto' ? 'selected' : ''}>auto</option>
+              <option value="instant" ${cfg.tool_mode === 'instant' ? 'selected' : ''}>instant</option>
+              <option value="brief" ${cfg.tool_mode === 'brief' ? 'selected' : ''}>brief</option>
+              <option value="long_run" ${cfg.tool_mode === 'long_run' ? 'selected' : ''}>long_run</option>
+              <option value="continuous" ${cfg.tool_mode === 'continuous' ? 'selected' : ''}>continuous</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Tool Loading</label>
+            <select id="ecfg-tool-loading" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text focus:border-accent focus:outline-none">
+              <option value="full" ${cfg.tool_loading === 'full' ? 'selected' : ''}>full</option>
+              <option value="index" ${cfg.tool_loading === 'index' ? 'selected' : ''}>index</option>
+              <option value="semantic" ${cfg.tool_loading === 'semantic' ? 'selected' : ''}>semantic</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Context Mode</label>
+            <select id="ecfg-context-mode" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text focus:border-accent focus:outline-none">
+              <option value="packed" ${cfg.context_mode === 'packed' ? 'selected' : ''}>packed</option>
+              <option value="on_demand" ${cfg.context_mode === 'on_demand' ? 'selected' : ''}>on_demand</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Max Tool Iterations <span id="ecfg-max-iter-val">${cfg.max_tool_iterations}</span></label>
+            <input id="ecfg-max-iterations" type="range" min="1" max="50" value="${cfg.max_tool_iterations}" class="w-full accent-accent" oninput="$('ecfg-max-iter-val').textContent=this.value">
+          </div>
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Tool Timeout (s) <span id="ecfg-tool-timeout-val">${cfg.tool_call_timeout}</span></label>
+            <input id="ecfg-tool-timeout" type="range" min="1" max="300" value="${cfg.tool_call_timeout}" class="w-full accent-accent" oninput="$('ecfg-tool-timeout-val').textContent=this.value">
+          </div>
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Loop Timeout (s) <span id="ecfg-loop-timeout-val">${cfg.loop_timeout}</span></label>
+            <input id="ecfg-loop-timeout" type="range" min="10" max="3600" step="10" value="${cfg.loop_timeout}" class="w-full accent-accent" oninput="$('ecfg-loop-timeout-val').textContent=this.value">
+          </div>
+        </div>
+        <div class="space-y-3">
+          <h3 class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim">Long-Run</h3>
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Context Strategy</label>
+            <select id="ecfg-context-strategy" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text focus:border-accent focus:outline-none">
+              <option value="compaction" ${cfg.context_strategy === 'compaction' ? 'selected' : ''}>compaction</option>
+              <option value="reset" ${cfg.context_strategy === 'reset' ? 'selected' : ''}>reset</option>
+              <option value="hybrid" ${cfg.context_strategy === 'hybrid' ? 'selected' : ''}>hybrid</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Max Blocks <span id="ecfg-max-blocks-val">${cfg.max_blocks}</span></label>
+            <input id="ecfg-max-blocks" type="range" min="1" max="100" value="${cfg.max_blocks}" class="w-full accent-accent" oninput="$('ecfg-max-blocks-val').textContent=this.value">
+          </div>
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Planner Prompt</label>
+            <textarea id="ecfg-planner-prompt" rows="4" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[11px] text-text-bright focus:border-accent focus:outline-none">${esc(cfg.planner_prompt || '')}</textarea>
+          </div>
+          <div>
+            <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Evaluator Prompt</label>
+            <textarea id="ecfg-evaluator-prompt" rows="4" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[11px] text-text-bright focus:border-accent focus:outline-none">${esc(cfg.evaluator_prompt || '')}</textarea>
+          </div>
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    $('edit-config-form').innerHTML = `<div class="py-10 text-center text-red text-xs">Erro: ${esc(e.message)}</div>`;
+  }
+}
+
+async function saveEditIdentity() {
+  const symId = editState.symbioteId;
+  if (!symId) return;
+  const name = $('edit-sym-name').value.trim();
+  const role = $('edit-sym-role').value.trim();
+  if (!name || !role) { toast('Nome e role são obrigatórios', 'warn'); return; }
   let persona = null;
+  const personaStr = $('edit-sym-persona').value.trim();
   if (personaStr) {
-    try { persona = JSON.parse(personaStr); } catch { alert('Invalid JSON for persona'); return; }
+    try { persona = JSON.parse(personaStr); } catch { toast('JSON inválido para persona', 'warn'); return; }
   }
   try {
-    await api('POST', '/symbiotes', { name, role, persona_json: persona });
-    hideModal('create-symbiote-modal');
-    $('new-sym-name').value = '';
-    $('new-sym-role').value = '';
-    $('new-sym-persona').value = '';
+    await api('PUT', `/symbiotes/${symId}`, { name, role, persona_json: persona });
+    hideModal('edit-symbiote-modal');
+    toast('Identidade salva', 'success');
     loadSymbiotes();
-  } catch (e) {
-    alert('Error: ' + e.message);
-  }
+  } catch (e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function saveEditConfig() {
+  const symId = editState.symbioteId;
+  if (!symId) return;
+  const tools = [...document.querySelectorAll('.ecfg-builtin-tool:checked')].map(el => el.value);
+  const body = {
+    tools,
+    tool_mode: $('ecfg-tool-mode')?.value,
+    tool_loading: $('ecfg-tool-loading')?.value,
+    context_mode: $('ecfg-context-mode')?.value,
+    max_tool_iterations: parseInt($('ecfg-max-iterations')?.value),
+    tool_call_timeout: parseFloat($('ecfg-tool-timeout')?.value),
+    loop_timeout: parseFloat($('ecfg-loop-timeout')?.value),
+    context_strategy: $('ecfg-context-strategy')?.value,
+    max_blocks: parseInt($('ecfg-max-blocks')?.value),
+    planner_prompt: $('ecfg-planner-prompt')?.value || null,
+    evaluator_prompt: $('ecfg-evaluator-prompt')?.value || null,
+  };
+  try {
+    await api('PUT', `/symbiotes/${symId}/config`, body);
+    hideModal('edit-symbiote-modal');
+    toast('Config salva', 'success');
+  } catch (e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function deleteSymbiote(symbioteId, name) {
+  if (!await confirmDialog(`Deletar "${name}"? Isso não pode ser desfeito.`)) return;
+  try {
+    const resp = await fetch(`/symbiotes/${symbioteId}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${getApiKey()}` },
+    });
+    if (!resp.ok && resp.status !== 204) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(err.detail || `HTTP ${resp.status}`);
+    }
+    toast('Symbiote deletado', 'success');
+    loadSymbiotes();
+  } catch (e) { toast('Erro: ' + e.message, 'error'); }
 }
 
 function updateSymbioteSelects(symbiotes) {
@@ -840,14 +1309,14 @@ async function loadSessionDetail(id) {
 async function createSession() {
   const symbioteId = $('new-sess-symbiote').value;
   const goal = $('new-sess-goal').value.trim();
-  if (!symbioteId) { alert('Select a symbiote'); return; }
+  if (!symbioteId) { toast('Select a symbiote', 'warn'); return; }
   try {
     const sess = await api('POST', '/sessions', { symbiote_id: symbioteId, goal: goal || null });
     hideModal('create-session-modal');
     $('new-sess-goal').value = '';
     location.hash = `#sessions/${sess.id}`;
   } catch (e) {
-    alert('Error: ' + e.message);
+    toast('Error: ' + e.message, 'error');
   }
 }
 
@@ -856,7 +1325,7 @@ async function closeSession(id) {
     await api('POST', `/sessions/${id}/close`);
     loadSessionDetail(id);
   } catch (e) {
-    alert('Error: ' + e.message);
+    toast('Error: ' + e.message, 'error');
   }
 }
 
@@ -892,7 +1361,7 @@ async function onChatSymbioteChange() {
 
 async function startChatSession() {
   const symId = $('chat-symbiote').value;
-  if (!symId) { alert('Select a symbiote'); return; }
+  if (!symId) { toast('Select a symbiote', 'warn'); return; }
 
   let sessId = $('chat-session').value;
   if (!sessId) {
@@ -907,7 +1376,7 @@ async function startChatSession() {
       $('chat-session').appendChild(opt);
       $('chat-session').value = sessId;
     } catch (e) {
-      alert('Error creating session: ' + e.message);
+      toast('Error creating session: ' + e.message, 'error');
       return;
     }
   }
@@ -931,7 +1400,7 @@ async function startChatSession() {
     const sym = state.symbiotes.find(s => s.id === symId);
     if (sym) {
       const cfg = await api('GET', `/symbiotes/${symId}/config`);
-      $('chat-mode-badge').innerHTML = renderBadge(cfg.tool_mode || 'brief', cfg.tool_mode === 'long_run' ? 'purple' : cfg.tool_mode === 'continuous' ? 'red' : 'active');
+      $('chat-mode-badge').innerHTML = renderBadge(cfg.tool_mode || 'brief', cfg.tool_mode === 'auto' ? 'blue' : cfg.tool_mode === 'long_run' ? 'purple' : cfg.tool_mode === 'continuous' ? 'red' : 'active');
     }
   } catch {}
 }
@@ -1108,7 +1577,7 @@ async function toggleToolStatus(symbioteId, toolId, currentStatus) {
     await api('PATCH', `/symbiotes/${symbioteId}/discovered-tools/${toolId}`, { status: newStatus });
     loadTools();
   } catch (e) {
-    alert('Error: ' + e.message);
+    toast('Error: ' + e.message, 'error');
   }
 }
 
@@ -1116,14 +1585,14 @@ async function discoverTools() {
   const symId = $('discover-symbiote').value;
   const path = $('discover-path').value.trim();
   const url = $('discover-url').value.trim();
-  if (!symId || !path) { alert('Symbiote and source path are required'); return; }
+  if (!symId || !path) { toast('Symbiote and source path are required', 'warn'); return; }
   try {
     const result = await api('POST', `/symbiotes/${symId}/discover`, { source_path: path, url: url || null });
     hideModal('discover-tools-modal');
-    alert(`Discovered ${result.discovered} tools${result.errors.length ? ` (${result.errors.length} errors)` : ''}`);
+    toast(`Discovered ${result.discovered} tools${result.errors.length ? ` (${result.errors.length} errors)` : ''}`, result.errors.length ? 'warn' : 'success');
     loadTools();
   } catch (e) {
-    alert('Error: ' + e.message);
+    toast('Error: ' + e.message, 'error');
   }
 }
 
@@ -1151,11 +1620,28 @@ async function loadConfig() {
     $('config-form').innerHTML = `
       <div class="grid grid-cols-2 gap-6">
         <div class="space-y-4">
-          <h3 class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim">Execution</h3>
+          <h3 class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim">Builtin Tools</h3>
+          <div class="flex flex-wrap gap-x-4 gap-y-1">
+            ${[
+              {id:'fs_read', label:'fs_read', desc:'Read files'},
+              {id:'fs_write', label:'fs_write', desc:'Write files'},
+              {id:'fs_list', label:'fs_list', desc:'List dirs'},
+              {id:'bash', label:'bash', desc:'Shell commands'},
+            ].map(t => `
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" id="cfg-tool-${t.id}" value="${t.id}" class="accent-accent cfg-builtin-tool" ${(cfg.tools||[]).includes(t.id) ? 'checked' : ''}>
+                <span class="text-[11px] text-text-bright">${t.label}</span>
+                <span class="text-[9px] text-text-dim">${t.desc}</span>
+              </label>
+            `).join('')}
+          </div>
+
+          <h3 class="font-sans text-[12px] font-semibold uppercase tracking-wider text-text-dim pt-2">Execution</h3>
 
           <div>
             <label class="text-[10px] uppercase tracking-widest text-text-dim block mb-1">Tool Mode</label>
             <select id="cfg-tool-mode" class="w-full bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text focus:border-accent focus:outline-none">
+              <option value="auto" ${cfg.tool_mode === 'auto' ? 'selected' : ''}>auto</option>
               <option value="instant" ${cfg.tool_mode === 'instant' ? 'selected' : ''}>instant</option>
               <option value="brief" ${cfg.tool_mode === 'brief' ? 'selected' : ''}>brief</option>
               <option value="long_run" ${cfg.tool_mode === 'long_run' ? 'selected' : ''}>long_run</option>
@@ -1249,9 +1735,11 @@ async function loadConfig() {
 
 async function saveConfig() {
   const symId = $('config-symbiote').value;
-  if (!symId) { alert('Select a symbiote first'); return; }
+  if (!symId) { toast('Select a symbiote first', 'warn'); return; }
 
+  const tools = [...document.querySelectorAll('.cfg-builtin-tool:checked')].map(el => el.value);
   const body = {
+    tools,
     tool_mode: $('cfg-tool-mode')?.value,
     tool_loading: $('cfg-tool-loading')?.value,
     context_mode: $('cfg-context-mode')?.value,
@@ -1269,15 +1757,15 @@ async function saveConfig() {
   // Parse evaluator criteria
   const criteriaStr = $('cfg-evaluator-criteria')?.value?.trim();
   if (criteriaStr) {
-    try { body.evaluator_criteria = JSON.parse(criteriaStr); } catch { alert('Invalid JSON for evaluator criteria'); return; }
+    try { body.evaluator_criteria = JSON.parse(criteriaStr); } catch { toast('Invalid JSON for evaluator criteria', 'warn'); return; }
   }
 
   try {
     await api('PUT', `/symbiotes/${symId}/config`, body);
-    alert('Configuration saved');
+    toast('Configuration saved', 'success');
     loadConfig();
   } catch (e) {
-    alert('Error: ' + e.message);
+    toast('Error: ' + e.message, 'error');
   }
 }
 
@@ -1287,7 +1775,7 @@ async function saveConfig() {
 
 async function loadApiKeys() {
   const tenantId = $('apikeys-tenant-filter').value.trim();
-  if (!tenantId) { alert('Enter a tenant ID'); return; }
+  if (!tenantId) { toast('Enter a tenant ID', 'warn'); return; }
 
   try {
     const keys = await api('GET', `/admin/api-keys/${tenantId}`);
@@ -1312,7 +1800,7 @@ async function createApiKey() {
   const tenantId = $('new-key-tenant').value.trim();
   const name = $('new-key-name').value.trim();
   const role = $('new-key-role').value;
-  if (!tenantId || !name) { alert('Tenant ID and name are required'); return; }
+  if (!tenantId || !name) { toast('Tenant ID and name are required', 'warn'); return; }
 
   try {
     const result = await api('POST', '/admin/api-keys', { tenant_id: tenantId, name, role });
@@ -1333,17 +1821,18 @@ async function createApiKey() {
     // Set tenant filter and auto-load
     $('apikeys-tenant-filter').value = tenantId;
   } catch (e) {
-    alert('Error: ' + e.message);
+    toast('Error: ' + e.message, 'error');
   }
 }
 
 async function revokeApiKey(keyId) {
-  if (!confirm('Revoke this API key? This cannot be undone.')) return;
+  if (!await confirmDialog('Revoke this API key? This cannot be undone.')) return;
   try {
     await api('DELETE', `/admin/api-keys/${keyId}`);
+    toast('API key revoked', 'success');
     loadApiKeys();
   } catch (e) {
-    alert('Error: ' + e.message);
+    toast('Error: ' + e.message, 'error');
   }
 }
 

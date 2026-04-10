@@ -253,13 +253,17 @@ class TestGetAvailableTags:
         d2 = ToolDescriptor(tool_id="t2", name="T2", description="T2", tags=["Admin", "Items"])
         gw.register_descriptor(d1, lambda p: None)
         gw.register_descriptor(d2, lambda p: None)
-        assert gw.get_available_tags() == ["Admin", "Compose", "Items"]
+        tags = gw.get_available_tags()
+        # Must contain the registered tags (bash builtin also adds "shell", "system")
+        for expected in ["Admin", "Compose", "Items", "shell", "system"]:
+            assert expected in tags
+        assert tags == sorted(tags)
 
-    def test_empty_when_no_tags(self, gw: ToolGateway) -> None:
+    def test_no_extra_tags_beyond_builtins(self, gw: ToolGateway) -> None:
         d = ToolDescriptor(tool_id="t1", name="T1", description="T1")
         gw.register_descriptor(d, lambda p: None)
-        # Builtins have no tags, and t1 has no tags
-        assert gw.get_available_tags() == []
+        # Only bash builtin tags present
+        assert gw.get_available_tags() == ["shell", "system"]
 
 
 # ── register_index_tool / get_tool_schema ────────────────────────────────
