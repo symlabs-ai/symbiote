@@ -3,6 +3,28 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [v0.3.7] - 2026-04-10
+
+- feat: bash builtin tool (descriptor + handler)
+- feat: PUT/DELETE /symbiotes/{id} endpoints, tools allowlist in config
+- feat: tool_mode="auto" with _resolve_auto_mode() heuristic
+- feat: memory/knowledge on-demand as tools (context_mode="on_demand") — search_memories, search_knowledge builtins
+- feat: long-run handoff artifacts (L-04) — RunResult.handoff_data with blocks_completed, pending_blocks, output_summary
+- feat: session orientation on resume (S-01) — previous handoff injected on first message of new session
+- feat: handoff persistence on close_session (S-02) — MemoryEntry(category="handoff")
+- feat: planner orientation — reads previous_handoff before generating blocks, skips completed work
+- feat: imperative prompts — Constraints section in generator, explicit verification rules in evaluator
+- feat: preflight tool check — _preflight_tools() aborts long-run if health_check() fails before loop
+- fix: execution_traces CREATE TABLE now includes tool_mode column (fresh DB no longer crashes)
+- fix: APIKey.is_admin property added — 10 cross-tenant auth checks no longer throw AttributeError
+- fix: __version__ aligned to 0.3.6 in __init__.py
+- fix: pyproject.toml license corrected from MIT to AGPL-3.0
+- fix: .gitignore extended with .symbiote/, .context/, symbiote.db*
+- test: /health contract tests (4 cases covering {status, service, version, commit})
+- chore: remove AGENTS.md
+
+---
+
 ## [v0.3.5] - 2026-04-01
 
 - fix: disable OpenAI SDK-level retries on 429 (max_retries=0) — prevents burst amplification
