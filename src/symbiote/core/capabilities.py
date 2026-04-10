@@ -46,11 +46,17 @@ class CapabilitySurface:
         self._runner_registry = runner_registry
         self._export_fn = export_fn
         self._last_loop_trace = None
+        self._last_handoff_data: dict | None = None
 
     @property
     def last_loop_trace(self):
         """Return the LoopTrace from the last chat/chat_async call, or None."""
         return self._last_loop_trace
+
+    @property
+    def last_handoff_data(self) -> dict | None:
+        """Return the handoff artifact from the last long-run call, or None."""
+        return self._last_handoff_data
 
     # ── learn ────────────────────────────────────────────────────────────
 
@@ -129,6 +135,7 @@ class CapabilitySurface:
 
         result = runner.run(context)
         self._last_loop_trace = getattr(result, "loop_trace", None)
+        self._last_handoff_data = getattr(result, "handoff_data", None)
         if not result.success:
             raise CapabilityError("chat", result.error or "Chat runner failed")
 
@@ -165,6 +172,7 @@ class CapabilitySurface:
 
         result = await runner.run_async(context, on_token=on_token)
         self._last_loop_trace = getattr(result, "loop_trace", None)
+        self._last_handoff_data = getattr(result, "handoff_data", None)
         if not result.success:
             raise CapabilityError("chat", result.error or "Chat runner failed")
 

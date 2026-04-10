@@ -67,6 +67,7 @@ class RunResult(BaseModel):
     # Long-run mode extras
     plan: LongRunPlan | None = None
     block_results: list[BlockResult] | None = None
+    handoff_data: dict | None = None
 
 
 # ── Runner protocol ─────────────────────────────────────────────────────────

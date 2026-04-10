@@ -110,6 +110,10 @@ class SymbioteKernel:
         self._last_trace: LoopTrace | None = None
         self._last_trace_session: str | None = None
 
+        # Last long-run handoff — set by message(), persisted by close_session()
+        self._last_handoff: dict | None = None
+        self._last_handoff_session: str | None = None
+
         # Optional evolver LLM (host provides, can be different from main LLM)
         self._evolver_llm: LLMPort | None = None
 
@@ -236,6 +240,11 @@ class SymbioteKernel:
             raise EntityNotFoundError("Session", session_id)
         symbiote_id = row["symbiote_id"]
 
+        # S-01: Inject previous handoff on session start (first message only)
+        extra_context = self._inject_handoff_if_resuming(
+            session_id, symbiote_id, extra_context
+        )
+
         self._sessions.add_message(session_id, "user", content)
 
         response = self._capabilities.chat(
@@ -255,6 +264,12 @@ class SymbioteKernel:
             self._last_trace = trace
             self._last_trace_session = session_id
             self._persist_trace(session_id, symbiote_id, trace)
+
+        # Capture handoff data from last RunResult for close_session()
+        handoff = self._capabilities.last_handoff_data
+        if handoff is not None:
+            self._last_handoff = handoff
+            self._last_handoff_session = session_id
 
         return response
 
@@ -289,6 +304,11 @@ class SymbioteKernel:
             raise EntityNotFoundError("Session", session_id)
         symbiote_id = row["symbiote_id"]
 
+        # S-01: Inject previous handoff on session start (first message only)
+        extra_context = self._inject_handoff_if_resuming(
+            session_id, symbiote_id, extra_context
+        )
+
         self._sessions.add_message(session_id, "user", content)
 
         response = await self._capabilities.chat_async(
@@ -313,6 +333,12 @@ class SymbioteKernel:
             self._last_trace_session = session_id
             self._persist_trace(session_id, symbiote_id, trace)
 
+        # Capture handoff data from last RunResult for close_session()
+        handoff = self._capabilities.last_handoff_data
+        if handoff is not None:
+            self._last_handoff = handoff
+            self._last_handoff_session = session_id
+
         return response
 
     def close_session(self, session_id: str) -> Session:
@@ -333,12 +359,65 @@ class SymbioteKernel:
             # 3. Reflection (existing)
             self._reflection.reflect_session(session_id, symbiote_id)
 
+            # 4. S-02: Persist long-run handoff as memory entry
+            self._persist_handoff_memory(session_id, symbiote_id)
+
             # Clear trace state
             if self._last_trace_session == session_id:
                 self._last_trace = None
                 self._last_trace_session = None
 
         return self._sessions.close(session_id)
+
+    def _inject_handoff_if_resuming(
+        self,
+        session_id: str,
+        symbiote_id: str,
+        extra_context: dict | None,
+    ) -> dict | None:
+        """S-01: On first message of a session, inject the most recent handoff."""
+        msg_row = self._storage.fetch_one(
+            "SELECT COUNT(*) as c FROM messages WHERE session_id = ?", (session_id,)
+        )
+        if msg_row is None or msg_row["c"] > 0:
+            return extra_context
+
+        handoff_entries = self._memory.get_by_category(symbiote_id, "handoff", limit=1)
+        if not handoff_entries:
+            return extra_context
+
+        import json
+        try:
+            hd = json.loads(handoff_entries[0].content)
+            return {**(extra_context or {}), "previous_handoff": hd}
+        except Exception:
+            return extra_context
+
+    def _persist_handoff_memory(self, session_id: str, symbiote_id: str) -> None:
+        """S-02: Persist long-run handoff_data as a MemoryEntry(category='handoff')."""
+        if self._last_handoff is None or self._last_handoff_session != session_id:
+            return
+
+        import json
+
+        from symbiote.core.models import MemoryEntry
+        from symbiote.core.scoring import _utcnow, _uuid
+
+        entry = MemoryEntry(
+            id=_uuid(),
+            symbiote_id=symbiote_id,
+            session_id=session_id,
+            type="session_summary",
+            category="handoff",
+            scope="global",
+            source="system",
+            content=json.dumps(self._last_handoff, ensure_ascii=False),
+            importance=1.0,
+            created_at=_utcnow(),
+        )
+        self._memory.store(entry)
+        self._last_handoff = None
+        self._last_handoff_session = None
 
     def report_feedback(
         self, session_id: str, score: float, source: str = "user"

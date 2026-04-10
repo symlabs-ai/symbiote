@@ -261,6 +261,26 @@ class LongRunRunner:
             completed, max_blocks, total_elapsed,
         )
 
+        # Build handoff artifact for session resume (L-04)
+        handoff_data = {
+            "user_input": context.user_input,
+            "blocks_completed": completed,
+            "blocks_total": max_blocks,
+            "plan_blocks": plan.blocks,
+            "block_results": [
+                {
+                    "name": b.block_name,
+                    "success": b.success,
+                    "output": b.output,
+                    "evaluator_score": b.evaluator_score,
+                    "evaluator_feedback": b.evaluator_feedback,
+                }
+                for b in block_results
+            ],
+            "pending_blocks": plan.blocks[completed:] if completed < plan.total_blocks else [],
+            "output_summary": output,
+        }
+
         return RunResult(
             success=completed > 0,
             output=output,
@@ -268,6 +288,7 @@ class LongRunRunner:
             loop_trace=trace,
             plan=plan,
             block_results=block_results,
+            handoff_data=handoff_data,
         )
 
     # ── Planner ──────────────────────────────────────────────────────────

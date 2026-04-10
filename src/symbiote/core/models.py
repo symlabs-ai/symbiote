@@ -66,7 +66,7 @@ class Message(BaseModel):
 # "declarative" — facts, preferences, constraints (what is/was true)
 # "procedural" — how-to knowledge, workflows, conventions
 # "meta" — summaries, reflections, notes about other memories
-MemoryCategory = Literal["ephemeral", "declarative", "procedural", "meta"]
+MemoryCategory = Literal["ephemeral", "declarative", "procedural", "meta", "handoff"]
 
 # Maps each memory type to its category for automatic classification.
 MEMORY_TYPE_CATEGORY: dict[str, MemoryCategory] = {
