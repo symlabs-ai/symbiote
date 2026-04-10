@@ -64,7 +64,10 @@ def setup(tmp_path: Path):
 class TestSDKFullFlow:
     def test_health(self, setup) -> None:
         result = setup["sdk"].health()
-        assert result == {"status": "ok"}
+        assert result["status"] == "ok"
+        assert result["service"] == "symbiote"
+        assert "version" in result
+        assert "commit" in result
 
     def test_create_and_get_symbiote(self, setup) -> None:
         sym = setup["sdk"].create_symbiote(name="SDKBot", role="assistant")
