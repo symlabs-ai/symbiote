@@ -59,6 +59,10 @@ Rules:
 - Order blocks by dependency (foundational first, dependent later)
 - Each block should have: name, description, success_criteria
 - Be ambitious but realistic about scope
+- Do not include implementation details in descriptions — focus on deliverables
+  and observable outcomes; implementation details cascade errors to the generator
+- If a previous session handoff is provided, identify completed blocks and plan
+  only the remaining work — do not re-plan what is already done
 - Return ONLY a JSON array of blocks, no other text
 
 Example output:
@@ -77,6 +81,9 @@ Rules:
 - Grade each criterion on a 0.0-1.0 scale
 - Provide specific, actionable feedback for anything below 0.8
 - If any criterion is below the threshold, the block FAILS
+- It is unacceptable to mark a block as passed unless every success criterion
+  is explicitly verified — do not assume things work because the generator claims so
+- If you cannot verify a criterion, mark it as failed with a blocking_issue
 - Return ONLY a JSON object with scores and feedback
 
 Example output:
@@ -150,6 +157,15 @@ class LongRunRunner:
         block_results: list[BlockResult] = []
         max_blocks = min(context.max_blocks, plan.total_blocks)
         accumulated_messages: list[dict] = []
+
+        # B3: Pre-flight — verify tools with health_check before spending tokens
+        preflight_error = self._preflight_tools(context)
+        if preflight_error:
+            return RunResult(
+                success=False,
+                error=f"Pre-flight check failed: {preflight_error}",
+                runner_type=self.runner_type,
+            )
 
         for block_idx in range(max_blocks):
             block_def = plan.blocks[block_idx]
@@ -296,6 +312,21 @@ class LongRunRunner:
     def _run_planner(self, context: AssembledContext) -> LongRunPlan:
         """Phase 1: Expand user prompt into a structured work plan."""
         planner_prompt = context.planner_prompt or _DEFAULT_PLANNER_PROMPT
+
+        # B2: If resuming from a previous session, orient the planner with handoff data
+        if context.extra_context and "previous_handoff" in context.extra_context:
+            ph = context.extra_context["previous_handoff"]
+            done = [b.get("name") for b in ph.get("block_results", []) if b.get("success")]
+            pending = [b.get("name") for b in ph.get("pending_blocks", [])]
+            planner_prompt = (
+                planner_prompt
+                + "\n\n## Previous Session Handoff\n"
+                "Read this before creating your plan:\n"
+                f"- Original task: {ph.get('user_input', '')}\n"
+                f"- Completed blocks: {done}\n"
+                f"- Pending blocks: {pending}\n"
+                "Plan ONLY the pending blocks. Do not re-plan completed work.\n"
+            )
 
         messages = [
             {"role": "system", "content": planner_prompt},
@@ -450,8 +481,11 @@ class LongRunRunner:
             parts.append("\n## Progress So Far\n" + "\n".join(progress))
 
         parts.append(
-            "\n## Task\nExecute ONLY the current block. "
-            "Use the available tools to complete the work described above. "
+            "\n## Constraints\n"
+            "Work ONLY on the current block. Do not implement anything outside its scope.\n"
+            "Do not report this block as complete until all success_criteria are explicitly satisfied.\n"
+            "If you are uncertain whether a criterion is met, it is not met.\n"
+            "\n## Task\nExecute the current block using the available tools. "
             "When done, summarize what you accomplished."
         )
 
@@ -471,6 +505,29 @@ class LongRunRunner:
             f"Issues to fix:\n{issues}\n\n"
             f"Address ALL issues above before completing this block."
         )
+
+    # ── Pre-flight ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def _preflight_tools(context: AssembledContext) -> str | None:
+        """B3: Check tool availability before starting blocks.
+
+        Only verifies tools that expose a ``health_check()`` method — existing
+        tools without it are silently skipped (non-breaking).
+
+        Returns an error message if any check fails, otherwise None.
+        """
+        tools = getattr(context, "tools", None)
+        if not tools:
+            return None
+        for tool in tools:
+            if hasattr(tool, "health_check"):
+                try:
+                    tool.health_check()
+                except Exception as exc:
+                    name = getattr(tool, "name", repr(tool))
+                    return f"Tool '{name}' unavailable: {exc}"
+        return None
 
     # ── Evaluator ────────────────────────────────────────────────────────
 
