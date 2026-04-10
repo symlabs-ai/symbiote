@@ -42,6 +42,10 @@ class APIKey(BaseModel):
     is_active: bool
     created_at: str
 
+    @property
+    def is_admin(self) -> bool:
+        return self.role == "admin"
+
 
 class APIKeyManager:
     """Manages API key lifecycle: create, validate, revoke."""

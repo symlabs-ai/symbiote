@@ -8,7 +8,7 @@ version = "0.3.6"
 description = "Kernel for persistent cognitive entities"
 readme = "README.md"
 requires-python = ">=3.12"
-license = "MIT"
+license = "AGPL-3.0"
 
 dependencies = [
     "pydantic>=2.0.0,<3.0.0",

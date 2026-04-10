@@ -223,6 +223,7 @@ class SQLiteAdapter:
                 total_elapsed_ms INTEGER,
                 stop_reason TEXT,
                 steps_json TEXT,
+                tool_mode TEXT DEFAULT 'brief',
                 created_at TEXT NOT NULL
             )""",
             "CREATE INDEX IF NOT EXISTS idx_traces_symbiote ON execution_traces(symbiote_id, created_at)",
