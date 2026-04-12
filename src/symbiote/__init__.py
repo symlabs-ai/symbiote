@@ -1,3 +1,3 @@
 """Symbiote — Kernel for persistent cognitive entities."""
 
-__version__ = "0.3.7"
+__version__ = "0.3.8"

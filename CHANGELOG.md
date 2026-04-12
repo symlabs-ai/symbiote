@@ -3,6 +3,13 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [v0.3.8] - 2026-04-12
+
+- feat: add on_after_tool_result hook to ChatRunner — caller-provided callback to stop tool loop early
+- fix: bump __version__ to 0.3.7 (was missing from version bump commit)
+
+---
+
 ## [v0.3.7] - 2026-04-10
 
 - feat: bash builtin tool (descriptor + handler)
