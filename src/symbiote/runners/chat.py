@@ -94,6 +94,7 @@ class ChatRunner:
         native_tools: bool = False,
         context_budget: int = _DEFAULT_CONTEXT_BUDGET,
         on_before_tool_call: Callable[[str, dict, str], bool] | None = None,
+        on_after_tool_result: Callable[[list[ToolCall], list[ToolCallResult]], str | None] | None = None,
         on_progress: Callable[[str, int, int], None] | None = None,
         on_stream: Callable[[str, int], None] | None = None,
     ) -> None:
@@ -104,6 +105,7 @@ class ChatRunner:
         self._native_tools = native_tools
         self._context_budget = context_budget
         self._on_before_tool_call = on_before_tool_call
+        self._on_after_tool_result = on_after_tool_result
         self._on_progress = on_progress
         self._on_stream = on_stream
 
@@ -181,16 +183,28 @@ class ChatRunner:
                 gateway_results.extend(exec_results)
                 all_tool_results.extend(exec_results)
 
-            # Feed results back for a final LLM response
-            messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
-            results = self._merge_tool_results(tool_calls, {}, gateway_results)
-            messages.append({"role": "user", "content": self._format_tool_results(results)})
+            # Hook: let the caller decide whether tool results end the loop.
+            hook_text: str | None = None
+            if self._on_after_tool_result is not None:
+                hook_text = self._on_after_tool_result(tool_calls, all_tool_results)
 
-            try:
-                final_response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
-                clean_text, _ = self._parse_response(final_response)
-            except Exception:
-                pass  # keep the tool-call text as final
+            if hook_text is not None:
+                clean_text = hook_text
+            elif all(tr.success for tr in all_tool_results):
+                # Default: skip final LLM round-trip on success when no hook.
+                if not clean_text.strip():
+                    clean_text = "Pronto."
+            else:
+                # Feed results back for a final LLM response only on failure
+                messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
+                results = self._merge_tool_results(tool_calls, {}, gateway_results)
+                messages.append({"role": "user", "content": self._format_tool_results(results)})
+
+                try:
+                    final_response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
+                    clean_text, _ = self._parse_response(final_response)
+                except Exception:
+                    pass  # keep the tool-call text as final
 
         # Release tokens — no suppression since there's no next iteration
         if on_token is not None:
@@ -354,6 +368,17 @@ class ChatRunner:
                     elapsed_ms=step_elapsed,
                 ))
                 controller.record(tc.tool_id, tc.params, tr.success)
+
+            # Hook: let the caller decide whether tool results end the loop.
+            # Returns a string to use as final text, or None to continue.
+            if self._on_after_tool_result is not None:
+                hook_text = self._on_after_tool_result(tool_calls, results)
+                if hook_text is not None:
+                    trace.stop_reason = "on_after_tool_result"
+                    final_text = hook_text
+                    if self._on_progress is not None:
+                        self._on_progress("iteration_end", iteration + 1, max_iters)
+                    break
 
             # Check loop health — stop early on stagnation or circuit breaker
             should_stop, stop_reason = controller.should_stop()
