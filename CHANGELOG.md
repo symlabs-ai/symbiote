@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [v0.4.1] - 2026-04-12
+
+- fix: ParameterTuner.apply() filters unsupported params before configure()
+
+---
+
 ## [v0.4.0] - 2026-04-12
 
 ### Novas funcionalidades
