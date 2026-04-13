@@ -3,72 +3,46 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
-## [v0.3.8] - 2026-04-12
+## [v0.4.0] - 2026-04-12
 
-- feat: add on_after_tool_result hook to ChatRunner — caller-provided callback to stop tool loop early
-- fix: bump __version__ to 0.3.7 (was missing from version bump commit)
+### Novas funcionalidades
 
----
+- **Dream Mode**: Motor de ruminacao em background com 5 fases (prune, reconcile, generalize, mine, evaluate). Toggleavel por symbiote via EnvironmentConfig (off/light/full). Budget-controlled LLM calls via BudgetTracker, dry-run mode, triggered automaticamente apos close_session(). Tabela dream_reports para persistencia de resultados.
+- **on_after_tool_result hook**: Callback no ChatRunner que permite ao caller decidir se tool results encerram o loop — substitui heuristica hardcoded de fire-and-forget. Essencial para o OS Agent do SymTalk.
+- **4-Mode Execution**: Taxonomia completa de execucao (instant/brief/long_run/continuous) implementada. Instant mode para single-shot, brief mode com loop controller, long-run com planner/evaluator por blocos, continuous mode para agentes persistentes de longa duracao.
+- **Long-Run Handoff**: RunResult.handoff_data com blocks_completed, pending_blocks, output_summary. Session orientation on resume (S-01/S-02) — previous handoff injetado na primeira mensagem de sessao retomada.
+- **Memory On-Demand**: context_mode="on_demand" expoe search_memories e search_knowledge como tools ao inves de pre-packed context.
+- **Imperative Prompts**: Constraints section no generator e regras de verificacao explicitas no evaluator para long-run mode.
+- **Preflight Tool Check**: _preflight_tools() aborta long-run se health_check() falha antes do loop.
+- **API Config Endpoint**: PUT/GET /symbiotes/{id}/config para tool_mode, long-run config, timeouts.
+- **Bash Builtin Tool**: Descriptor + handler nativo para execucao de comandos shell.
 
-## [v0.3.7] - 2026-04-10
+### Melhorias
 
-- feat: bash builtin tool (descriptor + handler)
-- feat: PUT/DELETE /symbiotes/{id} endpoints, tools allowlist in config
-- feat: tool_mode="auto" with _resolve_auto_mode() heuristic
-- feat: memory/knowledge on-demand as tools (context_mode="on_demand") — search_memories, search_knowledge builtins
-- feat: long-run handoff artifacts (L-04) — RunResult.handoff_data with blocks_completed, pending_blocks, output_summary
-- feat: session orientation on resume (S-01) — previous handoff injected on first message of new session
-- feat: handoff persistence on close_session (S-02) — MemoryEntry(category="handoff")
-- feat: planner orientation — reads previous_handoff before generating blocks, skips completed work
-- feat: imperative prompts — Constraints section in generator, explicit verification rules in evaluator
-- feat: preflight tool check — _preflight_tools() aborts long-run if health_check() fails before loop
-- fix: execution_traces CREATE TABLE now includes tool_mode column (fresh DB no longer crashes)
-- fix: APIKey.is_admin property added — 10 cross-tenant auth checks no longer throw AttributeError
-- fix: __version__ aligned to 0.3.6 in __init__.py
-- fix: pyproject.toml license corrected from MIT to AGPL-3.0
-- fix: .gitignore extended with .symbiote/, .context/, symbiote.db*
-- test: /health contract tests (4 cases covering {status, service, version, commit})
-- chore: remove AGENTS.md
+- **ChatRunner**: Suporte a on_before_tool_call, on_after_tool_result, on_progress, on_stream callbacks. Schema cache para index mode. 3-layer compaction (microcompact + loop compact + autocompact).
+- **ContextAssembler**: Resolucao de tool_mode="auto" via heuristica. Harness version overrides. Memory/knowledge shares configuraveis.
+- **EnvironmentConfig**: 3 novos campos dream (dream_mode, dream_max_llm_calls, dream_min_sessions). PUT/DELETE /symbiotes/{id} endpoints. Tools allowlist.
+- **Scoring**: Mode-aware auto_score (instant/brief/long_run/continuous calibration separada).
 
----
+### Correcoes
 
-## [v0.3.5] - 2026-04-01
+- execution_traces schema inclui tool_mode column (fresh DB nao crasha mais)
+- APIKey.is_admin property (cross-tenant auth checks nao dao AttributeError)
+- OpenAI SDK retries desabilitados em 429 (previne burst amplification)
+- __version__ alinhado com pyproject.toml
+- Licenca corrigida de MIT para AGPL-3.0
 
-- fix: disable OpenAI SDK-level retries on 429 (max_retries=0) — prevents burst amplification
-- fix: exclude rate-limit errors from ChatRunner outer retry layer
-- feat: inject symgateway project slug header in ForgeLLM adapter
-- feat: staging environment migrated to Docker container (staging-symbiote, port 8008)
-- chore: update Gitea CI workflow for Docker-based staging deploy
-- docs: update INFRA.md with Docker staging instructions
+### Documentacao
 
----
+- 4 diagramas arquiteturais (Mermaid + PDF): estrutural, modos de execucao, memoria/aprendizado, dream mode
+- Clark migration guide para v0.3.0
+- Documentacao da taxonomia de 4 modos de execucao
 
-## [v0.3.4] - 2026-04-01
+### Outros
 
-- feat: API config endpoint — PUT/GET /symbiotes/{id}/config (tool_mode, long-run config, timeouts)
-- docs: Clark migration guide — execution modes, routing strategies, long-run editorial example
-- docs: update all docs for 4-mode execution taxonomy
-
----
-
-## [v0.3.3] - 2026-04-01
-
-- feat: long-run mode — Planner/Generator/Evaluator architecture
-- docs: harness_plan — 4-mode taxonomy, long-run design, continuous concept
-
----
-
-## [v0.3.2] - 2026-04-01
-
-- feat: brief mode — sync trace, calibrated scoring, multi-step instructions
-
----
-
-## [v0.3.1] - 2026-04-01
-
-- feat: instant mode — mode-aware harness for single-shot execution
-- docs: revise harness_plan.md — mark phases 1-4 as implemented, add future work from Anthropic article
-- docs: Clark migration guide for v0.3.0 — 5 adoption levels
+- 1346 tests (up from 1184), incluindo 35 novos testes para Dream Mode
+- Modulo dream/ com engine.py, phases.py, models.py
+- EnvironmentManager com getters para dream config
 
 ---
 
