@@ -127,10 +127,24 @@ class ParameterTuner:
             logger.warning("[tuner] env_manager has no configure method")
             return result
 
-        configure(symbiote_id=result.symbiote_id, **result.adjustments)
-        result.applied = True
+        # Filter to only params that configure() accepts
+        import inspect
+        valid_params = set(inspect.signature(configure).parameters) - {"self"}
+        applicable = {k: v for k, v in result.adjustments.items() if k in valid_params}
+        skipped = {k: v for k, v in result.adjustments.items() if k not in valid_params}
 
-        for param, value in result.adjustments.items():
+        for param, value in skipped.items():
+            logger.warning(
+                "[tuner] symbiote=%s skipped %s=%s (not a configure() param)",
+                result.symbiote_id[:8], param, value,
+            )
+
+        if applicable:
+            configure(symbiote_id=result.symbiote_id, **applicable)
+
+        result.applied = bool(applicable)
+
+        for param, value in applicable.items():
             logger.info(
                 "[tuner] symbiote=%s tier=%d adjusted %s=%s reason=%s",
                 result.symbiote_id[:8],
