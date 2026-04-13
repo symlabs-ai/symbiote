@@ -21,6 +21,8 @@ from symbiote.core.session import SessionManager
 from symbiote.core.session_lock import SessionLock
 from symbiote.discovery.loader import DiscoveredToolLoader
 from symbiote.discovery.repository import DiscoveredToolRepository
+from symbiote.dream.engine import DreamEngine
+from symbiote.dream.models import DreamReport
 from symbiote.environment.manager import EnvironmentManager
 from symbiote.environment.policies import PolicyGate
 from symbiote.environment.tools import ToolGateway
@@ -116,6 +118,9 @@ class SymbioteKernel:
 
         # Optional evolver LLM (host provides, can be different from main LLM)
         self._evolver_llm: LLMPort | None = None
+
+        # Dream engine (lazy — created on first use)
+        self._dream_engine: DreamEngine | None = None
 
         # Capability surface
         self._capabilities = CapabilitySurface(
@@ -362,6 +367,9 @@ class SymbioteKernel:
             # 4. S-02: Persist long-run handoff as memory entry
             self._persist_handoff_memory(session_id, symbiote_id)
 
+            # 5. Dream mode — maybe trigger background dream
+            self._maybe_dream(symbiote_id)
+
             # Clear trace state
             if self._last_trace_session == session_id:
                 self._last_trace = None
@@ -418,6 +426,43 @@ class SymbioteKernel:
         self._memory.store(entry)
         self._last_handoff = None
         self._last_handoff_session = None
+
+    # ── Dream Mode ─────────────────────────────────────────────────────
+
+    def _get_or_create_dream_engine(self, cfg) -> DreamEngine:
+        if self._dream_engine is None:
+            self._dream_engine = DreamEngine(
+                storage=self._storage,
+                memory=self._memory,
+                llm=self._evolver_llm or self._llm,
+                max_llm_calls=cfg.dream_max_llm_calls,
+                min_sessions=cfg.dream_min_sessions,
+            )
+        return self._dream_engine
+
+    def _maybe_dream(self, symbiote_id: str) -> None:
+        """Trigger a background dream cycle if conditions are met."""
+        cfg = self._environment.get_config(symbiote_id)
+        if cfg is None or cfg.dream_mode == "off":
+            return
+        engine = self._get_or_create_dream_engine(cfg)
+        if engine.should_dream(symbiote_id, cfg.dream_mode):
+            engine.dream_async(symbiote_id, cfg.dream_mode)
+
+    def dream(self, symbiote_id: str, *, dry_run: bool = False) -> DreamReport:
+        """Run a dream cycle synchronously (for CLI / manual invocation)."""
+
+        cfg = self._environment.get_config(symbiote_id)
+        mode = cfg.dream_mode if cfg and cfg.dream_mode != "off" else "light"
+        engine = DreamEngine(
+            storage=self._storage,
+            memory=self._memory,
+            llm=self._evolver_llm or self._llm,
+            max_llm_calls=cfg.dream_max_llm_calls if cfg else 10,
+            min_sessions=1,  # manual trigger ignores min_sessions
+            dry_run=dry_run,
+        )
+        return engine.dream(symbiote_id, mode)
 
     def report_feedback(
         self, session_id: str, score: float, source: str = "user"

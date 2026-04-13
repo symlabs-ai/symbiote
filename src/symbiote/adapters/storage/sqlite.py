@@ -205,6 +205,9 @@ class SQLiteAdapter:
             "ALTER TABLE environment_configs ADD COLUMN evaluator_criteria_json TEXT DEFAULT NULL",
             "ALTER TABLE environment_configs ADD COLUMN context_strategy TEXT DEFAULT 'hybrid'",
             "ALTER TABLE environment_configs ADD COLUMN max_blocks INTEGER DEFAULT 20",
+            "ALTER TABLE environment_configs ADD COLUMN dream_mode TEXT DEFAULT 'off'",
+            "ALTER TABLE environment_configs ADD COLUMN dream_max_llm_calls INTEGER DEFAULT 10",
+            "ALTER TABLE environment_configs ADD COLUMN dream_min_sessions INTEGER DEFAULT 5",
         ):
             try:
                 self._conn.execute(stmt)
@@ -255,6 +258,19 @@ class SQLiteAdapter:
                 UNIQUE(symbiote_id, component, version)
             )""",
             "CREATE INDEX IF NOT EXISTS idx_hv_active ON harness_versions(symbiote_id, component, is_active)",
+            """CREATE TABLE IF NOT EXISTS dream_reports (
+                id TEXT PRIMARY KEY,
+                symbiote_id TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                dream_mode TEXT NOT NULL,
+                dry_run INTEGER DEFAULT 0,
+                total_llm_calls INTEGER DEFAULT 0,
+                max_llm_calls INTEGER DEFAULT 10,
+                phases_json TEXT DEFAULT '[]',
+                FOREIGN KEY (symbiote_id) REFERENCES symbiotes(id)
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_dream_reports_symbiote ON dream_reports(symbiote_id, started_at)",
         ):
             try:
                 self._conn.execute(stmt)

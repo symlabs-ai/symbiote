@@ -170,6 +170,10 @@ class EnvironmentConfig(BaseModel):
     evaluator_criteria: list[dict] | None = None
     context_strategy: Literal["compaction", "reset", "hybrid"] = "hybrid"
     max_blocks: int = Field(default=20, ge=1, le=100)
+    # Dream mode configuration
+    dream_mode: Literal["off", "light", "full"] = "off"
+    dream_max_llm_calls: int = Field(default=10, ge=1, le=50)
+    dream_min_sessions: int = Field(default=5, ge=1, le=100)
 
 
 # ── Decision ─────────────────────────────────────────────────────────────────

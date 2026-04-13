@@ -42,6 +42,10 @@ class EnvironmentManager:
         evaluator_criteria: list[dict] | None = None,
         context_strategy: str | None = None,
         max_blocks: int | None = None,
+        # Dream mode fields
+        dream_mode: str | None = None,
+        dream_max_llm_calls: int | None = None,
+        dream_min_sessions: int | None = None,
     ) -> EnvironmentConfig:
         """Create or update an environment config for a symbiote+workspace combo."""
         existing = self._fetch_exact(symbiote_id, workspace_id)
@@ -80,6 +84,9 @@ class EnvironmentManager:
                 evaluator_criteria=evaluator_criteria if evaluator_criteria is not None else existing.evaluator_criteria,
                 context_strategy=context_strategy if context_strategy is not None else existing.context_strategy,
                 max_blocks=max_blocks if max_blocks is not None else existing.max_blocks,
+                dream_mode=dream_mode if dream_mode is not None else existing.dream_mode,
+                dream_max_llm_calls=dream_max_llm_calls if dream_max_llm_calls is not None else existing.dream_max_llm_calls,
+                dream_min_sessions=dream_min_sessions if dream_min_sessions is not None else existing.dream_min_sessions,
             )
             self._storage.execute(
                 "UPDATE environment_configs SET "
@@ -89,7 +96,8 @@ class EnvironmentManager:
                 "memory_share = ?, knowledge_share = ?, max_tool_iterations = ?, "
                 "tool_call_timeout = ?, loop_timeout = ?, tool_mode = ?, context_mode = ?, "
                 "planner_prompt = ?, evaluator_prompt = ?, evaluator_criteria_json = ?, "
-                "context_strategy = ?, max_blocks = ? "
+                "context_strategy = ?, max_blocks = ?, "
+                "dream_mode = ?, dream_max_llm_calls = ?, dream_min_sessions = ? "
                 "WHERE id = ?",
                 (
                     json.dumps(cfg.tools),
@@ -113,6 +121,9 @@ class EnvironmentManager:
                     json.dumps(cfg.evaluator_criteria) if cfg.evaluator_criteria else None,
                     cfg.context_strategy,
                     cfg.max_blocks,
+                    cfg.dream_mode,
+                    cfg.dream_max_llm_calls,
+                    cfg.dream_min_sessions,
                     cfg.id,
                 ),
             )
@@ -143,6 +154,9 @@ class EnvironmentManager:
             evaluator_criteria=evaluator_criteria,
             context_strategy=context_strategy or "hybrid",
             max_blocks=max_blocks if max_blocks is not None else 20,
+            dream_mode=dream_mode or "off",
+            dream_max_llm_calls=dream_max_llm_calls if dream_max_llm_calls is not None else 10,
+            dream_min_sessions=dream_min_sessions if dream_min_sessions is not None else 5,
         )
         self._storage.execute(
             "INSERT INTO environment_configs "
@@ -150,8 +164,9 @@ class EnvironmentManager:
             "humans_json, policies_json, resources_json, tool_tags_json, "
             "tool_loading, tool_loop, prompt_caching, memory_share, knowledge_share, "
             "max_tool_iterations, tool_call_timeout, loop_timeout, tool_mode, context_mode, "
-            "planner_prompt, evaluator_prompt, evaluator_criteria_json, context_strategy, max_blocks) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "planner_prompt, evaluator_prompt, evaluator_criteria_json, context_strategy, max_blocks, "
+            "dream_mode, dream_max_llm_calls, dream_min_sessions) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 cfg.id,
                 cfg.symbiote_id,
@@ -177,6 +192,9 @@ class EnvironmentManager:
                 json.dumps(cfg.evaluator_criteria) if cfg.evaluator_criteria else None,
                 cfg.context_strategy,
                 cfg.max_blocks,
+                cfg.dream_mode,
+                cfg.dream_max_llm_calls,
+                cfg.dream_min_sessions,
             ),
         )
         return cfg
@@ -321,6 +339,28 @@ class EnvironmentManager:
             "max_blocks": cfg.max_blocks,
         }
 
+    def get_dream_mode(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> str:
+        """Return dream_mode from config, or 'off' if no config."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return "off"
+        return cfg.dream_mode
+
+    def get_dream_config(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> dict:
+        """Return all dream-related config fields as a dict."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return {"dream_mode": "off", "dream_max_llm_calls": 10, "dream_min_sessions": 5}
+        return {
+            "dream_mode": cfg.dream_mode,
+            "dream_max_llm_calls": cfg.dream_max_llm_calls,
+            "dream_min_sessions": cfg.dream_min_sessions,
+        }
+
     # ── private helpers ────────────────────────────────────────────────
 
     def _fetch_exact(
@@ -370,4 +410,7 @@ class EnvironmentManager:
             evaluator_criteria=json.loads(row["evaluator_criteria_json"]) if row.get("evaluator_criteria_json") else None,
             context_strategy=row.get("context_strategy") or "hybrid",
             max_blocks=int(row.get("max_blocks", 20) or 20),
+            dream_mode=row.get("dream_mode") or "off",
+            dream_max_llm_calls=int(row.get("dream_max_llm_calls", 10) or 10),
+            dream_min_sessions=int(row.get("dream_min_sessions", 5) or 5),
         )
