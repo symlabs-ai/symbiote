@@ -172,3 +172,106 @@ class TestSpawnExecution:
             (result["session_id"],),
         )
         assert "[subagent]" in row["goal"]
+
+
+class TestSpawnEffort:
+    """``effort`` is an optional per-call LLM override that lets a skill or
+    parent agent escalate the sub-session to ``mode="high"`` without
+    changing the target Symbiota's adapter default."""
+
+    def test_descriptor_lists_effort_as_optional_enum(self) -> None:
+        props = SPAWN_DESCRIPTOR.parameters["properties"]
+        assert "effort" in props
+        assert set(props["effort"]["enum"]) == {"normal", "high"}
+        # Optional — NOT in required list.
+        assert "effort" not in SPAWN_DESCRIPTOR.parameters.get("required", [])
+
+    def test_spawn_with_effort_high_forwards_llm_config(
+        self, kernel: SymbioteKernel, monkeypatch
+    ) -> None:
+        kernel.create_symbiote(name="EffortBot", role="assistant")
+        mgr = SubagentManager(kernel)
+
+        captured: dict = {}
+        original_message = kernel.message
+
+        def spy_message(*args, **kwargs):
+            captured["llm_config"] = kwargs.get("llm_config")
+            return original_message(*args, **kwargs)
+
+        monkeypatch.setattr(kernel, "message", spy_message)
+
+        result = mgr.spawn({
+            "target_symbiote": "EffortBot",
+            "task": "Reflect deeply",
+            "effort": "high",
+        })
+
+        assert result["success"] is True
+        assert captured["llm_config"] == {"mode": "high"}
+
+    def test_spawn_without_effort_omits_llm_config(
+        self, kernel: SymbioteKernel, monkeypatch
+    ) -> None:
+        """Backward-compat: spawn calls that don't know about effort
+        keep the legacy behaviour (no llm_config forwarded)."""
+        kernel.create_symbiote(name="LegacyBot", role="assistant")
+        mgr = SubagentManager(kernel)
+
+        captured: dict = {}
+        original_message = kernel.message
+
+        def spy_message(*args, **kwargs):
+            captured["llm_config"] = kwargs.get("llm_config")
+            return original_message(*args, **kwargs)
+
+        monkeypatch.setattr(kernel, "message", spy_message)
+
+        result = mgr.spawn({
+            "target_symbiote": "LegacyBot",
+            "task": "Plain task",
+        })
+
+        assert result["success"] is True
+        assert captured["llm_config"] is None
+
+    def test_spawn_with_effort_normal_forwards_explicit_mode(
+        self, kernel: SymbioteKernel, monkeypatch
+    ) -> None:
+        """Explicit ``effort=normal`` still sets llm_config — semantically
+        different from omitted, in case downstream callers want to
+        observe the explicit choice."""
+        kernel.create_symbiote(name="NormalBot", role="assistant")
+        mgr = SubagentManager(kernel)
+
+        captured: dict = {}
+        original_message = kernel.message
+
+        def spy_message(*args, **kwargs):
+            captured["llm_config"] = kwargs.get("llm_config")
+            return original_message(*args, **kwargs)
+
+        monkeypatch.setattr(kernel, "message", spy_message)
+
+        result = mgr.spawn({
+            "target_symbiote": "NormalBot",
+            "task": "Normal task",
+            "effort": "normal",
+        })
+
+        assert result["success"] is True
+        assert captured["llm_config"] == {"mode": "normal"}
+
+    def test_spawn_with_invalid_effort_rejects(self, kernel: SymbioteKernel) -> None:
+        kernel.create_symbiote(name="StrictBot", role="assistant")
+        mgr = SubagentManager(kernel)
+
+        result = mgr.spawn({
+            "target_symbiote": "StrictBot",
+            "task": "Whatever",
+            "effort": "ultra",  # not in enum
+        })
+
+        assert result["success"] is False
+        assert "effort" in result["error"].lower()
+        assert "ultra" in result["error"]

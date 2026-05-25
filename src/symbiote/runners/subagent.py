@@ -46,11 +46,26 @@ SPAWN_DESCRIPTOR = ToolDescriptor(
                 "type": "string",
                 "description": "The task description for the target Symbiota",
             },
+            "effort": {
+                "type": "string",
+                "enum": ["normal", "high"],
+                "description": (
+                    "Optional LLM effort level for this sub-session. 'normal' uses the "
+                    "target Symbiota's default model; 'high' escalates to a stronger model "
+                    "(when the underlying adapter routes 'mode' to a different objective). "
+                    "Omit for default behaviour."
+                ),
+            },
         },
         "required": ["target_symbiote", "task"],
     },
     handler_type="builtin",
 )
+
+
+# Valid values for the spawn ``effort`` parameter. Stays in sync with
+# SPAWN_DESCRIPTOR.parameters.properties.effort.enum above.
+_VALID_EFFORTS = frozenset({"normal", "high"})
 
 
 # ── Restricted tools ─────────────────────────────────────────────────────────
@@ -84,13 +99,24 @@ class SubagentManager:
         """Execute a spawn tool call.
 
         Args:
-            params: {"target_symbiote": str, "task": str}
+            params: {
+                "target_symbiote": str,
+                "task": str,
+                "effort": "normal" | "high"  (optional)
+            }
+
+        ``effort`` (when set) is forwarded to ``kernel.message`` as
+        ``llm_config={"mode": effort}`` so the LLM adapter for this
+        sub-session can pick a different objective / model / thinking
+        budget. The default omits ``llm_config`` entirely (sub-session
+        uses the target Symbiota's adapter default).
 
         Returns:
             Dict with spawn result details.
         """
         target_name = params.get("target_symbiote", "")
         task = params.get("task", "")
+        effort = params.get("effort")
 
         # Recursion guard
         if self._depth >= self.MAX_DEPTH:
@@ -117,6 +143,20 @@ class SubagentManager:
                 error="task is required",
             ).model_dump()
 
+        # Validate effort BEFORE creating the session — invalid value
+        # should surface as a structured error, not propagate to the
+        # adapter as garbage that the server then rejects with 422.
+        if effort is not None and effort not in _VALID_EFFORTS:
+            return SpawnResult(
+                success=False,
+                target_symbiote=target_name,
+                task=task,
+                error=(
+                    f"invalid effort {effort!r}: expected one of "
+                    f"{sorted(_VALID_EFFORTS)} or omit for default"
+                ),
+            ).model_dump()
+
         # Resolve target Symbiota
         target = self._resolve_symbiote(target_name)
         if target is None:
@@ -135,10 +175,20 @@ class SubagentManager:
                 goal=f"[subagent] {task}",
             )
 
+            # Build per-call LLM overrides. Only carry ``mode`` when
+            # ``effort`` was explicitly set — omitting llm_config keeps
+            # the default path (adapter's instance default) identical
+            # to pre-effort behaviour, preserving backward compat for
+            # callers that don't know about effort yet.
+            llm_config: dict | None = None
+            if effort is not None:
+                llm_config = {"mode": effort}
+
             # Run the task
             response = self._kernel.message(
                 session_id=session.id,
                 content=task,
+                llm_config=llm_config,
             )
 
             # Close the session

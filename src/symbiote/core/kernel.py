@@ -223,20 +223,32 @@ class SymbioteKernel:
         session_id: str,
         content: str,
         extra_context: dict | None = None,
+        llm_config: dict | None = None,
     ) -> str:
         """Add user message, run chat capability, add assistant message, return response.
 
         Uses per-session locking: concurrent requests on the same session are
         serialized, while different sessions process in parallel.
+
+        Args:
+            llm_config: Optional dict of per-call LLM overrides (e.g.
+                ``{"mode": "high"}``). Propagated all the way to the
+                runner's ``self._llm.stream(messages, config=...)`` call
+                so a single message can use a different effort / model /
+                temperature than the session's default — without
+                affecting other sessions that share the same adapter.
         """
         with self._session_lock.acquire(session_id):
-            return self._message_inner(session_id, content, extra_context)
+            return self._message_inner(
+                session_id, content, extra_context, llm_config=llm_config
+            )
 
     def _message_inner(
         self,
         session_id: str,
         content: str,
         extra_context: dict | None = None,
+        llm_config: dict | None = None,
     ) -> str:
         row = self._storage.fetch_one(
             "SELECT symbiote_id FROM sessions WHERE id = ?", (session_id,)
@@ -253,7 +265,9 @@ class SymbioteKernel:
         self._sessions.add_message(session_id, "user", content)
 
         response = self._capabilities.chat(
-            symbiote_id, session_id, content, extra_context=extra_context
+            symbiote_id, session_id, content,
+            extra_context=extra_context,
+            llm_config=llm_config,
         )
 
         if isinstance(response, dict):
@@ -284,15 +298,18 @@ class SymbioteKernel:
         content: str,
         extra_context: dict | None = None,
         on_token: Callable[[str], None] | None = None,
+        llm_config: dict | None = None,
     ) -> str:
         """Async variant of message() — supports async tool handlers and on_token streaming.
 
         Uses per-session async locking: concurrent requests on the same session
         are serialized, while different sessions process in parallel.
+
+        ``llm_config`` mirrors the sync ``message()`` semantics.
         """
         async with self._session_lock.acquire_async(session_id):
             return await self._message_async_inner(
-                session_id, content, extra_context, on_token
+                session_id, content, extra_context, on_token, llm_config=llm_config
             )
 
     async def _message_async_inner(
@@ -301,6 +318,7 @@ class SymbioteKernel:
         content: str,
         extra_context: dict | None = None,
         on_token: Callable[[str], None] | None = None,
+        llm_config: dict | None = None,
     ) -> str:
         row = self._storage.fetch_one(
             "SELECT symbiote_id FROM sessions WHERE id = ?", (session_id,)
@@ -322,6 +340,7 @@ class SymbioteKernel:
             content,
             extra_context=extra_context,
             on_token=on_token,
+            llm_config=llm_config,
         )
 
         if isinstance(response, dict):

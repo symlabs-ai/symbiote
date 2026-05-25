@@ -120,8 +120,14 @@ class CapabilitySurface:
         session_id: str,
         content: str,
         extra_context: dict | None = None,
+        llm_config: dict | None = None,
     ) -> str:
-        """Build context, select ChatRunner, run, return response text."""
+        """Build context, select ChatRunner, run, return response text.
+
+        ``llm_config`` is forwarded to the runner so per-call overrides
+        (e.g. ``{"mode": "high"}`` for effort escalation) reach the LLM
+        adapter via the ``config`` kwarg of ``stream()``.
+        """
         runner = self._runner_registry.select("chat")
         if runner is None:
             raise CapabilityError("chat", "No runner available for intent 'chat'")
@@ -133,7 +139,7 @@ class CapabilitySurface:
             extra_context=extra_context,
         )
 
-        result = runner.run(context)
+        result = runner.run(context, llm_config=llm_config)
         self._last_loop_trace = getattr(result, "loop_trace", None)
         self._last_handoff_data = getattr(result, "handoff_data", None)
         if not result.success:
@@ -148,6 +154,7 @@ class CapabilitySurface:
         content: str,
         extra_context: dict | None = None,
         on_token: Callable[[str], None] | None = None,
+        llm_config: dict | None = None,
     ) -> Any:
         """Async variant of chat() — uses run_async() so tool handlers can be coroutines.
 
@@ -155,6 +162,7 @@ class CapabilitySurface:
             on_token: Optional callback invoked with each token as it is generated.
                 Requires the LLM adapter to expose a ``stream()`` method; otherwise
                 called once with the full response text.
+            llm_config: Per-call LLM overrides forwarded to the runner.
         """
         runner = self._runner_registry.select("chat")
         if runner is None:
@@ -170,7 +178,7 @@ class CapabilitySurface:
         if not hasattr(runner, "run_async"):
             raise CapabilityError("chat", "Runner does not support async execution")
 
-        result = await runner.run_async(context, on_token=on_token)
+        result = await runner.run_async(context, on_token=on_token, llm_config=llm_config)
         self._last_loop_trace = getattr(result, "loop_trace", None)
         self._last_handoff_data = getattr(result, "handoff_data", None)
         if not result.success:

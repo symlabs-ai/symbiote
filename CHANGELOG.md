@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [v0.5.0] - 2026-05-25
+
+### Novas funcionalidades
+
+- **Per-call `llm_config` propaga `kernel.message()` → `ChatRunner.run()` → adapter `config`** — novo kwarg opcional em `SymbioteKernel.message()` (e `message_async`) que carrega overrides de LLM ("essa chamada específica deve usar mode X / temperature Y") sem mutar a sessão nem o adapter global. Propagação cobre toda a cadeia: `kernel._message_inner` → `Capabilities.chat` → `ChatRunner.run` → `_build_llm_kwargs(context, llm_config=...)` que faz merge whitelist sobre `context.generation_settings` (copy-on-write — assembled context fica imutável). O dict de merge é o mesmo `config` que o adapter recebe via `self._llm.stream(messages, config=..., tools=...)`. Backward-compat: chamadas sem `llm_config` (None ou omitido) caem no caminho anterior bit-a-bit. ### Novo `effort` em `SubagentManager.spawn` — `SPAWN_DESCRIPTOR.parameters.properties.effort` aceita `"normal"` | `"high"` opcional. Quando setado, o spawn carrega `effort` no params → `SubagentManager.spawn` converte pra `llm_config={"mode": effort}` → `kernel.message(..., llm_config=...)`. Permite que sub-sessões individuais subam pra Opus-grade enquanto outras seguem em Sonnet, **sem mexer no adapter registrado no boot**. Effort inválido (`"ultra"` etc) rejeitado em `SubagentManager.spawn` antes de criar sessão — retorna `SpawnResult(success=False, error=...)` com mensagem clara. ### Testes — 4 novos em `test_subagent.py::TestSpawnEffort` cobrindo: descriptor lista effort como enum opcional; spawn com `effort="high"` forward llm_config; spawn sem effort omite llm_config (backward-compat); spawn com effort inválido rejeita estruturado. 4 novos em `test_chat_runner.py::TestLLMConfigOverride`: merge no stream config; override vence context settings; ausência preserva context; merge não muta context. 68/68 testes passam.
+
 ## [v0.4.1] - 2026-04-12
 
 - fix: ParameterTuner.apply() filters unsupported params before configure()

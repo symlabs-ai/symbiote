@@ -116,6 +116,7 @@ class ChatRunner:
         self,
         context: AssembledContext,
         on_token: Callable[[str], None] | None = None,
+        llm_config: dict | None = None,
     ) -> RunResult:
         """Run the chat runner synchronously with tool-loop support.
 
@@ -126,15 +127,21 @@ class ChatRunner:
         When ``context.tool_mode == "instant"``, a streamlined fast-path is
         used: single LLM call, optional single tool execution, no loop
         controller, no compaction, no progress callbacks.
+
+        ``llm_config`` is merged into the ``config`` kwarg passed to
+        ``self._llm.stream(...)`` — useful for per-call overrides like
+        ``{"mode": "high"}`` (effort escalation) without mutating session
+        or runner state.
         """
         if context.tool_mode == "instant":
-            return self._run_instant(context, on_token)
-        return self._run_loop(context, on_token)
+            return self._run_instant(context, on_token, llm_config=llm_config)
+        return self._run_loop(context, on_token, llm_config=llm_config)
 
     def _run_instant(
         self,
         context: AssembledContext,
         on_token: Callable[[str], None] | None = None,
+        llm_config: dict | None = None,
     ) -> RunResult:
         """Fast-path for instant mode: single LLM call + optional tool exec.
 
@@ -144,7 +151,7 @@ class ChatRunner:
         validation, on_stream, on_token.
         """
         messages = self._build_messages(context)
-        kwargs = self._build_llm_kwargs(context)
+        kwargs = self._build_llm_kwargs(context, llm_config=llm_config)
         loop_start = time.monotonic()
 
         # Single LLM call with retry
@@ -254,10 +261,11 @@ class ChatRunner:
         self,
         context: AssembledContext,
         on_token: Callable[[str], None] | None = None,
+        llm_config: dict | None = None,
     ) -> RunResult:
         """Full loop execution for brief/continuous modes."""
         messages = self._build_messages(context)
-        kwargs = self._build_llm_kwargs(context)
+        kwargs = self._build_llm_kwargs(context, llm_config=llm_config)
         max_iters = self._resolve_max_iters(context)
         initial_msg_count = len(messages)
         controller = LoopController(
@@ -454,14 +462,15 @@ class ChatRunner:
         self,
         context: AssembledContext,
         on_token: Callable[[str], None] | None = None,
+        llm_config: dict | None = None,
     ) -> RunResult:
         """Async variant of run() with tool-loop support."""
         # Instant mode uses sync fast-path (no async tool execution needed
         # for a single call) — avoids duplicating the instant logic.
         if context.tool_mode == "instant":
-            return self._run_instant(context, on_token)
+            return self._run_instant(context, on_token, llm_config=llm_config)
         messages = self._build_messages(context)
-        kwargs = self._build_llm_kwargs(context)
+        kwargs = self._build_llm_kwargs(context, llm_config=llm_config)
         max_iters = self._resolve_max_iters(context)
         initial_msg_count = len(messages)
         controller = LoopController(
@@ -756,8 +765,18 @@ class ChatRunner:
 
     # ── internal ─────────────────────────────────────────────────────────
 
-    def _build_llm_kwargs(self, context: AssembledContext) -> dict:
-        """Build kwargs dict for the LLM call (config + native tools)."""
+    def _build_llm_kwargs(
+        self,
+        context: AssembledContext,
+        llm_config: dict | None = None,
+    ) -> dict:
+        """Build kwargs dict for the LLM call (config + native tools).
+
+        ``llm_config`` is merged on top of ``context.generation_settings``
+        so per-call overrides (e.g. ``{"mode": "high"}``) win over the
+        session's default config without mutating the assembled context.
+        Empty / None ``llm_config`` is a no-op.
+        """
         native_tool_defs: list[dict] | None = None
         if self._native_tools and context.available_tools:
             from symbiote.environment.descriptors import ToolDescriptor
@@ -765,7 +784,11 @@ class ChatRunner:
             native_tool_defs = [
                 ToolDescriptor(**t).to_openai_schema() for t in context.available_tools
             ]
-        kwargs: dict = {"config": context.generation_settings}
+        # Copy to avoid mutating context.generation_settings (shared state).
+        config = dict(context.generation_settings or {})
+        if llm_config:
+            config.update(llm_config)
+        kwargs: dict = {"config": config}
         if native_tool_defs is not None:
             kwargs["tools"] = native_tool_defs
         return kwargs

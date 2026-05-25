@@ -382,3 +382,72 @@ class TestConversationHistoryPromotion:
         assert len(msgs) == 4
         assert msgs[1]["content"] == "previous"
         assert msgs[2]["content"] == "response"
+
+
+class TestLLMConfigOverride:
+    """``llm_config`` (per-call) merges into the ``config`` dict that the
+    runner passes to ``self._llm.stream(..., config=...)``. Lets callers
+    escalate effort, change temperature, or set any other generation
+    setting for a single message without mutating session state."""
+
+    def test_llm_config_merges_into_stream_config(self) -> None:
+        llm = FakeLLM()
+        runner = ChatRunner(llm=llm)
+        ctx = _make_context(user_input="anything")
+
+        runner.run(ctx, llm_config={"mode": "high"})
+
+        assert llm.last_config is not None
+        assert llm.last_config.get("mode") == "high"
+
+    def test_llm_config_overrides_context_generation_settings(self) -> None:
+        """Per-call override wins over the context default."""
+        llm = FakeLLM()
+        runner = ChatRunner(llm=llm)
+        ctx = AssembledContext(
+            symbiote_id="sym-1",
+            session_id="sess-1",
+            user_input="hi",
+            generation_settings={"mode": "normal", "temperature": 0.5},
+        )
+
+        runner.run(ctx, llm_config={"mode": "high"})
+
+        # mode overridden, temperature preserved from context
+        assert llm.last_config["mode"] == "high"
+        assert llm.last_config["temperature"] == 0.5
+
+    def test_no_llm_config_keeps_context_settings(self) -> None:
+        """Omitting llm_config is a no-op: behave exactly like before."""
+        llm = FakeLLM()
+        runner = ChatRunner(llm=llm)
+        ctx = AssembledContext(
+            symbiote_id="sym-1",
+            session_id="sess-1",
+            user_input="hi",
+            generation_settings={"temperature": 0.7},
+        )
+
+        runner.run(ctx)  # no llm_config
+
+        assert llm.last_config == {"temperature": 0.7}
+
+    def test_llm_config_does_not_mutate_context(self) -> None:
+        """Defense in depth: per-call merge must NOT mutate the assembled
+        context, otherwise back-to-back calls on the same context leak
+        state."""
+        llm = FakeLLM()
+        runner = ChatRunner(llm=llm)
+        original_settings = {"mode": "normal"}
+        ctx = AssembledContext(
+            symbiote_id="sym-1",
+            session_id="sess-1",
+            user_input="hi",
+            generation_settings=original_settings,
+        )
+
+        runner.run(ctx, llm_config={"mode": "high"})
+
+        # context.generation_settings stays intact
+        assert ctx.generation_settings == {"mode": "normal"}
+        assert original_settings == {"mode": "normal"}
