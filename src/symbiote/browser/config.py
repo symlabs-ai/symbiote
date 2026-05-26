@@ -8,6 +8,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 SearchBackend = Literal["brave"]
+ExtractBackend = Literal["forge_scraper", "firecrawl"]
+CrawlBackend = Literal["firecrawl"]
 BrowserBackend = Literal["chromium", "browserbase", "browser_use"]
 
 

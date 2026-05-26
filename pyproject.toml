@@ -33,6 +33,12 @@ dev = [
 llm = [
     "forge-llm @ git+https://github.com/symlabs-ai/forge_llm.git",
 ]
+extract = [
+    # Sub-extras [article,transcript,sofascore] are necessary because
+    # forge_scraper/__init__.py imports sofascore (curl_cffi) at module load.
+    # article=trafilatura (generic markdown extraction), transcript=youtube.
+    "forge-scraper[article,transcript,sofascore] @ git+https://github.com/symlabs-ai/forge_scraper.git",
+]
 browser = [
     "playwright>=1.40.0",
 ]

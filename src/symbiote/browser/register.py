@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any
 from symbiote.browser.config import (
     BrowserBackend,
     BrowserOptions,
+    CrawlBackend,
+    ExtractBackend,
     PolicyConfig,
     SearchBackend,
     SearchOptions,
@@ -35,21 +37,27 @@ def register(
     search_backend: SearchBackend | None = None,
     search_routing: dict[str, SearchBackend] | SearchRouting | None = None,
     search_options: dict[str, Any] | SearchOptions | None = None,
+    extract_backend: ExtractBackend | list[ExtractBackend] | None = None,
+    crawl_backend: CrawlBackend | None = None,
     browser_backend: BrowserBackend | None = None,
     browser_options: dict[str, Any] | BrowserOptions | None = None,
     policy: dict[str, Any] | PolicyConfig | None = None,
     stealth: bool = False,
 ) -> None:
-    """Register websearch and/or browser tools on a SymbioteKernel.
+    """Register websearch / extract / crawl / browser tools on a SymbioteKernel.
 
     Args:
         kernel: The Symbiote kernel to extend.
-        search_backend: Default search provider; set to None to disable search.
-        search_routing: Per-tool provider overrides (web_search/extract/crawl).
-        search_options: Search tool behavior (limits, compression).
-        browser_backend: Browser provider; set to None to disable browser.
+        search_backend: Search provider for `web_search` (e.g. "brave"). None disables.
+        search_routing: Per-tool search provider overrides.
+        search_options: Search tool behavior (limits, SymGateway overrides).
+        extract_backend: Extract provider(s) for `web_extract`. Pass a list
+            to chain them with first-non-empty-wins fallback
+            (e.g. ["forge_scraper", "firecrawl"]). None disables.
+        crawl_backend: Crawl provider for `web_crawl` (e.g. "firecrawl"). None disables.
+        browser_backend: Browser provider for browser_* tools. None disables.
         browser_options: Browser tool behavior (headed, timeouts, viewport).
-        policy: Domain blocklist/allowlist applied to all web/browser tools.
+        policy: Domain blocklist/allowlist applied to web/browser tools.
         stealth: Enable anti-fingerprint extras (requires [stealth] extra).
 
     Idempotent: calling `register` twice on the same kernel is a no-op.
@@ -64,12 +72,25 @@ def register(
     _normalize_routing(search_routing, search_backend)
     policy_obj = _build_policy(policy)
 
-    if search_backend is None and search_routing is None and browser_backend is None:
+    any_search_tool = (
+        search_backend is not None
+        or search_routing is not None
+        or extract_backend is not None
+        or crawl_backend is not None
+    )
+    if not any_search_tool and browser_backend is None:
         _REGISTERED_KERNELS.add(id(kernel))
         return
 
-    if search_backend is not None or search_routing is not None:
-        _register_search(kernel, search_backend, search_routing, search_options)
+    if any_search_tool:
+        _register_search(
+            kernel,
+            search_backend=search_backend,
+            search_routing=search_routing,
+            search_options=search_options,
+            extract_backend=extract_backend,
+            crawl_backend=crawl_backend,
+        )
 
     if browser_backend is not None:
         _register_browser(
@@ -130,33 +151,113 @@ def _normalize_routing(
 
 def _register_search(
     kernel: SymbioteKernel,
+    *,
+    search_backend: SearchBackend | None,
+    search_routing: dict[str, SearchBackend] | SearchRouting | None,
+    search_options: dict[str, Any] | SearchOptions | None,
+    extract_backend: ExtractBackend | list[ExtractBackend] | None,
+    crawl_backend: CrawlBackend | None,
+) -> None:
+    """Register web_search / web_extract / web_crawl backed by the chosen providers.
+
+    Each tool registers only when its backend is requested:
+        - search_backend → web_search
+        - extract_backend → web_extract (single or chained providers)
+        - crawl_backend → web_crawl
+    """
+    opts = _normalize_search_options(search_options)
+    search_provider = _build_search_provider(search_backend, search_routing, opts)
+    extract_provider = _build_extract_provider(extract_backend, opts)
+    crawl_provider = _build_crawl_provider(crawl_backend, opts)
+
+    from symbiote.browser.search.tools import (
+        WEB_CRAWL_DESCRIPTOR,
+        WEB_EXTRACT_DESCRIPTOR,
+        WEB_SEARCH_DESCRIPTOR,
+        build_handlers,
+    )
+
+    handlers = build_handlers(
+        search=search_provider,
+        extract=extract_provider,
+        crawl=crawl_provider,
+    )
+    descriptor_map = {
+        WEB_SEARCH_DESCRIPTOR.tool_id: WEB_SEARCH_DESCRIPTOR,
+        WEB_EXTRACT_DESCRIPTOR.tool_id: WEB_EXTRACT_DESCRIPTOR,
+        WEB_CRAWL_DESCRIPTOR.tool_id: WEB_CRAWL_DESCRIPTOR,
+    }
+    for tool_id, handler in handlers.items():
+        kernel._tool_gateway.register_descriptor(  # noqa: SLF001
+            descriptor=descriptor_map[tool_id],
+            handler=handler,
+        )
+
+
+def _build_search_provider(
     backend: SearchBackend | None,
     routing: dict[str, SearchBackend] | SearchRouting | None,
-    options: dict[str, Any] | SearchOptions | None,
-) -> None:
-    """Register web_search tool backed by the chosen provider.
-
-    Phase 1 supports Brave via SymGateway only. Phase 4 will add web_extract
-    and web_crawl (Firecrawl via SymGateway).
-    """
-    opts = _normalize_search_options(options)
-    resolved_backend = backend or "brave"
-    if resolved_backend != "brave":
+    opts: SearchOptions,
+) -> Any:
+    if backend is None and routing is None:
+        return None
+    resolved = backend or "brave"
+    if resolved != "brave":
         raise NotImplementedError(
-            f"Search backend {resolved_backend!r} not implemented yet. "
-            "Phase 1 ships Brave via SymGateway; other providers come later."
+            f"Search backend {resolved!r} not implemented yet."
         )
-
     from symbiote.browser.search.providers.brave import BraveViaSymGateway
-    from symbiote.browser.search.tools import ALL_DESCRIPTORS, build_handlers
 
-    provider = BraveViaSymGateway(options=opts)
-    handlers = build_handlers(provider)
-    for descriptor in ALL_DESCRIPTORS:
-        kernel._tool_gateway.register_descriptor(  # noqa: SLF001
-            descriptor=descriptor,
-            handler=handlers[descriptor.tool_id],
+    return BraveViaSymGateway(options=opts)
+
+
+def _build_extract_provider(
+    backend: ExtractBackend | list[ExtractBackend] | None,
+    opts: SearchOptions,
+) -> Any:
+    if backend is None:
+        return None
+    if isinstance(backend, str):
+        return _single_extract_provider(backend, opts)
+    if not backend:
+        raise ValueError("extract_backend list cannot be empty")
+    if len(backend) == 1:
+        return _single_extract_provider(backend[0], opts)
+
+    from symbiote.browser.search.extract_chain import ExtractWithFallback
+
+    providers = [_single_extract_provider(name, opts) for name in backend]
+    return ExtractWithFallback(providers)
+
+
+def _single_extract_provider(name: ExtractBackend, opts: SearchOptions) -> Any:
+    if name == "forge_scraper":
+        from symbiote.browser.search.providers.forge_scraper import (
+            ForgeScraperProvider,
         )
+
+        return ForgeScraperProvider(options=opts)
+    if name == "firecrawl":
+        from symbiote.browser.search.providers.firecrawl import (
+            FirecrawlViaSymGateway,
+        )
+
+        return FirecrawlViaSymGateway(options=opts)
+    raise NotImplementedError(f"Extract backend {name!r} not implemented")
+
+
+def _build_crawl_provider(
+    backend: CrawlBackend | None, opts: SearchOptions
+) -> Any:
+    if backend is None:
+        return None
+    if backend == "firecrawl":
+        from symbiote.browser.search.providers.firecrawl import (
+            FirecrawlViaSymGateway,
+        )
+
+        return FirecrawlViaSymGateway(options=opts)
+    raise NotImplementedError(f"Crawl backend {backend!r} not implemented")
 
 
 def _register_browser(
