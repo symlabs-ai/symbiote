@@ -21,6 +21,8 @@ _BROWSER_TOOLS = [
     "browser_click",
     "browser_fill",
     "browser_close",
+    "browser_screenshot",
+    "browser_wait_for",
 ]
 
 
@@ -131,3 +133,76 @@ async def test_ssrf_blocks_localhost_by_default(kernel_with_browser):
     assert not result.success
     err = (result.error or "").lower()
     assert "blocked" in err or "ssrf" in err or "private" in err
+
+
+@pytest.mark.asyncio
+async def test_screenshot_returns_png_base64(kernel_with_browser, local_site):
+    bot = _bot_with_tools(kernel_with_browser, "shot")
+    await _run_async(
+        kernel_with_browser,
+        "browser_navigate",
+        {"url": f"{local_site}/", "task_id": "ts"},
+        bot,
+    )
+    result = await _run_async(
+        kernel_with_browser,
+        "browser_screenshot",
+        {"task_id": "ts"},
+        bot,
+    )
+    assert result.success, result.error
+    import base64
+    png = base64.b64decode(result.output["png_base64"])
+    assert png[:8] == b"\x89PNG\r\n\x1a\n", "Output is not a valid PNG"
+    assert result.output["byte_length"] == len(png)
+    await _run_async(
+        kernel_with_browser, "browser_close", {"task_id": "ts"}, bot
+    )
+
+
+@pytest.mark.asyncio
+async def test_wait_for_matches_existing_text(kernel_with_browser, local_site):
+    bot = _bot_with_tools(kernel_with_browser, "wait")
+    await _run_async(
+        kernel_with_browser,
+        "browser_navigate",
+        {"url": f"{local_site}/", "task_id": "tw"},
+        bot,
+    )
+    result = await _run_async(
+        kernel_with_browser,
+        "browser_wait_for",
+        {"text": "Test site", "task_id": "tw", "timeout_ms": 5000},
+        bot,
+    )
+    assert result.success, result.error
+    assert result.output["matched"] == "Test site"
+    await _run_async(
+        kernel_with_browser, "browser_close", {"task_id": "tw"}, bot
+    )
+
+
+@pytest.mark.asyncio
+async def test_policy_blocklist_rejects_navigate(local_site, tmp_path):
+    """Hooks layer: navigate fails before any network I/O when host is blocked."""
+    kernel = SymbioteKernel(
+        KernelConfig(db_path=str(tmp_path / "p.sqlite")),
+        llm=MockLLMAdapter(default_response="ok"),
+    )
+    register(
+        kernel,
+        browser_backend="chromium",
+        browser_options=BrowserOptions(headed=False, timeout_ms=5_000),
+        policy={"blocklist": ["127.0.0.1"], "allow_internal": False},
+    )
+    bot = _bot_with_tools(kernel, "blocked")
+    result = await _run_async(
+        kernel,
+        "browser_navigate",
+        {"url": f"{local_site}/", "task_id": "blk"},
+        bot,
+        allow_internal=False,  # skip the SSRF monkeypatch so policy + SSRF both run
+    )
+    assert not result.success
+    err = (result.error or "").lower()
+    assert "blocked" in err or "policy" in err

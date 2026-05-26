@@ -114,6 +114,51 @@ CLOSE_DESCRIPTOR = ToolDescriptor(
     tags=["browser", "lifecycle"],
 )
 
+SCREENSHOT_DESCRIPTOR = ToolDescriptor(
+    tool_id="browser_screenshot",
+    name="Browser Screenshot",
+    description=(
+        "Capture a PNG screenshot of the current page. Returns base64-encoded "
+        "PNG bytes and the byte length. Use full_page=true to capture the "
+        "entire scrolling page, not just the viewport."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string", "default": "default"},
+            "full_page": {"type": "boolean", "default": False},
+        },
+    },
+    handler_type="builtin",
+    risk_level="low",
+    tags=["browser", "inspection"],
+)
+
+WAIT_FOR_DESCRIPTOR = ToolDescriptor(
+    tool_id="browser_wait_for",
+    name="Browser Wait For",
+    description=(
+        "Wait until specific text appears anywhere on the page. Useful for "
+        "pages that load content asynchronously via JavaScript. Returns once "
+        "the text is visible or raises if the timeout elapses."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "description": "Text to wait for."},
+            "task_id": {"type": "string", "default": "default"},
+            "timeout_ms": {
+                "type": "integer",
+                "description": "Override the session default timeout.",
+            },
+        },
+        "required": ["text"],
+    },
+    handler_type="builtin",
+    risk_level="low",
+    tags=["browser", "synchronization"],
+)
+
 
 ALL_DESCRIPTORS = [
     NAVIGATE_DESCRIPTOR,
@@ -121,24 +166,39 @@ ALL_DESCRIPTORS = [
     CLICK_DESCRIPTOR,
     FILL_DESCRIPTOR,
     CLOSE_DESCRIPTOR,
+    SCREENSHOT_DESCRIPTOR,
+    WAIT_FOR_DESCRIPTOR,
 ]
 
 
 # ── Handler factories ──────────────────────────────────────────────────────
 
 
-def build_handlers(provider: BrowserProvider) -> dict[str, Any]:
+def build_handlers(
+    provider: BrowserProvider,
+    *,
+    policy: Any = None,
+) -> dict[str, Any]:
     """Return a {tool_id: async-handler} dict ready to register on ToolGateway.
 
     Handlers are async so they run directly in the event loop (no thread switch),
     matching Playwright's async API thread-affinity model.
+
+    Args:
+        provider: Browser backend (Chromium/Browserbase/Browser Use).
+        policy: Optional WebsitePolicy. When set, navigate() rejects URLs whose
+            host is in the blocklist or outside the allowlist before any
+            network I/O happens.
     """
+    import base64
 
     def _task_id(params: dict[str, Any]) -> str:
         return params.get("task_id") or "default"
 
     async def navigate(params: dict[str, Any]) -> dict[str, Any]:
         url = params["url"]
+        if policy is not None:
+            policy.check(url)
         from symbiote.security.network import validate_url
 
         validate_url(url)  # SSRF guard
@@ -165,10 +225,30 @@ def build_handlers(provider: BrowserProvider) -> dict[str, Any]:
         await provider.close_session(_task_id(params))
         return {"closed": _task_id(params)}
 
+    async def screenshot(params: dict[str, Any]) -> dict[str, Any]:
+        session = await provider.get_or_create_session(_task_id(params))
+        full_page = bool(params.get("full_page", False))
+        png = await session.screenshot(full_page=full_page)
+        return {
+            "png_base64": base64.b64encode(png).decode("ascii"),
+            "byte_length": len(png),
+            "full_page": full_page,
+        }
+
+    async def wait_for(params: dict[str, Any]) -> dict[str, Any]:
+        session = await provider.get_or_create_session(_task_id(params))
+        await session.wait_for(
+            params["text"],
+            timeout_ms=params.get("timeout_ms"),
+        )
+        return {"matched": params["text"]}
+
     return {
         NAVIGATE_DESCRIPTOR.tool_id: navigate,
         SNAPSHOT_DESCRIPTOR.tool_id: snapshot,
         CLICK_DESCRIPTOR.tool_id: click,
         FILL_DESCRIPTOR.tool_id: fill,
         CLOSE_DESCRIPTOR.tool_id: close,
+        SCREENSHOT_DESCRIPTOR.tool_id: screenshot,
+        WAIT_FOR_DESCRIPTOR.tool_id: wait_for,
     }

@@ -57,10 +57,12 @@ def register(
     if id(kernel) in _REGISTERED_KERNELS:
         return
 
+    # Eagerly normalize so misshaped input fails fast with a useful error,
+    # even if no backend ends up active.
     _normalize_search_options(search_options)
     _normalize_browser_options(browser_options)
-    _normalize_policy(policy)
     _normalize_routing(search_routing, search_backend)
+    policy_obj = _build_policy(policy)
 
     if search_backend is None and search_routing is None and browser_backend is None:
         _REGISTERED_KERNELS.add(id(kernel))
@@ -70,10 +72,13 @@ def register(
         _register_search(kernel, search_backend, search_routing, search_options)
 
     if browser_backend is not None:
-        _register_browser(kernel, browser_backend, browser_options, stealth)
-
-    if policy is not None:
-        _register_policy_hook(kernel, policy)
+        _register_browser(
+            kernel,
+            browser_backend,
+            browser_options,
+            stealth,
+            policy=policy_obj,
+        )
 
     _REGISTERED_KERNELS.add(id(kernel))
 
@@ -159,6 +164,8 @@ def _register_browser(
     backend: BrowserBackend,
     options: dict[str, Any] | BrowserOptions | None,
     stealth: bool,
+    *,
+    policy: Any = None,
 ) -> None:
     """Register browser_* tools backed by the chosen provider."""
     opts = _normalize_browser_options(options)
@@ -175,12 +182,12 @@ def _register_browser(
 
     if stealth:
         raise NotImplementedError(
-            "Stealth mode arrives in Phase 5; install with pip install \"symbiote[stealth]\""
+            "Stealth mode arrives in a future phase; install with pip install \"symbiote[stealth]\""
         )
 
     from symbiote.browser.browser.tools import ALL_DESCRIPTORS, build_handlers
 
-    handlers = build_handlers(provider)
+    handlers = build_handlers(provider, policy=policy)
     for descriptor in ALL_DESCRIPTORS:
         kernel._tool_gateway.register_descriptor(  # noqa: SLF001
             descriptor=descriptor,
@@ -188,9 +195,11 @@ def _register_browser(
         )
 
 
-def _register_policy_hook(
-    kernel: SymbioteKernel,
-    policy: dict[str, Any] | PolicyConfig,
-) -> None:
-    """Phase 1+: install WebsitePolicyHook on kernel.hooks. NO-OP for now."""
-    return
+def _build_policy(policy: dict[str, Any] | PolicyConfig | None) -> Any:
+    """Instantiate WebsitePolicy from the config, or None when policy is unset."""
+    if policy is None:
+        return None
+    config = policy if isinstance(policy, PolicyConfig) else PolicyConfig(**policy)
+    from symbiote.browser.hooks.website_policy import WebsitePolicy
+
+    return WebsitePolicy(config)
