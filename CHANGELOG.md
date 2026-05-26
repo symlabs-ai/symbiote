@@ -3,6 +3,47 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [v0.6.0] - 2026-05-26
+
+> **Release report user-facing:** [`docs/releases/v0.6.0.md`](docs/releases/v0.6.0.md) — quickstart, exemplos, cost cheat-sheet, limitações conhecidas, guia de migração.
+
+### Novas funcionalidades
+
+- **Subpackage `symbiote.browser`** — websearch, extração de conteúdo e navegação em browsers como tools opt-in registradas no `ToolGateway`. Ativação via uma linha (`from symbiote.browser import register; register(kernel, ...)`). Zero modificação no kernel; imports lazy garantem que `import symbiote` continua leve (<2s, sem Playwright/forge_scraper/SDKs em `sys.modules`). Tools registradas: `web_search` (Brave via SymGateway proxy), `web_extract` (forge_scraper primário + Firecrawl fallback configurável em chain), `web_crawl` (Firecrawl via SymGateway), `browser_navigate` / `_snapshot` / `_click` / `_fill` / `_screenshot` / `_wait_for` / `_close` (Chromium local via Playwright async).
+- **`WebsitePolicy`** — blocklist/allowlist por domínio com wildcards (`*.ads.com`) e TTL cache. SSRF guard (`validate_url`) roda antes de qualquer I/O em navigate/extract/crawl. Toda chamada continua passando pelo PolicyGate + `audit_log` existentes — incluindo `request_id`, `cost_usd`, `elapsed_ms` do SymGateway.
+- **Brave Search via SymGateway** — sem nova credencial (reusa `SYMGATEWAY_API_KEY`), sem SDK extra. Custo $0.003/query, billing centralizado. Endpoint `POST {gateway}/proxy/brave/web-search`.
+- **`web_extract` com chain de fallback** — `forge_scraper` (platform-aware: YouTube transcript, Reddit posts, Twitter, Instagram, genérico via trafilatura) como primário, Firecrawl via SymGateway como fallback. Provider é selecionável via `extract_backend="forge_scraper"` ou `extract_backend=["forge_scraper", "firecrawl"]`. Campo `extracted_by` no resultado indica qual provider venceu.
+- **Demo visual** — `scripts/demo_browser.py --headed --slow-mo 1500` abre Chromium na tela e executa navigate → snapshot → click → close pra validação manual.
+
+### Extras opcionais (pyproject)
+
+- `[browser]` — Playwright + Chromium runtime (~5 MB python + ~170 MB Chromium via `playwright install chromium`)
+- `[extract]` — forge_scraper com sub-extras `[article,transcript,sofascore]` (sofascore é workaround pra bug de packaging upstream: `__init__.py` eager-import)
+- `[stealth]` — espaço reservado para `playwright-stealth` (não implementado v0.6.0)
+
+### Investigações
+
+- **DuckDuckGo HTML como alternativa free ao Brave** — adicionada na Fase 7, investigada com binário do claw-code real, comprovada inviável (DDG bloqueia scraping HTTP com anomaly page e Playwright real com `static-pages/418.html` mesmo com UA Chrome + stealth init script). Revertido no commit `9ebd8a8`. Matriz de evidências preservada em `docs/integrations/symbiote-browser.md` Fase 7 pra não repetir o experimento.
+
+### Documentação
+
+- `docs/integrations/symbiote-browser.md` — plano arquitetural completo
+- `docs/integrations/symbiote-browser-quickstart.md` — guia user-facing detalhado
+- `docs/releases/v0.6.0.md` — release report para clientes (este release)
+
+### Correções
+
+- `__version__` realinhado com `pyproject.toml` (0.4.1 → 0.6.0 — drift desde a v0.4.1 corrigido)
+
+### Backward compatibility
+
+- **Zero breaking changes.** Hosts da v0.5.x atualizam sem mudar código. Tools só aparecem após `register()`; sem ela o kernel se comporta exatamente como antes. Verificado por suite dedicada (`tests/unit/browser/test_import_safety.py`, `test_register_noop.py`).
+
+### Testes
+
+- 50 unit + 6 integration/smoke no submódulo `symbiote.browser`, coverage ≥85%
+- Suite full: 1446 passed (+40 vs v0.5.0). Mesmas 8 falhas pré-existentes em `e2e/test_acceptance`, `e2e/test_api_chat`, `unit/test_generation_settings`, `unit/test_instant_mode` que vinham da v0.5.0 — não tocadas neste release.
+
 ## [v0.5.0] - 2026-05-25
 
 ### Novas funcionalidades
