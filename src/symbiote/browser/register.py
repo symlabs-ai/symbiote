@@ -136,21 +136,34 @@ def _register_search(
 ) -> None:
     """Register web_search tool backed by the chosen provider.
 
-    Phase 1 supports Brave via SymGateway only. Phase 4 will add web_extract
-    and web_crawl (Firecrawl via SymGateway).
+    Supported backends:
+        - "brave" (default): Brave Search via SymGateway proxy. Paid, robust,
+          centralized billing.
+        - "duckduckgo": scrapes html.duckduckgo.com. Free, fragile, useful
+          for dev/test or environments without SymGateway access.
+
+    Phase 4 will add web_extract / web_crawl (Firecrawl via SymGateway).
     """
     opts = _normalize_search_options(options)
     resolved_backend = backend or "brave"
-    if resolved_backend != "brave":
-        raise NotImplementedError(
-            f"Search backend {resolved_backend!r} not implemented yet. "
-            "Phase 1 ships Brave via SymGateway; other providers come later."
+
+    if resolved_backend == "brave":
+        from symbiote.browser.search.providers.brave import BraveViaSymGateway
+
+        provider: Any = BraveViaSymGateway(options=opts)
+    elif resolved_backend == "duckduckgo":
+        from symbiote.browser.search.providers.duckduckgo import (
+            DuckDuckGoHtmlProvider,
         )
 
-    from symbiote.browser.search.providers.brave import BraveViaSymGateway
+        provider = DuckDuckGoHtmlProvider(options=opts)
+    else:
+        raise NotImplementedError(
+            f"Search backend {resolved_backend!r} not implemented yet."
+        )
+
     from symbiote.browser.search.tools import ALL_DESCRIPTORS, build_handlers
 
-    provider = BraveViaSymGateway(options=opts)
     handlers = build_handlers(provider)
     for descriptor in ALL_DESCRIPTORS:
         kernel._tool_gateway.register_descriptor(  # noqa: SLF001

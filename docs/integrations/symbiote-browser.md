@@ -315,10 +315,25 @@ register(
 - [ ] Coverage ≥85% (alinhado com Symbiote core)
 - [ ] **Gate:** Pronto para deploy em staging via systemd
 
-### Fase 6 — Release 1.0
+### Fase 6 — Release v0.6.0
 - [ ] Documentação completa (README, exemplos no SymbiOS)
 - [ ] CHANGELOG
-- [ ] Tag + publicação interna
+- [ ] Bump pyproject 0.5.0 → 0.6.0
+- [ ] Tag v0.6.0, push, deploy via `/deploy`
+
+### Fase 7 — DuckDuckGo HTML provider ✅ (free alternative)
+- [x] `DuckDuckGoHtmlProvider` em `search/providers/duckduckgo.py`
+- [x] Scraping de `https://html.duckduckgo.com/html/?q=...` (mesmo endpoint do claw-code)
+- [x] Parser HTML via `html.parser` da stdlib — extrai `<a class="result__a">` com fallback pra anchors genéricos
+- [x] Decoder do redirect `uddg=<encoded_url>` da DDG
+- [x] Sem credencial, sem custo, sem quota
+- [x] Selecionável via `register(kernel, search_backend="duckduckgo")`
+- [x] 14 unit tests (HTML mockado) + 1 smoke real contra DDG (gratuito, sem skip default)
+- [x] **Gate:** alternar entre Brave e DDG é mudança de uma string em `register()`
+
+**Quando usar cada um:**
+- `brave` (default) — produção, multi-tenant, billing centralizado, qualidade superior, $0.003/query
+- `duckduckgo` — dev/local, CI sem creds, ambientes air-gapped do SymGateway, custo zero mas frágil (depende de HTML estável da DDG)
 
 ## 9. Riscos e mitigações
 
