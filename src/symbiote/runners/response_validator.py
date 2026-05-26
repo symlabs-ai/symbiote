@@ -20,8 +20,7 @@ _TEXT_TOOL_CALL = re.compile(r'"tool"\s*:\s*"')
 _FENCED_TOOL_CALL = re.compile(r"```tool_call", re.IGNORECASE)
 
 _FALLBACK_TEXT = (
-    "Desculpe, não consegui formular uma resposta adequada. "
-    "Por favor, repita sua pergunta."
+    "Desculpe, tive dificuldades técnicas, poderia repetir a pergunta?"
 )
 
 _REFORMULATE_MSG = (
