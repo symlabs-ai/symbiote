@@ -139,8 +139,32 @@ def _register_browser(
     options: dict[str, Any] | BrowserOptions | None,
     stealth: bool,
 ) -> None:
-    """Phase 2+: register browser_navigate, browser_snapshot, ... tools. NO-OP for now."""
-    return
+    """Register browser_* tools backed by the chosen provider."""
+    opts = _normalize_browser_options(options)
+    if backend == "chromium":
+        from symbiote.browser.browser.providers.chromium_local import ChromiumProvider
+
+        provider = ChromiumProvider(options=opts)
+    elif backend in ("browserbase", "browser_use"):
+        raise NotImplementedError(
+            f"Browser backend {backend!r} is planned for Phase 3 (cloud providers)"
+        )
+    else:
+        raise ValueError(f"Unknown browser_backend: {backend!r}")
+
+    if stealth:
+        raise NotImplementedError(
+            "Stealth mode arrives in Phase 5; install with pip install \"symbiote[stealth]\""
+        )
+
+    from symbiote.browser.browser.tools import ALL_DESCRIPTORS, build_handlers
+
+    handlers = build_handlers(provider)
+    for descriptor in ALL_DESCRIPTORS:
+        kernel._tool_gateway.register_descriptor(  # noqa: SLF001
+            descriptor=descriptor,
+            handler=handlers[descriptor.tool_id],
+        )
 
 
 def _register_policy_hook(
