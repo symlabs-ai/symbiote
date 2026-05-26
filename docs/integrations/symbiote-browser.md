@@ -302,11 +302,38 @@ register(
 - [ ] Documentar config matrix
 - [ ] **Gate:** Mesma tool funciona local ou cloud sem mudar código do host
 
-### Fase 4 — Web extract/crawl (Firecrawl via SymGateway)
+### Fase 4 — Web extract/crawl (forge_scraper + Firecrawl fallback)
+
+**Estratégia:** usar a lib interna `forge_scraper` (`~/dev/libs/forge_scraper`) como primário e Firecrawl via SymGateway como fallback. Razões:
+
+- `forge_scraper.get_content(url)` já é uma fachada platform-aware que cobre YouTube (transcript + metadata), Reddit (post + comentários), Twitter/X, Instagram, e sites genéricos via `_get_generic_info()`
+- Lib é da própria Symlabs (`SymLabs AI` é o author do pyproject), versão estável (0.10.5), já integrada ao SymGateway para proxies residenciais e Apify relay (v0.10.5)
+- Custo zero pra URLs públicas; só usa SymGateway quando o site exige proxy
+- Especializada em sites brasileiros (G1, Folha, Globo, BBC) via `HeadlineExtractor`
+- Trafilatura disponível via extra `[article]` pra fallback genérico
+
+**`web_extract`** — chain de tentativa:
+1. `ForgeScraperProvider.extract(url)` chamando `forge_scraper.get_content()`
+2. Se levantar exceção ou retornar conteúdo vazio → `FirecrawlViaSymGateway.extract(url)`
+3. Resultado normalizado: `{url, title, content (markdown), language?, metadata?}`
+
+**`web_crawl`** — só Firecrawl (forge_scraper não tem crawl):
+- `FirecrawlViaSymGateway.crawl(domain, instruction, max_pages)` via `/proxy/firecrawl/...`
+
+**Tasks:**
+- [ ] Adicionar `forge-scraper` aos extras do `pyproject.toml` (ex.: `[extract]`)
+- [ ] `ForgeScraperProvider` em `search/providers/forge_scraper.py` — wrap síncrono em `asyncio.to_thread` (a lib é síncrona, baseada em `requests`)
 - [ ] `/ask devops` para seed do Firecrawl no SymGateway (mesmo padrão do `seed_brave_search.py`)
-- [ ] `FirecrawlViaSymGateway` provider chamando `/proxy/firecrawl/...`
-- [ ] `web_extract` e `web_crawl` tools com descriptors
-- [ ] **Gate:** Symbiota consegue extrair markdown limpo de URLs específicas
+- [ ] `FirecrawlViaSymGateway` provider chamando `/proxy/firecrawl/v0/scrape` e `/proxy/firecrawl/v0/crawl`
+- [ ] `ExtractWithFallback` que tenta `forge_scraper` → fallback `Firecrawl` em caso de erro/vazio
+- [ ] `web_extract` e `web_crawl` tool descriptors no `search/tools.py`
+- [ ] Testes: unit com `forge_scraper` mockado + smoke real contra YouTube/Reddit/site genérico
+- [ ] **Gate:** Symbiota consegue extrair markdown limpo de URL arbitrária, e o fallback dispara quando forge_scraper falha (ex.: site bloqueado/JS-only)
+
+**Trade-offs explícitos:**
+- `forge_scraper` é síncrono (requests + BeautifulSoup); cada call vai pra `asyncio.to_thread`, custa um worker do pool. Aceitável pro volume esperado.
+- A versão pinada no `pyproject.toml` precisa ser definida — provavelmente `forge-scraper>=0.10.5,<0.11`
+- Extra `[extract]` puxa também `trafilatura` (via `forge-scraper[article]`) pra fallback genérico dentro do próprio forge_scraper
 
 ### Fase 5 — Hardening (3-5 dias)
 - [ ] `browser_screenshot`, `browser_wait_for`, `browser_extract`
