@@ -28,6 +28,11 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# curl is needed for the docker-compose healthcheck used in staging.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy installed packages from build stage
 COPY --from=base /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=base /usr/local/bin/symbiote /usr/local/bin/symbiote
@@ -43,6 +48,12 @@ VOLUME /data
 ENV SYMBIOTE_DB_PATH=/data/symbiote.db
 ENV SYMBIOTE_LLM_PROVIDER=mock
 ENV PYTHONPATH=/app/src
+
+# Build-time commit, propagated to GIT_COMMIT env var so /health can report
+# the exact SHA in containers where the .git directory isn't available.
+# CI injects this via `docker build --build-arg GIT_COMMIT=$(git rev-parse --short HEAD)`.
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=${GIT_COMMIT}
 
 EXPOSE 8008
 

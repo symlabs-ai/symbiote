@@ -79,14 +79,19 @@ async def health() -> dict:
     except importlib.metadata.PackageNotFoundError:
         version = "dev"
 
+    commit = "unknown"
     try:
         commit = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"],
             stderr=subprocess.DEVNULL,
             timeout=2,
-        ).decode().strip()
+        ).decode().strip() or "unknown"
     except Exception:
-        commit = "unknown"
+        # Containers don't ship the .git directory; CI injects GIT_COMMIT as a
+        # build-arg / env var. systemd-managed deployments still get the right
+        # answer from `git rev-parse` above.
+        import os
+        commit = os.environ.get("GIT_COMMIT", "unknown")
 
     return {"status": "ok", "service": "symbiote", "version": version, "commit": commit}
 
