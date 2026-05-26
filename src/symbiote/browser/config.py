@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-SearchBackend = Literal["brave", "duckduckgo"]
+SearchBackend = Literal["brave"]
 BrowserBackend = Literal["chromium", "browserbase", "browser_use"]
 
 
