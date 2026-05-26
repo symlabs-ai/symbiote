@@ -33,11 +33,6 @@ dev = [
 llm = [
     "forge-llm @ git+https://github.com/symlabs-ai/forge_llm.git",
 ]
-search = [
-    "tavily-python>=0.5.0",
-    "firecrawl-py>=1.0.0",
-    "exa-py>=1.0.0",
-]
 browser = [
     "playwright>=1.40.0",
 ]

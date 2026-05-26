@@ -129,8 +129,29 @@ def _register_search(
     routing: dict[str, SearchBackend] | SearchRouting | None,
     options: dict[str, Any] | SearchOptions | None,
 ) -> None:
-    """Phase 1+: register web_search, web_extract, web_crawl tools. NO-OP for now."""
-    return
+    """Register web_search tool backed by the chosen provider.
+
+    Phase 1 supports Brave via SymGateway only. Phase 4 will add web_extract
+    and web_crawl (Firecrawl via SymGateway).
+    """
+    opts = _normalize_search_options(options)
+    resolved_backend = backend or "brave"
+    if resolved_backend != "brave":
+        raise NotImplementedError(
+            f"Search backend {resolved_backend!r} not implemented yet. "
+            "Phase 1 ships Brave via SymGateway; other providers come later."
+        )
+
+    from symbiote.browser.search.providers.brave import BraveViaSymGateway
+    from symbiote.browser.search.tools import ALL_DESCRIPTORS, build_handlers
+
+    provider = BraveViaSymGateway(options=opts)
+    handlers = build_handlers(provider)
+    for descriptor in ALL_DESCRIPTORS:
+        kernel._tool_gateway.register_descriptor(  # noqa: SLF001
+            descriptor=descriptor,
+            handler=handlers[descriptor.tool_id],
+        )
 
 
 def _register_browser(

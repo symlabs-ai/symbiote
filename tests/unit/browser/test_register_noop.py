@@ -42,9 +42,11 @@ def test_register_with_all_none_is_noop(kernel):
 
 
 def test_register_is_idempotent(kernel):
-    register(kernel, browser_backend="chromium")
-    register(kernel, browser_backend="chromium")
-    register(kernel, search_backend="tavily")
+    # Without a search/browser backend it's a no-op
+    register(kernel)
+    register(kernel)
+    # Second register with same kernel is also short-circuited by registry
+    register(kernel, search_backend="brave")
     # No exception, no duplicate registrations.
 
 
@@ -68,6 +70,6 @@ def test_config_models_validate_fields():
     sopts = SearchOptions(compress_results=False)
     assert sopts.compress_results is False
 
-    routing = SearchRouting(web_search="tavily", web_extract="firecrawl")
-    assert routing.web_search == "tavily"
+    routing = SearchRouting(web_search="brave", web_extract="brave")
+    assert routing.web_search == "brave"
     assert routing.web_crawl is None

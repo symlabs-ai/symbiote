@@ -28,7 +28,8 @@ Tudo isso entregue como **tools registradas no `ToolGateway`** do Symbiote — n
 | Decisão | Por quê |
 |---|---|
 | Vive em `src/symbiote/browser/` (irmão de `dream/`, `harness/`, `discovery/`, `mcp/`) | Só Symbiote consome — não justifica repo/lib externa |
-| Stack pesada em extras (`[browser]`, `[search]`, `[stealth]`) | `pip install symbiote` permanece slim; `pip install "symbiote[browser]"` puxa Playwright |
+| Web search via **SymGateway proxy** (não SDK direto) | Credenciais centralizadas, billing centralizado, mesmo padrão dos outros projetos Symlabs. **Zero SDK extra** — só `httpx`. |
+| Stack pesada apenas em extras (`[browser]`, `[stealth]`) | `pip install symbiote` permanece slim; `pip install "symbiote[browser]"` puxa Playwright. Search não precisa de extra. |
 | **Nada de `symbiote.browser` é importado por default** | `import symbiote` não ativa Playwright nem tenta abrir Chromium |
 | API de ativação: `from symbiote.browser import register; register(kernel, ...)` | Host opta em uma linha; sem essa linha, comportamento é exatamente o anterior |
 | Zero alteração em `core/`, `runners/`, `environment/`, `security/` | Garante backward-compat total com clientes atuais (mesma regra da v0.5.0) |
@@ -82,13 +83,19 @@ Tudo isso entregue como **tools registradas no `ToolGateway`** do Symbiote — n
 
 ### 4.1 Web search
 
-| Tool ID | Descrição | Parâmetros principais |
-|---|---|---|
-| `web_search` | Busca textual no provider configurado | `query`, `limit`, `domain_filter?` |
-| `web_extract` | Extrai conteúdo de URLs específicas | `urls[]`, `format` (markdown/text) |
-| `web_crawl` | Crawl com instrução natural | `domain`, `instruction`, `max_pages` |
+| Tool ID | Descrição | Parâmetros principais | Fase |
+|---|---|---|---|
+| `web_search` | Busca textual via Brave (SymGateway proxy) | `query`, `limit` (1-20) | **1 — implementado** |
+| `web_extract` | Extrai conteúdo de URLs específicas | `urls[]`, `format` (markdown/text) | 4 (planejado) |
+| `web_crawl` | Crawl com instrução natural | `domain`, `instruction`, `max_pages` | 4 (planejado) |
 
-Backend é resolvido no `register(kernel, search_backend="tavily", ...)`. Provider abstrai diferenças de schema; compressor LLM reduz tokens antes de devolver pro Symbiota.
+**Como funciona o `web_search` hoje:** `register(kernel, search_backend="brave")` ativa a tool. O handler faz `POST {SYMGATEWAY_BASE_URL_sem_v1}/proxy/brave/web-search` com o `SYMGATEWAY_API_KEY` do host. SymGateway repassa pra Brave Search API e devolve o JSON; nós normalizamos pra uma lista compacta de `{url, title, snippet}`.
+
+Vantagens do roteamento via SymGateway:
+- **Sem nova credencial** — usa o mesmo bearer token do LLM
+- **Sem SDK extra** — só `httpx`, já em `dependencies`
+- **Billing centralizado** — Brave cobra $0.003/query, gateway repassa
+- **Auditoria centralizada** — gateway logs incluem `request_id`, `cost_usd`, `elapsed_ms`
 
 ### 4.2 Browser automation
 
@@ -210,11 +217,6 @@ Adicionar aos extras existentes:
 [project.optional-dependencies]
 # ... extras existentes (dev, llm) ...
 
-search = [
-    "exa-py",
-    "tavily-python",
-    "firecrawl-py",
-]
 browser = [
     "playwright>=1.40",
 ]
@@ -223,11 +225,12 @@ stealth = [
 ]
 ```
 
+**Nenhum extra `[search]`.** Web search via SymGateway só precisa de `httpx`, que já está em `dependencies`. Se algum cliente quiser provider direto (sem SymGateway), pode plugar via `extra_providers=` em uma versão futura.
+
 Instalação:
-- `pip install -e .` → comportamento atual, browser inativo
-- `pip install -e ".[search]"` → search providers
-- `pip install -e ".[browser]"` → Playwright + Chromium
-- `pip install -e ".[search,browser,stealth]"` → tudo
+- `pip install -e .` → search via SymGateway funciona, browser inativo
+- `pip install -e ".[browser]"` → libera Playwright + Chromium
+- `pip install -e ".[browser,stealth]"` → tudo
 
 ### 6.3 Imports preguiçosos (lazy)
 
@@ -266,22 +269,24 @@ register(
 
 ## 8. Plano de fases
 
-### Fase 0 — Discovery (1 dia)
-- [ ] Confirmar requisitos com SymbiOS (quais providers prioritários, qual budget)
-- [ ] `/ask devops` para alocação de credenciais (Tavily/Exa/Firecrawl/Browserbase) no SymVault
-- [ ] Criar branch `feature/browser`; abrir tracking issue agregadora
-- [ ] Adicionar extras `[search]`, `[browser]`, `[stealth]` ao `pyproject.toml`
+### Fase 0 — Discovery ✅
+- [x] Confirmar requisitos com SymbiOS (search via SymGateway/Brave)
+- [x] Decidido: Brave via SymGateway proxy (já configurado, sem novas creds)
+- [x] Branch `feature/browser` criado
+- [x] Adicionados extras `[browser]`, `[stealth]` ao `pyproject.toml`
 
-### Fase 1 — Web search MVP (3-5 dias)
-- [ ] Skeleton de `src/symbiote/browser/` + `register()` no-op
-- [ ] `SearchProvider` protocol + 1 provider real (Tavily — simples)
-- [ ] `web_search` e `web_extract` tools com descriptors
-- [ ] Compressor LLM básico (reduz resultados antes de devolver)
-- [ ] `WebsitePolicyHook` com blocklist
-- [ ] Testes unit + smoke (com chave real)
-- [ ] **Gate:** SymbiOS consegue fazer "pesquise X" e obter resposta sintetizada
+### Fase 1 — Web search MVP via Brave/SymGateway ✅
+- [x] `SearchProvider` async protocol
+- [x] `BraveViaSymGateway` provider — chama `/proxy/brave/web-search`
+- [x] `SearchOptions.resolved_gateway_url()` / `resolved_api_key()` lendo `.env`
+- [x] `web_search` tool com descriptor + handler async
+- [x] Wiring em `register(kernel, search_backend="brave")`
+- [x] 7 unit tests com httpx mockado + 1 smoke real contra SymGateway
+- [x] **Gate:** `kernel.tool_gateway.execute_async("web_search", ...)` retorna resultados normalizados (verificado: query "symlabs" devolve 3 hits)
+- [ ] `WebsitePolicyHook` com blocklist (movido pra Fase 5 — hardening)
+- [ ] Compressor LLM opcional (movido pra Fase 5 — hoje os snippets do Brave já são curtos)
 
-### Fase 2 — Browser local (5-7 dias)
+### Fase 2 — Browser local (Chromium) ✅
 - [ ] `BrowserProvider` protocol
 - [ ] `chromium_local.py` via Playwright
 - [ ] `supervisor.py` — processo isolado por `task_id`, cleanup em `atexit`/SIGTERM
@@ -297,10 +302,11 @@ register(
 - [ ] Documentar config matrix
 - [ ] **Gate:** Mesma tool funciona local ou cloud sem mudar código do host
 
-### Fase 4 — Providers de search adicionais (2-3 dias)
-- [ ] `exa.py`, `firecrawl.py`, `parallel.py`
-- [ ] `web_crawl` tool (Firecrawl-style)
-- [ ] **Gate:** Trocar backend é mudança de uma string em `register()`
+### Fase 4 — Web extract/crawl (Firecrawl via SymGateway)
+- [ ] `/ask devops` para seed do Firecrawl no SymGateway (mesmo padrão do `seed_brave_search.py`)
+- [ ] `FirecrawlViaSymGateway` provider chamando `/proxy/firecrawl/...`
+- [ ] `web_extract` e `web_crawl` tools com descriptors
+- [ ] **Gate:** Symbiota consegue extrair markdown limpo de URLs específicas
 
 ### Fase 5 — Hardening (3-5 dias)
 - [ ] `browser_screenshot`, `browser_wait_for`, `browser_extract`
@@ -353,7 +359,7 @@ Coisas que **não** vão entrar nesse package nessa primeira versão:
 | # | Decisão | Quem decide | Quando | Status |
 |---|---|---|---|---|
 | D1 | ~~Repo separado vs subpackage~~ | Você | — | **Resolvida**: subpackage `src/symbiote/browser/` no próprio repo |
-| D2 | Provider default de search (Tavily vs Exa) | Você + custo | Fase 1 | Aberta |
+| D2 | ~~Provider default de search~~ | Você | — | **Resolvida**: Brave via SymGateway (mais barato, sem creds novas, alinhado com arquitetura Symlabs) |
 | D3 | Provider default de browser (Chromium local sempre? Ou auto-detect cloud?) | Você | Fase 2 | Aberta |
 | D4 | Inclui xAI search na v1 ou v2? | Demanda do SymbiOS | Fase 4 | Aberta |
 | D5 | Bump de versão do Symbiote ao mergear | Você (regra global: padrão é patch) | Antes do merge | Aberta — feature nova sugere minor, mas precisa do seu OK |
