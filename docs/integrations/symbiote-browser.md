@@ -315,10 +315,36 @@ register(
 - [ ] Coverage ≥85% (alinhado com Symbiote core)
 - [ ] **Gate:** Pronto para deploy em staging via systemd
 
-### Fase 6 — Release 1.0
+### Fase 6 — Release v0.6.0
 - [ ] Documentação completa (README, exemplos no SymbiOS)
 - [ ] CHANGELOG
-- [ ] Tag + publicação interna
+- [ ] Bump pyproject 0.5.0 → 0.6.0
+- [ ] Tag + push + `/deploy`
+
+### Fase 7 — DuckDuckGo HTML ❌ (investigada e revertida)
+
+**Conclusão (2026-05-26): inviável.** Tentou-se adicionar `DuckDuckGoHtmlProvider` como alternativa free ao Brave, replicando a abordagem do `claw-code` (scraping de `html.duckduckgo.com/html/`). A implementação rodou e os unit tests passaram com HTML mockado. Smoke test inicial passou por **flakiness** — a próxima request retornou `HTTP 202 + página de anomaly` da DDG.
+
+Diagnóstico (evidências capturadas):
+
+| Vetor | Resultado |
+|---|---|
+| `httpx` GET com nosso User-Agent | 202 + anomaly page |
+| `httpx` GET com UA exato do `claw-rust-tools/0.1` | 202 + anomaly page |
+| `httpx` GET com UA Firefox real | 202 + anomaly page |
+| **Binário `claw-code` real (Rust + reqwest)** | retorna apenas 2 links pra `duckduckgo.com/html/` (lixo) |
+| Playwright headless Chromium | redireciona pra `static-pages/418.html` |
+| Playwright + UA Chrome real + stealth init script + viewport real | redireciona pra `static-pages/418.html` |
+
+DDG aplica detecção multi-camada (TLS fingerprint, IP reputation, headless flags, ordem de headers). **Bypass robusto exigiria** `playwright-stealth` + headed mode (quebra em servidor sem display) + proxies residenciais — caminho de "bot evasion" que não cabe numa infra séria.
+
+**Lições registradas para evitar repetir:**
+- claw-code resolve o caso single-user dele aceitando flakiness como custo
+- "Free" via scraping é ilusório a médio prazo — sempre vira manutenção sem fim
+- Antes de adicionar provider gratuito, validar com 5+ queries reais em sequência
+- Caminho honesto pra "free fallback": **Searxng self-hosted** (DevOps roda instância, query via HTTP estável) ou apenas Brave free tier ($5/mês = 20k queries)
+
+Revertido no commit subsequente. `SearchBackend = Literal["brave"]` permanece com apenas um provider; estrutura do `SearchProvider` protocol fica viva para futuras adições (Searxng/Firecrawl/Exa via SymGateway).
 
 ## 9. Riscos e mitigações
 
