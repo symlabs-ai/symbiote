@@ -331,3 +331,73 @@ class TestPromptCaching:
         self, manager: EnvironmentManager
     ) -> None:
         assert manager.get_prompt_caching("no-such-symbiote") is False
+
+
+# ── Sprint 5 lifecycle config round-trip ─────────────────────────────────
+
+
+class TestSkillLifecycleRoundTrip:
+    """Pin the round-trip for Sprint 5 lifecycle config fields.
+
+    Both fields accept 0 as a meaningful sentinel ("disabled"). The
+    ``int(row.get(k, d) or d)`` pattern used by older fields would
+    silently coerce 0 → default — exactly the bug the new ``_int_or_default``
+    helper guards against.
+    """
+
+    def test_round_trip_via_insert(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        manager.configure(
+            symbiote_id=symbiote_id,
+            skill_auto_promote_threshold=5,
+            skill_quarantine_timeout_days=7,
+        )
+        cfg = manager.get_config(symbiote_id)
+        assert cfg is not None
+        assert cfg.skill_auto_promote_threshold == 5
+        assert cfg.skill_quarantine_timeout_days == 7
+
+    def test_zero_preserved_not_coerced_to_default(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        """0 means 'disabled', NOT 'use default'. Round-trip preserves 0."""
+        manager.configure(
+            symbiote_id=symbiote_id,
+            skill_auto_promote_threshold=0,
+            skill_quarantine_timeout_days=0,
+        )
+        cfg = manager.get_config(symbiote_id)
+        assert cfg is not None
+        assert cfg.skill_auto_promote_threshold == 0
+        assert cfg.skill_quarantine_timeout_days == 0
+
+    def test_round_trip_via_update(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        """Update path (existing row) also persists the new fields."""
+        manager.configure(symbiote_id=symbiote_id, tools=["git"])
+        # First configure used defaults — confirm.
+        assert manager.get_config(symbiote_id).skill_auto_promote_threshold == 3
+
+        manager.configure(
+            symbiote_id=symbiote_id,
+            skill_auto_promote_threshold=10,
+            skill_quarantine_timeout_days=30,
+        )
+        cfg = manager.get_config(symbiote_id)
+        assert cfg.skill_auto_promote_threshold == 10
+        assert cfg.skill_quarantine_timeout_days == 30
+
+    def test_omitting_fields_preserves_existing_on_update(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        manager.configure(
+            symbiote_id=symbiote_id,
+            skill_auto_promote_threshold=7,
+        )
+        # Subsequent configure touching only an unrelated field must NOT
+        # reset skill_auto_promote_threshold back to default 3.
+        manager.configure(symbiote_id=symbiote_id, tools=["pytest"])
+        cfg = manager.get_config(symbiote_id)
+        assert cfg.skill_auto_promote_threshold == 7

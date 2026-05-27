@@ -200,6 +200,15 @@ class EnvironmentConfig(BaseModel):
     #   max_quarantine_skills — created by background review, awaiting promotion
     max_active_skills: int = Field(default=20, ge=1, le=200)
     max_quarantine_skills: int = Field(default=10, ge=1, le=100)
+    # Sprint 5 — lifecycle automation
+    # After N successful loads from quarantine, auto-promote to active.
+    # Threshold 3 picked to filter one-off coincidence loads while not
+    # making the LLM wait forever for promotion. Set to 0 to disable.
+    skill_auto_promote_threshold: int = Field(default=3, ge=0, le=50)
+    # Days in quarantine without ANY use_count growth → auto-archived by
+    # the next DreamEngine.PrunePhase. Counterpart of max_quarantine_skills:
+    # cap stops creates, auto-archive frees the bucket. Set to 0 to disable.
+    skill_quarantine_timeout_days: int = Field(default=14, ge=0, le=365)
 
 
 # ── Decision ─────────────────────────────────────────────────────────────────

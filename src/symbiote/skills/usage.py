@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import tempfile
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,38 @@ from typing import Any
 _log = logging.getLogger(__name__)
 
 SIDECAR_NAME = ".skill_meta.json"
+
+# Per-skill-directory locks. Acquired by ``mark_used`` (and any other
+# read-modify-write op on the sidecar) so concurrent loads of the SAME
+# skill from background threads don't race on ``use_count`` — without
+# this, the Sprint 5 auto-promote path could miss an increment under
+# concurrent skill loads (each thread reads N, both write N+1).
+#
+# The dict itself is guarded by ``_locks_lock``. Locks are cached per
+# resolved path string and never evicted (a skill that vanishes loses
+# nothing — the lock is just an idle ``threading.Lock`` object). Skill
+# library cardinality is bounded by ``max_active_skills`` + quarantine,
+# so the cache stays small (~tens of entries in practice).
+_path_locks: dict[str, threading.Lock] = {}
+_path_locks_lock = threading.Lock()
+
+
+def _lock_for(skill_dir: Path) -> threading.Lock:
+    """Return the lock guarding sidecar writes for ``skill_dir``.
+
+    Resolved path is the key so symlinked / relative variants share the
+    same lock.
+    """
+    try:
+        key = str(skill_dir.resolve())
+    except OSError:
+        key = str(skill_dir)
+    with _path_locks_lock:
+        lock = _path_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _path_locks[key] = lock
+        return lock
 
 # Status lifecycle (mirrors Hermes curator):
 #   quarantine — newly agent-created, not yet listed in <available-skills>
@@ -155,17 +188,44 @@ def mark_agent_created(skill_dir: Path) -> None:
     write_meta(skill_dir, default_meta(agent_created=True))
 
 
-def mark_used(skill_dir: Path) -> None:
+def mark_used(skill_dir: Path, *, auto_promote_threshold: int = 0) -> bool:
     """Bump use_count and last_used_at. Creates a default sidecar if missing.
 
     For human skills (no sidecar), this is the moment one gets created — but
     with ``agent_created=false`` so the curator still leaves it alone. This is
     pure telemetry: the loader can call it on every successful skill load.
+
+    Sprint 5 — auto-promotion. When ``auto_promote_threshold > 0`` AND the
+    skill is ``agent_created`` AND currently in ``quarantine`` AND the
+    post-increment ``use_count`` reaches the threshold, the status flips
+    to ``active``. Returns True iff a promotion happened (caller may want
+    to refresh its skills loader cache).
+
+    Threshold 0 (default) keeps promotion strictly manual via CLI.
+
+    Thread safety (Sprint 5.1): the read-modify-write of the sidecar is
+    serialized by a per-``skill_dir`` lock. Two concurrent loads of the
+    same skill will produce two correct increments (was a race that
+    could undercount by 1).
     """
-    meta = read_meta(skill_dir) or default_meta(agent_created=False)
-    meta["use_count"] = int(meta.get("use_count", 0)) + 1
-    meta["last_used_at"] = _utcnow_iso()
-    write_meta(skill_dir, meta)
+    with _lock_for(skill_dir):
+        meta = read_meta(skill_dir) or default_meta(agent_created=False)
+        new_count = int(meta.get("use_count", 0)) + 1
+        meta["use_count"] = new_count
+        meta["last_used_at"] = _utcnow_iso()
+
+        promoted = False
+        if (
+            auto_promote_threshold > 0
+            and meta.get("agent_created") is True
+            and meta.get("status") == STATUS_QUARANTINE
+            and new_count >= auto_promote_threshold
+        ):
+            meta["status"] = STATUS_ACTIVE
+            promoted = True
+
+        write_meta(skill_dir, meta)
+        return promoted
 
 
 def bump_patch(skill_dir: Path) -> None:

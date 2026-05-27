@@ -215,6 +215,8 @@ class SQLiteAdapter:
             "ALTER TABLE environment_configs ADD COLUMN skill_nudge_interval INTEGER DEFAULT 10",
             "ALTER TABLE environment_configs ADD COLUMN max_active_skills INTEGER DEFAULT 20",
             "ALTER TABLE environment_configs ADD COLUMN max_quarantine_skills INTEGER DEFAULT 10",
+            "ALTER TABLE environment_configs ADD COLUMN skill_auto_promote_threshold INTEGER DEFAULT 3",
+            "ALTER TABLE environment_configs ADD COLUMN skill_quarantine_timeout_days INTEGER DEFAULT 14",
         ):
             try:
                 self._conn.execute(stmt)
@@ -290,6 +292,20 @@ class SQLiteAdapter:
             )""",
             "CREATE INDEX IF NOT EXISTS idx_reflection_audit_symbiote ON reflection_audit(symbiote_id, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_reflection_audit_session ON reflection_audit(session_id)",
+            """CREATE TABLE IF NOT EXISTS skill_review_audit (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                symbiote_id TEXT NOT NULL,
+                trigger TEXT NOT NULL,
+                applied INTEGER DEFAULT 0,
+                skipped INTEGER DEFAULT 0,
+                ok INTEGER DEFAULT 0,
+                error TEXT,
+                ops_json TEXT DEFAULT '[]',
+                created_at TEXT NOT NULL
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_skill_review_audit_symbiote ON skill_review_audit(symbiote_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_skill_review_audit_session ON skill_review_audit(session_id)",
         ):
             try:
                 self._conn.execute(stmt)

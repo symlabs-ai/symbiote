@@ -44,7 +44,9 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from symbiote.core._review_prompts import SKILL_REVIEW_PROMPT, render_prompt
 from symbiote.core.provenance import (
@@ -58,7 +60,7 @@ from symbiote.skills.store import (
 )
 
 if TYPE_CHECKING:
-    from symbiote.core.ports import LLMPort, MessagePort
+    from symbiote.core.ports import LLMPort, MessagePort, StoragePort
     from symbiote.skills.loader import SkillsLoader
 
 _log = logging.getLogger(__name__)
@@ -91,6 +93,7 @@ class BackgroundReviewEngine:
         max_active_skills: int = 20,
         max_quarantine_skills: int = 10,
         max_chars: int = _DEFAULT_MAX_CHARS,
+        storage: StoragePort | None = None,
     ) -> None:
         self._llm = llm
         self._messages = messages
@@ -99,6 +102,11 @@ class BackgroundReviewEngine:
         self._max_active_skills = max_active_skills
         self._max_quarantine_skills = max_quarantine_skills
         self._max_chars = max_chars
+        # Sprint 5 — optional audit sink. When provided, every spawn writes
+        # a row to ``skill_review_audit`` describing the run (ok/applied/
+        # skipped/ops). None disables audit silently — used in tests that
+        # don't care about persistence.
+        self._storage = storage
         # For tests / observability — last spawned thread.
         self._last_thread: threading.Thread | None = None
         # Per-session active thread tracker. Prevents spawn-storms when
@@ -119,6 +127,7 @@ class BackgroundReviewEngine:
         symbiote_id: str,
         *,
         limit: int = 50,
+        trigger: str = "nudge",
     ) -> threading.Thread:
         """Fire a daemon thread that runs a skill review pass.
 
@@ -129,6 +138,10 @@ class BackgroundReviewEngine:
         is already running for this session (typical when ChatRunner
         nudges fire faster than the LLM responds), spawn() returns the
         in-flight thread instead of creating a rival.
+
+        ``trigger`` is recorded in skill_review_audit so audits can tell
+        mid-session nudges (``"nudge"``) apart from close_session passes
+        (``"final"``). Defaults to ``"nudge"`` for back-compat.
         """
         with self._active_lock:
             existing = self._active.get(session_id)
@@ -136,7 +149,7 @@ class BackgroundReviewEngine:
                 return existing
             thread = threading.Thread(
                 target=self._run,
-                args=(session_id, symbiote_id, limit),
+                args=(session_id, symbiote_id, limit, trigger),
                 daemon=True,
                 name=f"skill-review-{session_id[:8]}",
             )
@@ -156,9 +169,9 @@ class BackgroundReviewEngine:
     ) -> threading.Thread:
         """Variant fired by close_session — larger transcript window.
 
-        Same semantics as ``spawn`` otherwise.
+        Same semantics as ``spawn`` otherwise; trigger tagged as "final".
         """
-        return self.spawn(session_id, symbiote_id, limit=limit)
+        return self.spawn(session_id, symbiote_id, limit=limit, trigger="final")
 
     def run_sync(
         self,
@@ -166,12 +179,13 @@ class BackgroundReviewEngine:
         symbiote_id: str,
         *,
         limit: int = 50,
+        trigger: str = "sync",
     ) -> dict[str, Any]:
         """Synchronous variant for tests and one-shot CLI use.
 
         Returns a summary dict: ``{ok, error, applied, skipped, ops}``.
         """
-        return self._run(session_id, symbiote_id, limit)
+        return self._run(session_id, symbiote_id, limit, trigger)
 
     # ── internal ───────────────────────────────────────────────────────
 
@@ -180,6 +194,7 @@ class BackgroundReviewEngine:
         session_id: str,
         symbiote_id: str,
         limit: int,
+        trigger: str = "nudge",
     ) -> dict[str, Any]:
         """Thread target. Always returns a result dict; never raises."""
         result: dict[str, Any] = {
@@ -231,7 +246,41 @@ class BackgroundReviewEngine:
                 current = self._active.get(session_id)
                 if current is threading.current_thread():
                     del self._active[session_id]
+            # Sprint 5 — best-effort audit row. Never blocks return, never
+            # raises (audit failure logged then swallowed).
+            self._write_audit(session_id, symbiote_id, trigger, result)
         return result
+
+    def _write_audit(
+        self,
+        session_id: str,
+        symbiote_id: str,
+        trigger: str,
+        result: dict[str, Any],
+    ) -> None:
+        if self._storage is None:
+            return
+        try:
+            self._storage.execute(
+                "INSERT INTO skill_review_audit "
+                "(id, session_id, symbiote_id, trigger, applied, skipped, "
+                "ok, error, ops_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(uuid4()),
+                    session_id,
+                    symbiote_id,
+                    trigger,
+                    int(result.get("applied", 0)),
+                    int(result.get("skipped", 0)),
+                    int(bool(result.get("ok", False))),
+                    result.get("error"),
+                    json.dumps(result.get("ops", []), ensure_ascii=False),
+                    datetime.now(tz=UTC).isoformat(),
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 — audit is best-effort
+            _log.warning("skill_review_audit write failed: %s", exc)
 
     def _format_messages(self, messages: list[dict]) -> str:
         """Render messages within the char budget; keep most recent."""

@@ -5,6 +5,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+### Aprendizado — Sprint 5.1 (hardening do review)
+
+Quatro fixes do review do PR #2. Defaults preservados; nenhum impacto observável quando `skill_review_enabled=False`.
+
+- **H5.1 — Lock em `usage.mark_used`**: read-modify-write do sidecar `.skill_meta.json` agora protegido por `threading.Lock` per-skill_dir (cache global `_path_locks` indexado por `str(path.resolve())`). Elimina race que perdia incrementos de `use_count` em loads concorrentes — o auto-promote do Sprint 5 dependia desse contador estar correto. Stress test pin: 10 threads × 10 increments → `use_count == 100` exato.
+- **H5.2 — Helper `_int_or_default` em `_row_to_config`**: extraído como `@staticmethod`. Os 2 novos fields do Sprint 5 (`skill_auto_promote_threshold`, `skill_quarantine_timeout_days`) usam o helper porque `0` é sentinela válido ("desativado"). Fields antigos (`max_*`, `dream_*`, etc.) ficam com o padrão `int(row.get(k, d) or d)` porque têm `Field(ge=1)` no Pydantic e `0` não é válido pra eles — comment no código aponta a regra de migração se algum desses ganhar `0` semântico no futuro.
+- **H5.3 — 4 testes de round-trip** em `test_environment.py::TestSkillLifecycleRoundTrip`: round-trip via INSERT, `0` preservado (não coercido pra default), round-trip via UPDATE, e omitir fields num update preserva valores existentes.
+- **H5.4 — Doc cleanup `_setup_skills_wiring`**: corrigida (era `skills/agent`, agora `skills/`); adicionada nota sobre wiring all-or-nothing (Sprint 4+ features dependem de `_skills_loader` não-None; guards garantem no-op quando wiring desabilitado).
+
+### Aprendizado — Sprint 5 (lifecycle automation + audit)
+
+Três pendências do PR #1 entregues: as feature loops do plano original que dependiam só de telemetria (e não de "esperar volume real"). Defaults conservadores — auto-promote ativo (threshold 3) e auto-archive de quarantine ativo (14 dias), mas a feature inteira só roda quando `skill_review_enabled=True` (default `False`).
+
+- **S5.1 — Auto-promote `quarantine → active` após N usos** — `EnvironmentConfig.skill_auto_promote_threshold` (default `3`, `0` desativa). `SkillsLoader.__init__` aceita `auto_promote_threshold` (default `0`); kernel sincroniza com `cfg.skill_auto_promote_threshold` via `set_auto_promote_threshold` em cada `_background_review_for`. `usage.mark_used` ganha kwarg `auto_promote_threshold`; quando `agent_created=true` AND `status=quarantine` AND `use_count >= threshold`, flipa pra `active` e retorna `True` (loader atualiza `Skill.status` em memória). Skills humanas (`agent_created=false`) e ativas nunca são tocadas. 4 testes.
+- **S5.2 — Auto-archive quarantine antiga no `DreamEngine.PrunePhase`** — `EnvironmentConfig.skill_quarantine_timeout_days` (default `14`, `0` desativa). Quarantine sem `last_used_at` (definição) → idade medida via `created_at`. Quando `days > timeout` AND não pinada AND `agent_created=true` → status flipa pra `archived` (sumindo do loader). Counterpart do `max_quarantine_skills` cap: cap protege contra explosão de novas, archive libera espaço. `PrunePhase.__init__` aceita `quarantine_timeout_days`; `DreamEngine` propaga via `skill_quarantine_timeout_days`; kernel propaga em ambos os caminhos (`_get_or_create_dream_engine` e `kernel.dream`). 4 testes (timeout normal, recent untouched, pinned protegida, `0` desativa).
+- **S5.3 — Tabela `skill_review_audit` + CLI** — schema: `id, session_id, symbiote_id, trigger, applied, skipped, ok, error, ops_json, created_at`. Migration idempotente. `BackgroundReviewEngine.__init__` aceita `storage` opcional; `spawn`/`spawn_final`/`run_sync` ganham param `trigger` (`nudge|final|sync`); cada `_run` escreve uma linha no `finally` (best-effort, log on failure). Kernel passa `storage=self._storage` ao construir o engine. CLI `symbiote audit skill-review --days N --symbiote ID --session ID --trigger T --limit N --ops` espelha o `audit reflection`. 4 testes (no-op run, applied ops, LLM failure capturada, no-audit sem storage).
+
 ### Aprendizado — Sprint 1 (LLM Reflection + Consolidator refactor)
 
 Primeira fase do plano de self-improvement (referência: `docs/RESEARCH-hermes-self-improvement.md`, processo de discussão em conversa). Defaults preservam comportamento atual: clientes embedados (`you_news`, `sym_talk_lt`) não veem diferença até trocar a flag explicitamente.

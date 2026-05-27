@@ -66,10 +66,21 @@ class SkillsLoader:
     Skills live at ``{workspace_root}/skills/{skill-name}/SKILL.md``.
     """
 
-    def __init__(self, *roots: Path) -> None:
+    def __init__(self, *roots: Path, auto_promote_threshold: int = 0) -> None:
         self._roots = list(roots)
         self._skills: dict[str, Skill] = {}
+        # Sprint 5: when > 0, quarantine skills auto-promote to active after
+        # this many ``get_skill()`` loads. 0 keeps promotion strictly manual.
+        self._auto_promote_threshold = auto_promote_threshold
         self._discover()
+
+    def set_auto_promote_threshold(self, value: int) -> None:
+        """Update the auto-promote threshold post-construction.
+
+        The kernel sets this per-symbiote from EnvironmentConfig before each
+        message turn; tests can flip it directly.
+        """
+        self._auto_promote_threshold = max(0, int(value))
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -93,17 +104,25 @@ class SkillsLoader:
     def get_skill(self, name: str) -> Skill | None:
         """Get a skill by name, loading content lazily.
 
-        Bumps ``use_count`` on the sidecar — this is the telemetry the future
-        SkillCuratorPhase uses to decide stale/archived transitions.
+        Bumps ``use_count`` on the sidecar — telemetry for the curator and
+        signal for Sprint 5 auto-promotion. When ``mark_used`` reports a
+        promotion (quarantine → active), the in-memory ``Skill`` dataclass
+        is mutated to reflect the new status so the next ``listable_skills``
+        / ``build_summary`` call picks it up without needing a full refresh.
         """
         skill = self._skills.get(name)
         if skill is None:
             return None
         if skill.content is None:
             skill.content = self._load_content(skill.path)
-        # Best-effort usage telemetry. Never fails the load.
+        # Best-effort usage telemetry + auto-promote. Never fails the load.
         with contextlib.suppress(Exception):
-            usage.mark_used(skill.path.parent)
+            promoted = usage.mark_used(
+                skill.path.parent,
+                auto_promote_threshold=self._auto_promote_threshold,
+            )
+            if promoted:
+                skill.status = usage.STATUS_ACTIVE
         return skill
 
     def get_always_skills(self) -> list[Skill]:

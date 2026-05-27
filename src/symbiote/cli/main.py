@@ -1033,6 +1033,87 @@ def audit_reflection(
         kernel.shutdown()
 
 
+# ── audit: skill review ────────────────────────────────────────────────────
+
+
+@audit_app.command("skill-review")
+def audit_skill_review(
+    days: int = typer.Option(7, "--days", help="Look back this many days"),
+    symbiote_id: str | None = typer.Option(None, "--symbiote", help="Filter by symbiote_id"),
+    session_id: str | None = typer.Option(None, "--session", help="Filter by session_id"),
+    trigger: str | None = typer.Option(
+        None, "--trigger",
+        help="Filter by trigger ('nudge', 'final', 'sync')",
+    ),
+    limit: int = typer.Option(50, "--limit", help="Max rows"),
+    show_ops: bool = typer.Option(False, "--ops", help="Show full ops JSON per row"),
+) -> None:
+    """Dump rows from skill_review_audit (Sprint 5)."""
+    kernel = _make_kernel()
+    try:
+        where = ["created_at >= datetime('now', ?)"]
+        params: list = [f"-{int(days)} days"]
+        if symbiote_id:
+            where.append("symbiote_id = ?")
+            params.append(symbiote_id)
+        if session_id:
+            where.append("session_id = ?")
+            params.append(session_id)
+        if trigger:
+            where.append("trigger = ?")
+            params.append(trigger)
+        sql = (
+            "SELECT id, session_id, symbiote_id, trigger, applied, skipped, "
+            "ok, error, ops_json, created_at "
+            "FROM skill_review_audit WHERE " + " AND ".join(where) +
+            " ORDER BY created_at DESC LIMIT ?"
+        )
+        params.append(int(limit))
+        rows = kernel._storage.fetch_all(sql, tuple(params))
+
+        if not rows:
+            console.print("[yellow]No skill_review_audit rows match.[/]")
+            return
+
+        table = Table(title=f"skill_review_audit (last {days}d, {len(rows)} rows)")
+        table.add_column("Session", style="cyan", no_wrap=True)
+        table.add_column("Trigger")
+        table.add_column("Applied", justify="right")
+        table.add_column("Skipped", justify="right")
+        table.add_column("OK", justify="center")
+        table.add_column("Error", max_width=30)
+        table.add_column("When", no_wrap=True)
+        for r in rows:
+            table.add_row(
+                (r["session_id"] or "")[:8],
+                r["trigger"] or "",
+                str(r["applied"] or 0),
+                str(r["skipped"] or 0),
+                "✓" if r["ok"] else "✗",
+                (r["error"] or "")[:30],
+                (r["created_at"] or "")[:19],
+            )
+        console.print(table)
+
+        if show_ops:
+            console.print()
+            for r in rows[:5]:
+                try:
+                    ops = json.loads(r["ops_json"] or "[]")
+                except Exception:
+                    continue
+                if not ops:
+                    continue
+                console.print(Panel(
+                    f"[cyan]session={(r['session_id'] or '')[:8]} "
+                    f"trigger={r['trigger']}[/]\n"
+                    f"{json.dumps(ops, ensure_ascii=False, indent=2)[:800]}",
+                    expand=False,
+                ))
+    finally:
+        kernel.shutdown()
+
+
 # ── skills: lifecycle management ───────────────────────────────────────────
 
 

@@ -40,6 +40,7 @@ class DreamEngine:
         min_sessions: int = 5,
         dry_run: bool = False,
         skills_loader: object | None = None,
+        skill_quarantine_timeout_days: int | None = None,
     ) -> None:
         self._storage = storage
         self._memory = memory
@@ -48,6 +49,9 @@ class DreamEngine:
         self._min_sessions = min_sessions
         self._dry_run = dry_run
         self._skills_loader = skills_loader
+        # Sprint 5 — quarantine auto-archive. Passed through to PrunePhase
+        # on construction so the symbiote config drives the lifecycle.
+        self._skill_quarantine_timeout_days = skill_quarantine_timeout_days
         self._active_threads: dict[str, threading.Thread] = {}
 
     # ── public API ─────────────────────────────────────────────────────
@@ -99,7 +103,11 @@ class DreamEngine:
         phase_classes = _FULL_PHASES if dream_mode == "full" else _LIGHT_PHASES
 
         for cls in phase_classes:
-            phase = cls()
+            # PrunePhase honours the per-config quarantine timeout when set.
+            if cls is PrunePhase and self._skill_quarantine_timeout_days is not None:
+                phase = cls(quarantine_timeout_days=self._skill_quarantine_timeout_days)
+            else:
+                phase = cls()
             if phase.requires_llm and self._llm is None:
                 continue
             if phase.requires_llm and budget.remaining == 0:

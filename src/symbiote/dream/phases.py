@@ -82,9 +82,23 @@ class PrunePhase:
     # Skill lifecycle thresholds. Mirrors Hermes curator defaults.
     SKILL_ACTIVE_TO_STALE_DAYS = 30.0
     SKILL_STALE_TO_ARCHIVED_DAYS = 90.0  # total from last_used_at
+    # Sprint 5 — quarantine auto-archive threshold (override via ctx.cfg if
+    # the kernel passes one; default mirrors the CHANGELOG/EnvironmentConfig
+    # default of 14 days). Counterpart of ``max_quarantine_skills``: the
+    # cap stops creates, this archives stale quarantine so the cap doesn't
+    # become permanent.
+    SKILL_QUARANTINE_TIMEOUT_DAYS = 14.0
 
-    def __init__(self, decay_threshold: float = 30.0) -> None:
+    def __init__(self, decay_threshold: float = 30.0,
+                 quarantine_timeout_days: float | None = None) -> None:
         self._threshold = decay_threshold
+        # 0 disables quarantine auto-archive (rely on manual archival).
+        # None preserves the class-level default for callers that don't pass.
+        self._quarantine_timeout = (
+            self.SKILL_QUARANTINE_TIMEOUT_DAYS
+            if quarantine_timeout_days is None
+            else float(quarantine_timeout_days)
+        )
 
     def run(self, ctx: DreamContext) -> DreamPhaseResult:
         start = datetime.now(tz=UTC)
@@ -120,8 +134,16 @@ class PrunePhase:
                 ctx.memory.deactivate(entry.id)
                 applied += 1
 
-        # Skill lifecycle pass (Sprint 4). Only acts on agent_created skills
-        # — every human-curated skill (no sidecar) is invisible to this pass.
+        # Skill lifecycle pass (Sprint 4 + Sprint 5). Only acts on
+        # agent_created skills — every human-curated skill (no sidecar) is
+        # invisible to this pass.
+        #
+        # Transitions:
+        #   active     → stale     after SKILL_ACTIVE_TO_STALE_DAYS (no use_count growth)
+        #   stale      → archived  after SKILL_STALE_TO_ARCHIVED_DAYS
+        #   quarantine → archived  after quarantine_timeout days (Sprint 5)
+        #                          measured from created_at since quarantine
+        #                          entries have last_used_at=None by definition
         if ctx.skills_loader is not None:
             for skill in ctx.skills_loader.list_skills():
                 if not skill.agent_created:
@@ -130,21 +152,37 @@ class PrunePhase:
                 if skill_usage.is_pinned(skill_dir):
                     continue
                 meta = skill_usage.read_meta(skill_dir) or {}
-                last_used_str = meta.get("last_used_at") or meta.get("created_at")
-                if not last_used_str:
-                    continue
-                try:
-                    last_used = datetime.fromisoformat(last_used_str)
-                except (TypeError, ValueError):
-                    continue
-                days = _days_since(last_used)
 
                 current = skill.status
                 target: str | None = None
-                if current == skill_usage.STATUS_ACTIVE and days > self.SKILL_ACTIVE_TO_STALE_DAYS:
-                    target = skill_usage.STATUS_STALE
-                elif current == skill_usage.STATUS_STALE and days > self.SKILL_STALE_TO_ARCHIVED_DAYS:
-                    target = skill_usage.STATUS_ARCHIVED
+                days: float = 0.0
+
+                if current == skill_usage.STATUS_QUARANTINE:
+                    # Quarantine has no last_used_at by definition — measure
+                    # age from created_at instead. Skip if neither (defensive).
+                    age_str = meta.get("created_at")
+                    if not age_str or self._quarantine_timeout <= 0:
+                        continue
+                    try:
+                        age_dt = datetime.fromisoformat(age_str)
+                    except (TypeError, ValueError):
+                        continue
+                    days = _days_since(age_dt)
+                    if days > self._quarantine_timeout:
+                        target = skill_usage.STATUS_ARCHIVED
+                else:
+                    last_used_str = meta.get("last_used_at") or meta.get("created_at")
+                    if not last_used_str:
+                        continue
+                    try:
+                        last_used = datetime.fromisoformat(last_used_str)
+                    except (TypeError, ValueError):
+                        continue
+                    days = _days_since(last_used)
+                    if current == skill_usage.STATUS_ACTIVE and days > self.SKILL_ACTIVE_TO_STALE_DAYS:
+                        target = skill_usage.STATUS_STALE
+                    elif current == skill_usage.STATUS_STALE and days > self.SKILL_STALE_TO_ARCHIVED_DAYS:
+                        target = skill_usage.STATUS_ARCHIVED
 
                 if target is None:
                     continue

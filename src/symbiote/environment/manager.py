@@ -57,6 +57,9 @@ class EnvironmentManager:
         skill_nudge_interval: int | None = None,
         max_active_skills: int | None = None,
         max_quarantine_skills: int | None = None,
+        # Sprint 5 — lifecycle automation
+        skill_auto_promote_threshold: int | None = None,
+        skill_quarantine_timeout_days: int | None = None,
     ) -> EnvironmentConfig:
         """Create or update an environment config for a symbiote+workspace combo."""
         # Guard: reflection_mode='llm' requires evolver_llm; 'llm_main' requires main llm.
@@ -140,6 +143,8 @@ class EnvironmentManager:
                 skill_nudge_interval=skill_nudge_interval if skill_nudge_interval is not None else existing.skill_nudge_interval,
                 max_active_skills=max_active_skills if max_active_skills is not None else existing.max_active_skills,
                 max_quarantine_skills=max_quarantine_skills if max_quarantine_skills is not None else existing.max_quarantine_skills,
+                skill_auto_promote_threshold=skill_auto_promote_threshold if skill_auto_promote_threshold is not None else existing.skill_auto_promote_threshold,
+                skill_quarantine_timeout_days=skill_quarantine_timeout_days if skill_quarantine_timeout_days is not None else existing.skill_quarantine_timeout_days,
             )
             self._storage.execute(
                 "UPDATE environment_configs SET "
@@ -153,7 +158,8 @@ class EnvironmentManager:
                 "dream_mode = ?, dream_max_llm_calls = ?, dream_min_sessions = ?, "
                 "reflection_mode = ?, reflection_max_tokens = ?, "
                 "skill_review_enabled = ?, skill_nudge_interval = ?, max_active_skills = ?, "
-                "max_quarantine_skills = ? "
+                "max_quarantine_skills = ?, "
+                "skill_auto_promote_threshold = ?, skill_quarantine_timeout_days = ? "
                 "WHERE id = ?",
                 (
                     json.dumps(cfg.tools),
@@ -186,6 +192,8 @@ class EnvironmentManager:
                     cfg.skill_nudge_interval,
                     cfg.max_active_skills,
                     cfg.max_quarantine_skills,
+                    cfg.skill_auto_promote_threshold,
+                    cfg.skill_quarantine_timeout_days,
                     cfg.id,
                 ),
             )
@@ -225,6 +233,8 @@ class EnvironmentManager:
             skill_nudge_interval=skill_nudge_interval if skill_nudge_interval is not None else 10,
             max_active_skills=max_active_skills if max_active_skills is not None else 20,
             max_quarantine_skills=max_quarantine_skills if max_quarantine_skills is not None else 10,
+            skill_auto_promote_threshold=skill_auto_promote_threshold if skill_auto_promote_threshold is not None else 3,
+            skill_quarantine_timeout_days=skill_quarantine_timeout_days if skill_quarantine_timeout_days is not None else 14,
         )
         self._storage.execute(
             "INSERT INTO environment_configs "
@@ -236,8 +246,9 @@ class EnvironmentManager:
             "dream_mode, dream_max_llm_calls, dream_min_sessions, "
             "reflection_mode, reflection_max_tokens, "
             "skill_review_enabled, skill_nudge_interval, max_active_skills, "
-            "max_quarantine_skills) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "max_quarantine_skills, "
+            "skill_auto_promote_threshold, skill_quarantine_timeout_days) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 cfg.id,
                 cfg.symbiote_id,
@@ -272,6 +283,8 @@ class EnvironmentManager:
                 cfg.skill_nudge_interval,
                 cfg.max_active_skills,
                 cfg.max_quarantine_skills,
+                cfg.skill_auto_promote_threshold,
+                cfg.skill_quarantine_timeout_days,
             ),
         )
         return cfg
@@ -461,7 +474,21 @@ class EnvironmentManager:
         return self._row_to_config(row)
 
     @staticmethod
+    def _int_or_default(row: dict, key: str, default: int) -> int:
+        """Return ``int(row[key])`` if non-None, else ``default``.
+
+        Distinguishes ``None`` (missing column / pre-migration row) from
+        ``0`` (the user opted out). The older pattern ``int(row.get(k, d) or d)``
+        treats ``0`` as falsy and forces it back to ``d`` — buggy for any
+        field where ``0`` carries semantic meaning (e.g. Sprint 5's
+        ``skill_auto_promote_threshold=0`` ≡ disabled).
+        """
+        val = row.get(key)
+        return int(val) if val is not None else default
+
+    @staticmethod
     def _row_to_config(row: dict) -> EnvironmentConfig:
+        _int = EnvironmentManager._int_or_default
         return EnvironmentConfig(
             id=row["id"],
             symbiote_id=row["symbiote_id"],
@@ -496,4 +523,12 @@ class EnvironmentManager:
             skill_nudge_interval=int(row.get("skill_nudge_interval", 10) or 10),
             max_active_skills=int(row.get("max_active_skills", 20) or 20),
             max_quarantine_skills=int(row.get("max_quarantine_skills", 10) or 10),
+            # NOTE: these two use ``_int`` (which preserves ``0``) because
+            # ``0`` is the documented "disable" sentinel — unlike the
+            # ``int(row.get(k, d) or d)`` pattern above, which forces 0 → default.
+            # The other numeric fields above have ``ge=1`` Pydantic validators
+            # so the old pattern is safe for them; migrate them too if any ever
+            # gains a meaningful ``0``.
+            skill_auto_promote_threshold=_int(row, "skill_auto_promote_threshold", 3),
+            skill_quarantine_timeout_days=_int(row, "skill_quarantine_timeout_days", 14),
         )

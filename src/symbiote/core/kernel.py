@@ -445,7 +445,10 @@ class SymbioteKernel:
 
         Resolution rules:
         - ``config.skills_root`` (if set) is the agent write root.
-        - Otherwise, defaults to ``{db_path.parent}/skills/agent``.
+        - Otherwise, defaults to ``{db_path.parent}/skills/``. Human-curated
+          and agent-created skills coexist in this directory; the
+          ``.skill_meta.json`` sidecar (Sprint 3) distinguishes them via
+          ``agent_created`` — no physical subfolder required.
         - ``config.skills_extra_roots`` are read+modify roots (e.g. a
           ``skills/`` directory in the project).
         - ``config.skills_protected_roots`` are read-only (e.g.
@@ -454,6 +457,20 @@ class SymbioteKernel:
         Idempotent — safe to skip wiring on hosts that don't want skills:
         the agent root directory is created lazily; ``skill_manage`` is
         always registered with the gateway but never auto-authorized.
+
+        Failure modes (Sprint 4.2):
+        - Host EXPLICITLY set ``skills_root`` → ``SkillsStore`` init failure
+          is re-raised so the host sees the PermissionError / OSError.
+        - Default derived path → init failure logs a warning and disables
+          the feature silently. ``_skills_store`` and ``_skills_loader``
+          stay ``None``.
+
+        All-or-nothing: every Sprint 4+ feature (skill_manage tool,
+        background review, Dream skill-lifecycle, Sprint 5 auto-promote /
+        auto-archive / skill_review_audit) depends on ``_skills_loader``
+        being non-None. The guards in ``_background_review_for`` and in
+        ``_get_or_create_dream_engine`` make all these features no-op
+        when wiring is disabled — no silent partial activation.
         """
         cfg = self._config
         # Default: ``{db_path.parent}/skills/`` — same directory the
@@ -518,6 +535,12 @@ class SymbioteKernel:
         are not met (no evolver_llm, no SkillsStore, no SkillsLoader).
         Lazily constructed on first request and cached for the kernel
         lifetime.
+
+        Sprint 5: also propagates ``skill_auto_promote_threshold`` to the
+        loader. In single-user kernels (the common case) the threshold is
+        stable per kernel; in multi-symbiote setups the last opt-in
+        symbiote wins — acceptable because each symbiote sees only its own
+        skills via path scoping anyway.
         """
         cfg = self._environment.get_config(symbiote_id)
         if cfg is None or not cfg.skill_review_enabled:
@@ -528,6 +551,11 @@ class SymbioteKernel:
             return None
         if self._skills_store is None or self._skills_loader is None:
             return None
+        # Keep the loader's auto-promote threshold in sync with cfg on each
+        # call. Cheap (just sets an int) and idempotent.
+        self._skills_loader.set_auto_promote_threshold(
+            cfg.skill_auto_promote_threshold
+        )
         # Hot path: engine already built — return immediately, no lock.
         if self._background_review is not None:
             return self._background_review
@@ -543,6 +571,7 @@ class SymbioteKernel:
                     loader=self._skills_loader,
                     max_active_skills=cfg.max_active_skills,
                     max_quarantine_skills=cfg.max_quarantine_skills,
+                    storage=self._storage,
                 )
         return self._background_review
 
@@ -642,6 +671,7 @@ class SymbioteKernel:
                 max_llm_calls=cfg.dream_max_llm_calls,
                 min_sessions=cfg.dream_min_sessions,
                 skills_loader=self._skills_loader,
+                skill_quarantine_timeout_days=cfg.skill_quarantine_timeout_days,
             )
         return self._dream_engine
 
@@ -667,6 +697,9 @@ class SymbioteKernel:
             min_sessions=1,  # manual trigger ignores min_sessions
             dry_run=dry_run,
             skills_loader=self._skills_loader,
+            skill_quarantine_timeout_days=(
+                cfg.skill_quarantine_timeout_days if cfg else None
+            ),
         )
         return engine.dream(symbiote_id, mode)
 
