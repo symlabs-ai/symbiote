@@ -16,6 +16,8 @@ jobs:
       - name: Rebuild and deploy
         run: |
           cd ~/staging
+          export SYMBIOTE_GIT_COMMIT=$(git -C ./repos/symbiote rev-parse HEAD)
+          echo "Building symbiote at $SYMBIOTE_GIT_COMMIT"
           docker compose build --quiet symbiote
           docker compose up -d symbiote
 
