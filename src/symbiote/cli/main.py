@@ -1114,6 +1114,118 @@ def audit_skill_review(
         kernel.shutdown()
 
 
+# ── audit: prune (retention) ───────────────────────────────────────────────
+
+# Allowlist of audit tables we know how to prune. The CLI option ("reflection"
+# | "skill_review" | "all") resolves to a subset of this tuple, and every SQL
+# interpolation downstream asserts membership before composing the statement —
+# table names CANNOT be parameterized in SQLite, so the assertion is the only
+# defense between an arg and a DROP/DELETE on a wrong table.
+_PRUNE_TABLES = ("reflection_audit", "skill_review_audit")
+_VALID_TABLE_ARGS = frozenset({"reflection", "skill_review", "all"})
+
+
+@audit_app.command("prune")
+def audit_prune(
+    days: int = typer.Option(
+        90, "--days", min=0,
+        help="Delete rows older than N days. Default 90 — adjust per ops policy. "
+             "Must be >= 0.",
+    ),
+    table: str = typer.Option(
+        "all", "--table",
+        help="Which audit table to prune: reflection | skill_review | all.",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Count what would be deleted without removing anything.",
+    ),
+) -> None:
+    """Apaga rows antigas dos audit logs para retenção.
+
+    Sem este comando, ``reflection_audit`` e ``skill_review_audit`` crescem
+    indefinidamente — uma sessão típica produz 1-N rows em cada tabela.
+
+    Cron sugerido (semanal, domingo às 3h):
+
+    \b
+        0 3 * * 0 cd /path/to/project && symbiote audit prune --days 90
+
+    Use ``--dry-run`` antes da primeira execução em produção para confirmar
+    o volume que será apagado.
+    """
+    if table not in _VALID_TABLE_ARGS:
+        raise typer.BadParameter(
+            f"must be one of {sorted(_VALID_TABLE_ARGS)} (got {table!r})",
+            param_hint="--table",
+        )
+
+    targets = (
+        ["reflection_audit"] if table == "reflection"
+        else ["skill_review_audit"] if table == "skill_review"
+        else list(_PRUNE_TABLES)
+    )
+
+    kernel = _make_kernel()
+    try:
+        cutoff_clause = "datetime('now', ?)"
+        cutoff_arg = f"-{int(days)} days"
+
+        table_rows = Table(
+            title=f"Audit prune ({'dry-run' if dry_run else 'live'}, "
+                  f"cutoff {days}d)"
+        )
+        table_rows.add_column("Table", style="cyan")
+        table_rows.add_column("Total rows", justify="right")
+        table_rows.add_column("Older than cutoff", justify="right")
+        table_rows.add_column("Action", style="yellow")
+
+        total_deleted = 0
+        for tbl in targets:
+            # Defense in depth: table names are interpolated into SQL below
+            # (SQLite can't parameterize them). The CLI arg is allowlisted
+            # above, but assert again so any future refactor that loosens
+            # the validator can't sneak an unknown table into a DELETE.
+            assert tbl in _PRUNE_TABLES, f"Refusing to prune unknown table {tbl!r}"
+
+            try:
+                total_row = kernel._storage.fetch_one(
+                    f"SELECT COUNT(*) AS c FROM {tbl}", ()
+                )
+                old_row = kernel._storage.fetch_one(
+                    f"SELECT COUNT(*) AS c FROM {tbl} "
+                    f"WHERE created_at < {cutoff_clause}",
+                    (cutoff_arg,),
+                )
+            except Exception as exc:
+                err_console.print(f"[red]Cannot read {tbl}: {exc}[/]")
+                continue
+            total = int(total_row["c"] if total_row else 0)
+            old = int(old_row["c"] if old_row else 0)
+
+            if dry_run or old == 0:
+                action = f"would delete {old}" if dry_run else "nothing to do"
+            else:
+                kernel._storage.execute(
+                    f"DELETE FROM {tbl} WHERE created_at < {cutoff_clause}",
+                    (cutoff_arg,),
+                )
+                total_deleted += old
+                action = f"deleted {old}"
+
+            table_rows.add_row(tbl, str(total), str(old), action)
+
+        console.print(table_rows)
+        if dry_run:
+            console.print("[dim]Dry-run — no rows were deleted.[/]")
+        elif total_deleted > 0:
+            console.print(f"\n[green]✓[/] Pruned {total_deleted} row(s) total.")
+        else:
+            console.print("[dim]Nothing to prune.[/]")
+    finally:
+        kernel.shutdown()
+
+
 # ── skills: lifecycle management ───────────────────────────────────────────
 
 

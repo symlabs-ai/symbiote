@@ -11,6 +11,8 @@
 | B-42 | Tool descriptions genéricas — melhorar summaries no OpenAPI do YouNews (ex: "Item Action" → "Change item status") | 2026-03-20, harness | média | cross-repo:younews |
 | B-44 | Validar supressão de narração intermediária no YouNews staging após deploy v0.17.31+ | 2026-03-20, harness | média | cross-repo:younews |
 | B-45 | Test harness pytest — validar tests/e2e/test_kimi_tool_loop.py (requer YouNews + SymGateway rodando) | 2026-03-20, harness | baixa | |
+| B-46 | **[BUG] 4 testes pré-existentes falhos em test_generation_settings + test_instant_mode**: assertions mockam `_run_instant(ctx, on_token)` sem o kwarg `llm_config=None` adicionado na v0.5.0. Fix trivial: atualizar 4 assert chamadas pra `_run_instant(ctx, on_token, llm_config=None)`. Não é regressão funcional, é só drift de teste. Ver F3 detalhamento abaixo. | 2026-05-27, sprint5-followup | baixa | bug |
+| B-47 | **[BUG] `SQLiteAdapter` single-cursor thread safety**: conexão única compartilhada entre threads. Race em writes/reads concorrentes manifesta como `sqlite3.InterfaceError: bad parameter or other API misuse` (visto no teste H1 do Sprint 4.1). Mitigado em produção single-user (rotinas mid-session são sequenciais), mas qualquer nova feature paralela morre nele. Fix: lock em `SQLiteAdapter` ou connection pool. Ver F4 detalhamento. | 2026-05-27, sprint5-followup | média | bug |
 
 ### Detalhamento dos itens pendentes
 
@@ -97,3 +99,105 @@ Documentação completa em `~/dev/kb/engenharia/meta_harness.md`, seção 4 (Bac
 | 2 | Interactive chat mode na CLI (loop input/output) | 2026-03-17 | 0.1.5 |
 | 5 | Integração com LLM real testada ponta-a-ponta | 2026-03-17 | 0.1.5 |
 | 1 | Docker container de referência para modo serviço | 2026-03-17 | 0.1.5 |
+
+---
+
+## Detalhamento de bugs
+
+### B-46 — Drift de testes em test_instant_mode + test_generation_settings
+
+**Sintoma**: 4 testes falham consistentemente no `pytest tests/unit/`:
+
+- `tests/unit/test_generation_settings.py::TestChatRunnerPassesConfig::test_none_config_passes_none`
+- `tests/unit/test_instant_mode.py::TestInstantFastPath::test_instant_delegates_to_run_instant`
+- `tests/unit/test_instant_mode.py::TestInstantFastPath::test_brief_uses_run_loop`
+- `tests/unit/test_instant_mode.py::TestInstantFastPath::test_instant_async_delegates`
+
+**Root cause confirmado**: assertions mockam o call de `_run_instant(ctx, on_token)` sem incluir o kwarg `llm_config=None` que foi adicionado em `v0.5.0` (feature "Per-call llm_config propaga kernel.message → ChatRunner.run → adapter config"). O `ChatRunner._run_instant` agora **sempre** recebe `llm_config=<value or None>` mas os testes não atualizaram.
+
+**Diagnóstico** (exemplo de uma das falhas):
+
+```
+Expected: _run_instant(<AssembledContext...>, None)
+Actual:   _run_instant(<AssembledContext...>, None, llm_config=None)
+```
+
+**Fix sugerido**: atualizar os 4 testes para incluir `llm_config=None` em `assert_called_with(...)`:
+
+```diff
+- mock_run_instant.assert_called_with(ctx, None)
++ mock_run_instant.assert_called_with(ctx, None, llm_config=None)
+```
+
+**Impacto**: zero em produção (só testes). Pré-existente desde v0.5.0. Sobreviveu a 5 sprints sem ser notado porque não é regressão de comportamento.
+
+**Estimativa**: 4 edits + 1 rerun. <15min.
+
+---
+
+### B-47 — SQLiteAdapter single-cursor thread safety
+
+**Sintoma**: `sqlite3.InterfaceError: bad parameter or other API misuse` quando ≥2 threads chamam `_storage.fetch_one` / `_storage.execute` simultaneamente.
+
+**Manifestação histórica**:
+
+- Apareceu no teste `TestKernelLazyBuildLock::test_concurrent_calls_build_engine_once` (Sprint 4.1, commit `a0c8c40`). O teste foi reescrito pra contornar (mock no `_environment.get_config`) — não corrigiu o adapter.
+- Teste `TestSpawnDeduplication::test_concurrent_spawn_for_same_session_returns_single_thread` (mesma origem) precisou de `check_same_thread=False` na fixture pra rodar — mas isso desabilita a guarda, não corrige a race no cursor compartilhado.
+
+**Root cause**: `src/symbiote/adapters/storage/sqlite.py` mantém um único `sqlite3.Connection` em `self._conn`. Métodos `execute` e `fetch_*` fazem `self._conn.execute(sql, params)` direto, sem lock. CPython sqlite3 não é thread-safe pra cursor compartilhado, mesmo com `check_same_thread=False`.
+
+**Impacto atual em produção**:
+
+- Single-user (caso comum): rotinas de `kernel.close_session` rodam sequencial → não atinge a race.
+- Background threads que **escrevem** no DB: `MemoryConsolidator`, `BackgroundReviewEngine._write_audit`, `DreamEngine` async. Cada uma roda sozinha (1 thread por callsite), mas se 2 disparam simultâneo (ex: `close_session` chama spawn_final e `_maybe_dream` quase ao mesmo tempo), pode dar conflict.
+
+**Fix sugerido**: 2 opções, qualquer uma viável.
+
+1. **Lock no adapter** (mais simples):
+
+   ```python
+   class SQLiteAdapter:
+       def __init__(self, ...):
+           ...
+           self._lock = threading.Lock()
+
+       def execute(self, sql, params=None):
+           with self._lock:
+               cur = self._conn.execute(sql, params or ())
+               self._conn.commit()
+               return cur
+
+       def fetch_one(self, sql, params=None):
+           with self._lock:
+               cur = self._conn.execute(sql, params or ())
+               return dict(cur.fetchone()) if cur.fetchone() else None
+       # ... idem fetch_all
+   ```
+
+   Custo: serializa todas as operações de SQLite (single-user OK, multi-tenant degrada).
+
+2. **Connection pool** (mais escalável):
+
+   ```python
+   from queue import Queue
+   class SQLiteAdapter:
+       def __init__(self, ..., pool_size=4):
+           self._pool = Queue()
+           for _ in range(pool_size):
+               self._pool.put(sqlite3.connect(...))
+
+       def execute(self, sql, params=None):
+           conn = self._pool.get()
+           try:
+               cur = conn.execute(sql, params or ())
+               conn.commit()
+               return cur
+           finally:
+               self._pool.put(conn)
+   ```
+
+   Custo: mais código, mas escala.
+
+Decisão pendente do mantenedor. Pro caso single-user local-first, opção 1 é suficiente.
+
+**Estimativa**: opção 1 = ~30 LoC + teste de stress concorrente. <2h.
