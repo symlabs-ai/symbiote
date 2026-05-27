@@ -80,6 +80,12 @@ Cinco fixes [Minor] do code review. Cosméticos individualmente, mas eliminam cl
 - Auditoria do background review (tabela `skill_review_audit` similar ao `reflection_audit`) — pendente; hoje a única observabilidade é o sidecar `.skill_meta.json` e os logs.
 - Auto-archive de quarantine antiga (counterpart do `max_quarantine_skills` cap) — fica para um sprint dedicado ao curator.
 
+## [v0.6.1] - 2026-05-27
+
+### Correções
+
+- **fix(browser): `ForgeScraperProvider._normalize()` propaga `content_quality` e `quality_reason` do forge_scraper >=0.11.0** — release anterior (v0.6.0) descartava esses campos no normalize, mesmo após forge_scraper 0.11.0 começar a expô-los. Downstream (sym_talk_lt / Jitto) não conseguia detectar páginas JS-rendered onde `get_content()` retorna só os 102 chars do `<meta description>` (ex.: ge.globo.com agendas, lance.com.br, dashboards) — caía em stagnation do tool loop. Agora os dois campos passam via `getattr(content_info, ..., None)`, defaults a `None` quando o forge_scraper instalado é mais antigo (backward-compat). `ExtractWithFallback` também ganha as chaves no shape final (com `None`) quando todos os providers falham — consistência defensiva para consumidores que sempre fazem `.get("content_quality")`. Bug raiz e ESC documentados em [forge_scraper#tickets/js-rendered-content-empty-extraction.md](https://github.com/symlabs-ai/forge_scraper). 3 testes em `tests/unit/browser/test_forge_scraper_provider.py` cobrem: shape novo, fallback para `None` em forge_scraper <0.11.0, e novo `test_extract_propagates_quality_signal` validando o caso "low + likely_js_rendered".
+
 ## [v0.6.0] - 2026-05-26
 
 > **Release report user-facing:** [`docs/releases/v0.6.0.md`](docs/releases/v0.6.0.md) — quickstart, exemplos, cost cheat-sheet, limitações conhecidas, guia de migração.

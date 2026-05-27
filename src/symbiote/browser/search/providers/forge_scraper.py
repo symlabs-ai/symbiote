@@ -59,7 +59,16 @@ class ForgeScraperProvider:
 
 
 def _normalize(content_info: Any, url: str) -> dict[str, Any]:
-    """Convert forge_scraper.ContentInfo into the standard {url,title,content,...} shape."""
+    """Convert forge_scraper.ContentInfo into the standard {url,title,content,...} shape.
+
+    `content_quality` / `quality_reason` are propagated as-is from
+    forge_scraper >= 0.11.0. Older versions of the lib don't set these
+    attributes, so the getattr fallback to None keeps us forward/backward
+    compatible. Downstream consumers (Jitto tool loop) read them via
+    ``.get()`` to decide whether to retry with a different provider or
+    surface "page is JS-rendered" to the LLM instead of treating a 102-char
+    meta description as a real article.
+    """
     title = getattr(content_info, "title", "") or ""
     content = getattr(content_info, "content", "") or ""
     language = getattr(content_info, "language", None)
@@ -67,6 +76,8 @@ def _normalize(content_info: Any, url: str) -> dict[str, Any]:
     platform = getattr(content_info, "platform", None)
     if platform is not None and hasattr(platform, "value"):
         platform = platform.value
+    content_quality = getattr(content_info, "content_quality", None)
+    quality_reason = getattr(content_info, "quality_reason", None)
     return {
         "url": url,
         "title": title,
@@ -74,4 +85,6 @@ def _normalize(content_info: Any, url: str) -> dict[str, Any]:
         "language": language,
         "platform": platform,
         "metadata": dict(metadata) if metadata else {},
+        "content_quality": content_quality,
+        "quality_reason": quality_reason,
     }

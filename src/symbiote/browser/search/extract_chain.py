@@ -68,5 +68,7 @@ class ExtractWithFallback:
             "language": None,
             "platform": None,
             "metadata": {},
+            "content_quality": None,
+            "quality_reason": None,
             "extracted_by": None,
         }
