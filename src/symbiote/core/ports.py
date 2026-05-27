@@ -54,6 +54,26 @@ class MemoryPort(Protocol):
 
     def deactivate(self, memory_id: str) -> None: ...
 
+    def update(
+        self,
+        memory_id: str,
+        *,
+        content: str | None = None,
+        importance: float | None = None,
+        tags: list[str] | None = None,
+    ) -> bool:
+        """Update a memory entry in place. Returns True if updated, False if id not found.
+
+        Only fields passed as non-None are touched. ``last_used_at`` is NOT updated
+        by this method — PATCH from reflection is not a "recall" event, so it
+        shouldn't reset decay timers. ``updated_at`` is bumped on every call.
+
+        Contract: never raises on missing id (returns False). This keeps callers
+        like Reflection's ``_apply_llm_facts`` simple — invalid target_id falls
+        back to CREATE without exception handling on the hot path.
+        """
+        ...
+
 
 class MessagePort(Protocol):
     """Structural interface for message retrieval (isolates SQL from consumers)."""

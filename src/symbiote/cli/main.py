@@ -31,11 +31,15 @@ session_app = typer.Typer(help="Session management commands")
 memory_app = typer.Typer(help="Memory management commands")
 export_app = typer.Typer(help="Export commands")
 tools_app = typer.Typer(help="Tool management commands")
+audit_app = typer.Typer(help="Inspect reflection / learning audit logs")
+skills_app = typer.Typer(help="Manage skill lifecycle (list, promote, pin)")
 
 app.add_typer(session_app, name="session")
 app.add_typer(memory_app, name="memory")
 app.add_typer(export_app, name="export")
 app.add_typer(tools_app, name="tools")
+app.add_typer(audit_app, name="audit")
+app.add_typer(skills_app, name="skills")
 
 # ── shared state ───────────────────────────────────────────────────────────
 
@@ -949,6 +953,255 @@ def classify(
         raise typer.Exit(1) from exc
 
     console.print(f"[green]✓[/] Approved: {data['approved']}, Disabled: {data['disabled']}, Unchanged: {data['unchanged']}")
+
+
+# ── audit: reflection ──────────────────────────────────────────────────────
+
+
+@audit_app.command("reflection")
+def audit_reflection(
+    days: int = typer.Option(7, "--days", help="Look back this many days"),
+    symbiote_id: str | None = typer.Option(None, "--symbiote", help="Filter by symbiote_id"),
+    session_id: str | None = typer.Option(None, "--session", help="Filter by session_id"),
+    limit: int = typer.Option(50, "--limit", help="Max rows"),
+    show_diff: bool = typer.Option(False, "--diff", help="Show keyword vs LLM fact-count diff per row"),
+) -> None:
+    """Dump rows from reflection_audit (Sprint 1 of the LLM reflection rollout)."""
+    kernel = _make_kernel()
+    try:
+        where = ["created_at >= datetime('now', ?)"]
+        params: list = [f"-{int(days)} days"]
+        if symbiote_id:
+            where.append("symbiote_id = ?")
+            params.append(symbiote_id)
+        if session_id:
+            where.append("session_id = ?")
+            params.append(session_id)
+        sql = (
+            "SELECT id, session_id, symbiote_id, mode, "
+            "keyword_facts_json, llm_facts_json, llm_error, created_at "
+            "FROM reflection_audit WHERE " + " AND ".join(where) +
+            " ORDER BY created_at DESC LIMIT ?"
+        )
+        params.append(int(limit))
+        rows = kernel._storage.fetch_all(sql, tuple(params))
+
+        if not rows:
+            console.print("[yellow]No reflection_audit rows match.[/]")
+            return
+
+        table = Table(title=f"reflection_audit (last {days}d, {len(rows)} rows)")
+        table.add_column("Session", style="cyan", no_wrap=True)
+        table.add_column("Mode")
+        table.add_column("Keyword #", justify="right")
+        table.add_column("LLM #", justify="right")
+        table.add_column("LLM Error", max_width=40)
+        table.add_column("When", no_wrap=True)
+        for r in rows:
+            try:
+                k_facts = json.loads(r["keyword_facts_json"] or "[]")
+                l_facts = json.loads(r["llm_facts_json"] or "[]")
+            except Exception:
+                k_facts, l_facts = [], []
+            table.add_row(
+                (r["session_id"] or "")[:8],
+                r["mode"] or "",
+                str(len(k_facts)),
+                str(len(l_facts)),
+                (r["llm_error"] or "")[:40],
+                (r["created_at"] or "")[:19],
+            )
+        console.print(table)
+
+        if show_diff:
+            console.print()
+            for r in rows[:5]:  # limit verbose diff to first 5
+                try:
+                    k_facts = json.loads(r["keyword_facts_json"] or "[]")
+                    l_facts = json.loads(r["llm_facts_json"] or "[]")
+                except Exception:
+                    continue
+                console.print(Panel(
+                    f"[cyan]session={r['session_id'][:8]} mode={r['mode']}[/]\n"
+                    f"[yellow]keyword ({len(k_facts)}):[/] "
+                    f"{json.dumps(k_facts, ensure_ascii=False)[:300]}\n"
+                    f"[green]llm ({len(l_facts)}):[/] "
+                    f"{json.dumps(l_facts, ensure_ascii=False)[:300]}",
+                    expand=False,
+                ))
+    finally:
+        kernel.shutdown()
+
+
+# ── skills: lifecycle management ───────────────────────────────────────────
+
+
+def _default_skills_roots() -> list[Path]:
+    """Where to look for skills when --root is not passed.
+
+    Looks for: ``.symbiote/skills/`` (kernel default agent root) and
+    ``skills/`` (project-curated). Returns only roots that exist.
+    """
+    cwd = Path.cwd()
+    candidates = [cwd / ".symbiote/skills", cwd / "skills"]
+    return [r for r in candidates if r.is_dir()]
+
+
+def _resolve_loader_roots(roots: list[Path], layout: str) -> list[Path]:
+    """Translate --root paths into the parent dirs ``SkillsLoader`` scans.
+
+    ``SkillsLoader`` expects ``{root}/skills/{name}/SKILL.md``. The CLI lets
+    users point at either layout:
+
+    * ``nested`` — root contains a ``skills/`` subdir (legacy workspace style).
+      Pass ``root`` directly to the loader.
+    * ``direct`` — root contains ``{name}/SKILL.md`` directly (agent layout).
+      Pass ``root.parent`` so the loader's ``root/skills`` matches.
+    * ``auto``   — inspect the contents of ``root`` to guess. Used to be the
+      only behavior; now explicit ``direct`` / ``nested`` is preferred when
+      the user knows the layout, because ``auto`` fails silently when ``root``
+      is empty (no skills yet).
+    """
+    if layout not in ("auto", "direct", "nested"):
+        raise typer.BadParameter(
+            f"--layout must be one of: auto, direct, nested (got {layout!r})"
+        )
+    resolved: list[Path] = []
+    for r in roots:
+        if layout == "nested":
+            resolved.append(r)
+        elif layout == "direct":
+            resolved.append(r.parent)
+        else:  # auto
+            # If root contains at least one ``{name}/SKILL.md``, treat as direct.
+            try:
+                has_direct = any(
+                    (sd / "SKILL.md").is_file()
+                    for sd in r.iterdir()
+                    if sd.is_dir()
+                )
+            except OSError:
+                has_direct = False
+            resolved.append(r.parent if has_direct else r)
+    return resolved
+
+
+def _require_skills_roots(roots: list[Path]) -> list[Path]:
+    """Resolve default roots if none passed; exit with a clear message if empty."""
+    if not roots:
+        roots = _default_skills_roots()
+    if not roots:
+        err_console.print(
+            "[red]No skills roots found.[/] Pass --root <path>, or run this "
+            "from a project with [cyan].symbiote/skills/[/] or [cyan]skills/[/]."
+        )
+        raise typer.Exit(1)
+    return roots
+
+
+@skills_app.command("list")
+def skills_list(
+    root: list[Path] = typer.Option(  # noqa: B008
+        None, "--root", help="Skills root directory (repeatable). Defaults to "
+        ".symbiote/skills/agent/ + skills/ if present.",
+    ),
+    show_all: bool = typer.Option(False, "--all", help="Include quarantine/archived"),
+) -> None:
+    """List skills with status, authorship, and use count."""
+    from symbiote.skills import usage as _usage
+    from symbiote.skills.loader import SkillsLoader
+
+    roots = root or _default_skills_roots()
+    if not roots:
+        err_console.print(
+            "[red]No skills roots found.[/] Pass --root or create ./skills/."
+        )
+        raise typer.Exit(1)
+
+    # SkillsLoader expects roots whose children are 'skills/<name>/SKILL.md'.
+    # Pass each root's PARENT so 'root/skills' is what it scans, falling back
+    # to the root itself when it already has skill dirs directly under it.
+    parents_to_try: list[Path] = []
+    for r in roots:
+        # If r itself contains skill dirs directly (./skill-x/SKILL.md), pass r.parent;
+        # otherwise pass r and let SkillsLoader look for r/skills/*.
+        has_direct_skills = any((sd / "SKILL.md").is_file() for sd in r.iterdir() if sd.is_dir())
+        parents_to_try.append(r.parent if has_direct_skills else r)
+    loader = SkillsLoader(*parents_to_try)
+
+    skills = loader.list_skills()
+    if not show_all:
+        skills = [s for s in skills if s.status == _usage.STATUS_ACTIVE]
+
+    if not skills:
+        console.print("[yellow]No skills found.[/]")
+        return
+
+    table = Table(title=f"Skills ({len(skills)})")
+    table.add_column("Name", style="cyan")
+    table.add_column("Status")
+    table.add_column("Author")
+    table.add_column("Used", justify="right")
+    table.add_column("Patched", justify="right")
+    table.add_column("Pinned", justify="center")
+    table.add_column("Description", max_width=50)
+
+    for s in skills:
+        meta = _usage.read_meta(s.path.parent) or {}
+        author = "agent" if s.agent_created else "human"
+        pinned = "✓" if meta.get("pinned") else ""
+        used = str(meta.get("use_count", 0))
+        patched = str(meta.get("patch_count", 0))
+        table.add_row(s.name, s.status, author, used, patched, pinned, s.description[:50])
+    console.print(table)
+
+
+@skills_app.command("promote")
+def skills_promote(
+    name: str = typer.Argument(help="Skill name"),
+    root: list[Path] = typer.Option(  # noqa: B008
+        None, "--root", help="Skills root directory (repeatable)",
+    ),
+    layout: str = typer.Option("auto", "--layout", help="auto | direct | nested"),
+) -> None:
+    """Promote a quarantine skill to active so it appears in <available-skills>."""
+    from symbiote.skills import usage as _usage
+    from symbiote.skills.loader import SkillsLoader
+
+    roots = _require_skills_roots(root)
+    loader = SkillsLoader(*_resolve_loader_roots(roots, layout))
+    skill = loader.get_skill(name)
+    if skill is None:
+        err_console.print(f"[red]Skill {name!r} not found.[/]")
+        raise typer.Exit(1)
+
+    _usage.set_status(skill.path.parent, _usage.STATUS_ACTIVE)
+    console.print(f"[green]✓[/] {name} promoted to active.")
+
+
+@skills_app.command("pin")
+def skills_pin(
+    name: str = typer.Argument(help="Skill name"),
+    unpin: bool = typer.Option(False, "--unpin", help="Unpin instead of pin"),
+    root: list[Path] = typer.Option(  # noqa: B008
+        None, "--root", help="Skills root directory (repeatable)",
+    ),
+    layout: str = typer.Option("auto", "--layout", help="auto | direct | nested"),
+) -> None:
+    """Pin protects a skill from delete + future curator archive."""
+    from symbiote.skills import usage as _usage
+    from symbiote.skills.loader import SkillsLoader
+
+    roots = _require_skills_roots(root)
+    loader = SkillsLoader(*_resolve_loader_roots(roots, layout))
+    skill = loader.get_skill(name)
+    if skill is None:
+        err_console.print(f"[red]Skill {name!r} not found.[/]")
+        raise typer.Exit(1)
+
+    _usage.set_pinned(skill.path.parent, not unpin)
+    state = "unpinned" if unpin else "pinned"
+    console.print(f"[green]✓[/] {name} {state}.")
 
 
 if __name__ == "__main__":

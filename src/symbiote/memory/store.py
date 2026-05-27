@@ -175,6 +175,55 @@ class MemoryStore:
             (memory_id,),
         )
 
+    def update(
+        self,
+        memory_id: str,
+        *,
+        content: str | None = None,
+        importance: float | None = None,
+        tags: list[str] | None = None,
+    ) -> bool:
+        """Update a memory entry in place. Returns True if updated, False if id not found.
+
+        Only non-None kwargs are written. ``last_used_at`` is intentionally NOT
+        touched here — a PATCH from reflection refines the entry, it doesn't
+        "use" the memory in the decay sense. ``updated_at`` is bumped so the
+        audit / dream pipelines can tell a PATCH from a stale record.
+
+        Inactive entries (``is_active=0``) are not patched and return False —
+        prune/reconcile already decided this entry is dead.
+        """
+        row = self._storage.fetch_one(
+            "SELECT id, is_active FROM memory_entries WHERE id = ?",
+            (memory_id,),
+        )
+        if row is None or not row["is_active"]:
+            return False
+
+        # Build the UPDATE dynamically so callers can patch any subset.
+        sets: list[str] = []
+        params: list = []
+        if content is not None:
+            sets.append("content = ?")
+            params.append(content)
+        if importance is not None:
+            sets.append("importance = ?")
+            params.append(float(importance))
+        if tags is not None:
+            sets.append("tags_json = ?")
+            params.append(json.dumps(tags))
+        if not sets:
+            # No-op patch — caller asked for nothing. Treated as success.
+            return True
+        sets.append("updated_at = ?")
+        params.append(datetime.now(tz=UTC).isoformat())
+        params.append(memory_id)
+        self._storage.execute(
+            f"UPDATE memory_entries SET {', '.join(sets)} WHERE id = ?",
+            tuple(params),
+        )
+        return True
+
     # ── private helpers ────────────────────────────────────────────────
 
     @staticmethod
@@ -186,6 +235,12 @@ class MemoryStore:
         last_used = row["last_used_at"]
         if isinstance(last_used, str):
             last_used = datetime.fromisoformat(last_used)
+
+        updated = row.get("updated_at")
+        if isinstance(updated, str) and updated:
+            updated = datetime.fromisoformat(updated)
+        elif updated is None or updated == "":
+            updated = None
 
         tags = json.loads(row.get("tags_json", "[]"))
 
@@ -203,5 +258,6 @@ class MemoryStore:
             confidence=row["confidence"],
             created_at=created,
             last_used_at=last_used,
+            updated_at=updated,
             is_active=bool(row["is_active"]),
         )

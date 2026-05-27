@@ -1,16 +1,24 @@
-"""MemoryConsolidator — summarize old messages via LLM when tokens exceed threshold.
+"""MemoryConsolidator — compress old messages into a session_summary when tokens exceed threshold.
 
-Consolidation runs in a background thread to avoid blocking the chat response.
+Compression runs in a background thread to avoid blocking the chat response.
 Working memory is trimmed immediately; LLM summarization happens asynchronously.
+
+This component is intentionally narrow: it ONLY produces a single
+``session_summary`` MemoryEntry per consolidation. Durable fact extraction
+(preference/constraint/procedural/decision) is the sole responsibility of
+``ReflectionEngine`` in ``core/reflection.py``, which runs on close_session
+with the engineered prompt + anti-patterns from ``core/_review_prompts.py``.
+Splitting the two concerns avoids redundant LLM calls and duplicate entries
+in ``memory_entries``.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 from typing import TYPE_CHECKING
 
+from symbiote.core._review_prompts import COMPRESSION_PROMPT, render_prompt
 from symbiote.core.models import MemoryEntry
 from symbiote.core.ports import LLMPort, MemoryPort
 
@@ -19,20 +27,7 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
-_CONSOLIDATION_PROMPT = """\
-Summarize the following conversation messages into a concise set of key facts, \
-decisions, and preferences expressed. Focus on durable information that would be \
-useful in future conversations. Ignore greetings, acknowledgments, and noise.
-
-Return ONLY a JSON array of objects with these fields:
-- "content": the fact or decision (one sentence)
-- "type": one of "factual", "preference", "constraint", "procedural", "decision"
-- "importance": float 0.0–1.0 (how important to remember)
-
-Messages:
-{messages}
-
-JSON array:"""
+_MAX_SUMMARY_CHARS = 2400  # ~300 words * ~8 chars/word, leaves slack
 
 
 class MemoryConsolidator:
@@ -95,9 +90,9 @@ class MemoryConsolidator:
             self._last_thread = thread
             return -1  # background task started
 
-        # Sync mode: summarize and persist in current thread
-        facts = self._summarize(to_consolidate)
-        return self._persist_facts(facts, symbiote_id, session_id)
+        # Sync mode: compress and persist in current thread
+        summary = self._compress(to_consolidate)
+        return self._persist_summary(summary, symbiote_id, session_id)
 
     def consolidate_sync(
         self,
@@ -106,7 +101,7 @@ class MemoryConsolidator:
     ) -> int:
         """Synchronous consolidation (for testing or when blocking is acceptable).
 
-        Returns the number of facts persisted.
+        Returns 1 if a session_summary was persisted, 0 otherwise.
         """
         tokens = self._estimate_tokens(working_memory)
         if tokens <= self._token_threshold:
@@ -119,8 +114,8 @@ class MemoryConsolidator:
         to_consolidate = list(msgs[: -self._keep_recent])
         to_keep = msgs[-self._keep_recent :]
 
-        facts = self._summarize(to_consolidate)
-        persisted = self._persist_facts(facts, symbiote_id, working_memory.session_id)
+        summary = self._compress(to_consolidate)
+        persisted = self._persist_summary(summary, symbiote_id, working_memory.session_id)
 
         working_memory.recent_messages = list(to_keep)
         return persisted
@@ -128,31 +123,35 @@ class MemoryConsolidator:
     def _background_consolidate(
         self, messages: list, symbiote_id: str, session_id: str
     ) -> None:
-        """Run in background thread: summarize and persist."""
+        """Run in background thread: compress and persist a session_summary."""
         try:
-            facts = self._summarize(messages)
-            self._persist_facts(facts, symbiote_id, session_id)
+            summary = self._compress(messages)
+            if summary:
+                self._persist_summary(summary, symbiote_id, session_id)
         except Exception as exc:
             _log.warning("Background consolidation failed: %s", exc)
 
-    def _persist_facts(
-        self, facts: list[dict], symbiote_id: str, session_id: str
+    def _persist_summary(
+        self, summary: str, symbiote_id: str, session_id: str
     ) -> int:
-        """Persist extracted facts as memory entries."""
-        persisted = 0
-        for fact in facts:
-            entry = MemoryEntry(
-                symbiote_id=symbiote_id,
-                session_id=session_id,
-                type=fact.get("type", "factual"),
-                scope="session",
-                content=fact.get("content", ""),
-                importance=float(fact.get("importance", 0.5)),
-                source="system",
-            )
-            self._memory.store(entry)
-            persisted += 1
-        return persisted
+        """Persist a compressed narrative as a single session_summary entry.
+
+        Returns 1 on success (always one entry per consolidation), 0 if
+        the summary was empty/blank.
+        """
+        if not summary or not summary.strip():
+            return 0
+        entry = MemoryEntry(
+            symbiote_id=symbiote_id,
+            session_id=session_id,
+            type="session_summary",
+            scope="session",
+            content=summary.strip()[:_MAX_SUMMARY_CHARS],
+            importance=0.5,
+            source="system",
+        )
+        self._memory.store(entry)
+        return 1
 
     def _estimate_tokens(self, working_memory: WorkingMemory) -> int:
         """Rough token estimate: total chars // 4."""
@@ -161,47 +160,26 @@ class MemoryConsolidator:
         )
         return total_chars // 4
 
-    def _summarize(self, messages: list) -> list[dict]:
-        """Use LLM to extract durable facts from messages."""
+    def _compress(self, messages: list) -> str:
+        """Use LLM to compress messages into a narrative summary.
+
+        Falls back to a naive pipe-joined truncation if the LLM call fails,
+        so consolidation never silently drops the window without a trace.
+        """
         msg_text = "\n".join(
             f"[{m.role}]: {m.content}" for m in messages
         )
-        prompt = _CONSOLIDATION_PROMPT.format(messages=msg_text)
+        prompt = render_prompt(COMPRESSION_PROMPT, messages=msg_text)
 
         try:
             response = self._llm.complete(
                 [{"role": "user", "content": prompt}]
             )
-            return self._parse_facts(response)
-        except Exception:
-            # Fallback: create a single summary fact
-            summary = " | ".join(
+            # LLMPort may return str or LLMResponse — extract text
+            text = response if isinstance(response, str) else getattr(response, "content", "")
+            return text.strip()
+        except Exception as exc:
+            _log.warning("LLM compression failed, falling back to naive: %s", exc)
+            return " | ".join(
                 m.content[:100] for m in messages if len(m.content) > 10
             )
-            if summary:
-                return [{"content": summary, "type": "factual", "importance": 0.4}]
-            return []
-
-    @staticmethod
-    def _parse_facts(response: str) -> list[dict]:
-        """Parse LLM JSON response into fact dicts."""
-        # Try to extract JSON array from response
-        text = response.strip()
-
-        # Handle markdown code blocks
-        if "```" in text:
-            start = text.find("[")
-            end = text.rfind("]") + 1
-            if start >= 0 and end > start:
-                text = text[start:end]
-
-        try:
-            facts = json.loads(text)
-            if isinstance(facts, list):
-                return [
-                    f for f in facts
-                    if isinstance(f, dict) and "content" in f
-                ]
-        except json.JSONDecodeError:
-            pass
-        return []

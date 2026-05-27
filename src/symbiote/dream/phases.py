@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from datetime import UTC, datetime
@@ -9,6 +10,7 @@ from typing import Protocol
 
 from symbiote.core.models import MemoryEntry
 from symbiote.dream.models import DreamContext, DreamPhaseResult
+from symbiote.skills import usage as skill_usage
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +61,27 @@ def _overlap_ratio(a: set, b: set) -> float:
 
 
 class PrunePhase:
-    """Deactivate stale, low-importance memories based on decay score."""
+    """Deactivate stale memories AND archive stale agent-created skills.
+
+    Memory side (legacy): decay = days_since_last_used * (1 - importance);
+    if decay > threshold, soft-delete. ``constraint`` and ``handoff`` types
+    are protected.
+
+    Skills side (Sprint 4): walks the skill library via ``ctx.skills_loader``
+    (when provided). For each skill with ``agent_created=true`` and
+    ``pinned=false``:
+      - ``active``  -> ``stale`` after 30 days of no use_count growth
+      - ``stale``   -> ``archived`` after another 60 days
+    Skills WITHOUT a sidecar (human-curated) and pinned skills are NEVER
+    touched. Archived skills disappear from ``list_skills`` entirely.
+    """
 
     name = "prune"
     requires_llm = False
+
+    # Skill lifecycle thresholds. Mirrors Hermes curator defaults.
+    SKILL_ACTIVE_TO_STALE_DAYS = 30.0
+    SKILL_STALE_TO_ARCHIVED_DAYS = 90.0  # total from last_used_at
 
     def __init__(self, decay_threshold: float = 30.0) -> None:
         self._threshold = decay_threshold
@@ -87,6 +106,7 @@ class PrunePhase:
                 continue
 
             detail = {
+                "kind": "memory",
                 "id": entry.id,
                 "type": entry.type,
                 "importance": entry.importance,
@@ -99,6 +119,52 @@ class PrunePhase:
             if not ctx.dry_run:
                 ctx.memory.deactivate(entry.id)
                 applied += 1
+
+        # Skill lifecycle pass (Sprint 4). Only acts on agent_created skills
+        # — every human-curated skill (no sidecar) is invisible to this pass.
+        if ctx.skills_loader is not None:
+            for skill in ctx.skills_loader.list_skills():
+                if not skill.agent_created:
+                    continue
+                skill_dir = skill.path.parent
+                if skill_usage.is_pinned(skill_dir):
+                    continue
+                meta = skill_usage.read_meta(skill_dir) or {}
+                last_used_str = meta.get("last_used_at") or meta.get("created_at")
+                if not last_used_str:
+                    continue
+                try:
+                    last_used = datetime.fromisoformat(last_used_str)
+                except (TypeError, ValueError):
+                    continue
+                days = _days_since(last_used)
+
+                current = skill.status
+                target: str | None = None
+                if current == skill_usage.STATUS_ACTIVE and days > self.SKILL_ACTIVE_TO_STALE_DAYS:
+                    target = skill_usage.STATUS_STALE
+                elif current == skill_usage.STATUS_STALE and days > self.SKILL_STALE_TO_ARCHIVED_DAYS:
+                    target = skill_usage.STATUS_ARCHIVED
+
+                if target is None:
+                    continue
+
+                detail = {
+                    "kind": "skill",
+                    "name": skill.name,
+                    "from_status": current,
+                    "to_status": target,
+                    "days_since_used": round(days, 1),
+                }
+                proposed.append(detail)
+                if not ctx.dry_run:
+                    skill_usage.set_status(skill_dir, target)
+                    applied += 1
+
+            # Refresh the loader so subsequent phases see the new statuses.
+            if not ctx.dry_run:
+                with contextlib.suppress(Exception):
+                    ctx.skills_loader.refresh()
 
         return DreamPhaseResult(
             phase=self.name,

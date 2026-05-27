@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
+from pathlib import Path
 
 from symbiote.adapters.export.markdown import ExportService
 from symbiote.adapters.storage.message_repository import MessageRepository
 from symbiote.adapters.storage.sqlite import SQLiteAdapter
 from symbiote.config.models import KernelConfig
+from symbiote.core.background_review import BackgroundReviewEngine
 from symbiote.core.capabilities import CapabilitySurface
 from symbiote.core.context import ContextAssembler
 from symbiote.core.exceptions import EntityNotFoundError
@@ -34,6 +37,9 @@ from symbiote.runners.base import LoopTrace, RunnerRegistry
 from symbiote.runners.chat import ChatRunner
 from symbiote.runners.process import ProcessRunner
 from symbiote.runners.subagent import SubagentManager
+from symbiote.skills import tool as skill_tool_module
+from symbiote.skills.loader import SkillsLoader
+from symbiote.skills.store import SkillsStore
 from symbiote.workspace.manager import WorkspaceManager
 
 
@@ -82,13 +88,24 @@ class SymbioteKernel:
         self._runner_registry = RunnerRegistry()
         if llm is not None:
             self._runner_registry.register(
-                ChatRunner(llm, tool_gateway=self._tool_gateway)
+                ChatRunner(
+                    llm,
+                    tool_gateway=self._tool_gateway,
+                    # Resolver form: ChatRunner is per-kernel, but
+                    # skill_review_enabled is per-symbiote. The resolver
+                    # returns the engine (or None) for the symbiote driving
+                    # the current turn.
+                    background_review=self._background_review_for,
+                )
             )
 
         process_engine = ProcessEngine(self._storage)
         self._runner_registry.register(ProcessRunner(process_engine))
 
-        # Reflection
+        # Reflection — engine is rebuilt per close_session so it can pick up
+        # the symbiote's reflection_mode + the right LLM (evolver vs main).
+        # The default engine (keyword, no LLM) is the safe baseline used when
+        # callers invoke reflect directly or no per-symbiote config exists.
         self._message_repo = MessageRepository(self._storage)
         self._reflection = ReflectionEngine(self._memory, self._message_repo)
 
@@ -119,8 +136,26 @@ class SymbioteKernel:
         # Optional evolver LLM (host provides, can be different from main LLM)
         self._evolver_llm: LLMPort | None = None
 
+        # Back-reference so EnvironmentManager.configure() can validate
+        # reflection_mode='llm' against the kernel's _evolver_llm presence.
+        self._environment._kernel = self
+
         # Dream engine (lazy — created on first use)
         self._dream_engine: DreamEngine | None = None
+
+        # Skill self-improvement wiring (Sprint 4)
+        # Lazily resolved when first needed so a kernel with no skills/ root
+        # on disk still works (you_news pattern: host owns the layout).
+        self._skills_store: SkillsStore | None = None
+        self._skills_loader: SkillsLoader | None = None
+        self._background_review: BackgroundReviewEngine | None = None
+        # Guards the lazy construction of _background_review against the
+        # race where ChatRunner (mid-session nudge) and close_session
+        # both hit `_background_review_for` simultaneously for the same
+        # symbiote — without the lock, both threads see None and build
+        # two engines, leaking one. Acquired only on the cold path.
+        self._background_review_lock = threading.Lock()
+        self._setup_skills_wiring()
 
         # Capability surface
         self._capabilities = CapabilitySurface(
@@ -380,13 +415,20 @@ class SymbioteKernel:
             # 2. Generate failure MemoryEntry if loop didn't complete
             self._generate_failure_memory(session_id, symbiote_id, trace)
 
-            # 3. Reflection (existing)
-            self._reflection.reflect_session(session_id, symbiote_id)
+            # 3. Reflection — build engine matching this symbiote's config
+            self._reflection_for(symbiote_id).reflect_session(session_id, symbiote_id)
 
             # 4. S-02: Persist long-run handoff as memory entry
             self._persist_handoff_memory(session_id, symbiote_id)
 
-            # 5. Dream mode — maybe trigger background dream
+            # 5. Skill self-improvement (Sprint 4) — fire daemon thread if
+            # the symbiote opted in via skill_review_enabled. Never blocks
+            # close_session; failures are logged inside the engine.
+            review = self._background_review_for(symbiote_id)
+            if review is not None:
+                review.spawn_final(session_id, symbiote_id)
+
+            # 6. Dream mode — maybe trigger background dream
             self._maybe_dream(symbiote_id)
 
             # Clear trace state
@@ -395,6 +437,149 @@ class SymbioteKernel:
                 self._last_trace_session = None
 
         return self._sessions.close(session_id)
+
+    # ── Skills wiring ──────────────────────────────────────────────────
+
+    def _setup_skills_wiring(self) -> None:
+        """Build SkillsStore + SkillsLoader from config, register skill_manage.
+
+        Resolution rules:
+        - ``config.skills_root`` (if set) is the agent write root.
+        - Otherwise, defaults to ``{db_path.parent}/skills/agent``.
+        - ``config.skills_extra_roots`` are read+modify roots (e.g. a
+          ``skills/`` directory in the project).
+        - ``config.skills_protected_roots`` are read-only (e.g.
+          ``process/skills``).
+
+        Idempotent — safe to skip wiring on hosts that don't want skills:
+        the agent root directory is created lazily; ``skill_manage`` is
+        always registered with the gateway but never auto-authorized.
+        """
+        cfg = self._config
+        # Default: ``{db_path.parent}/skills/`` — same directory the
+        # ``SkillsLoader`` scans natively. Human-curated and agent-created
+        # skills coexist; the ``.skill_meta.json`` sidecar (Sprint 3)
+        # provides the distinction, so we don't need a physical subfolder.
+        host_requested_skills = cfg.skills_root is not None
+        agent_root = cfg.skills_root or (Path(cfg.db_path).parent / "skills")
+        roots: list[Path] = [agent_root, *cfg.skills_extra_roots]
+        protected = list(cfg.skills_protected_roots)
+
+        try:
+            self._skills_store = SkillsStore(roots=roots, protected_roots=protected)
+        except Exception as exc:
+            # Two failure regimes:
+            # - Host EXPLICITLY set ``skills_root`` in KernelConfig — they
+            #   want this feature. Re-raise so the host sees the
+            #   PermissionError / OSError instead of a feature silently
+            #   disabled in a log line they may never read.
+            # - Host did NOT set ``skills_root`` (we derived the default
+            #   under db_path.parent) — they may not care about skills.
+            #   Log and continue with the feature disabled.
+            if host_requested_skills:
+                raise
+            import logging
+            logging.getLogger(__name__).warning(
+                "Skills wiring disabled at default path %s (%s). "
+                "Pass KernelConfig(skills_root=...) explicitly if you "
+                "want this feature.",
+                agent_root, exc,
+            )
+            return
+
+        # Loader expects ``{root}/skills/{name}/SKILL.md``, so we pass each
+        # root's PARENT. With the default agent_root of
+        # ``.symbiote/skills/``, the loader root is ``.symbiote/``, which
+        # scans ``.symbiote/skills/*/SKILL.md`` — exactly where the store
+        # writes.
+        loader_roots: list[Path] = []
+        for r in roots:
+            # Only useful if the directory name is exactly "skills".
+            if r.name == "skills":
+                loader_roots.append(r.parent)
+            else:
+                # Caller used a non-standard name; assume layout is
+                # {r}/{name}/SKILL.md (skills sit directly in r). The
+                # loader doesn't handle that natively, so we treat r itself
+                # as the search dir by passing r.parent — same convention,
+                # just renamed.
+                loader_roots.append(r.parent)
+        self._skills_loader = SkillsLoader(*loader_roots)
+
+        # Always register the tool — but it stays unauthorized for each
+        # symbiote until the host explicitly opts in via
+        # `kernel.environment.configure(tools=[..., 'skill_manage'])`.
+        skill_tool_module.register(self._tool_gateway, self._skills_store)
+
+    def _background_review_for(self, symbiote_id: str) -> BackgroundReviewEngine | None:
+        """Return the engine used for ``skill_review_enabled`` symbiotes.
+
+        None when the feature is disabled (default) or when prerequisites
+        are not met (no evolver_llm, no SkillsStore, no SkillsLoader).
+        Lazily constructed on first request and cached for the kernel
+        lifetime.
+        """
+        cfg = self._environment.get_config(symbiote_id)
+        if cfg is None or not cfg.skill_review_enabled:
+            return None
+        if self._evolver_llm is None:
+            # EnvironmentManager.configure() guards against this, but defend
+            # in depth: a row inserted directly into the DB could bypass it.
+            return None
+        if self._skills_store is None or self._skills_loader is None:
+            return None
+        # Hot path: engine already built — return immediately, no lock.
+        if self._background_review is not None:
+            return self._background_review
+        # Cold path: serialize the build to avoid two threads constructing
+        # rival engines (mid-session nudge from ChatRunner vs close_session
+        # firing the final pass on the same symbiote).
+        with self._background_review_lock:
+            if self._background_review is None:
+                self._background_review = BackgroundReviewEngine(
+                    llm=self._evolver_llm,
+                    messages=self._message_repo,
+                    store=self._skills_store,
+                    loader=self._skills_loader,
+                    max_active_skills=cfg.max_active_skills,
+                    max_quarantine_skills=cfg.max_quarantine_skills,
+                )
+        return self._background_review
+
+    def _reflection_for(self, symbiote_id: str) -> ReflectionEngine:
+        """Build a ReflectionEngine for this symbiote's current config.
+
+        Returns the default keyword-only engine when no config exists or
+        when reflection_mode == "keyword" (the safe baseline). LLM modes
+        pick the right backing LLM:
+          - llm        -> evolver_llm (cheap aux model)
+          - llm_main   -> main self._llm
+          - hybrid     -> evolver_llm (runs both, persists keyword)
+        """
+        cfg = self._environment.get_config(symbiote_id)
+        mode = cfg.reflection_mode if cfg else "keyword"
+        max_tokens = cfg.reflection_max_tokens if cfg else 4000
+
+        if mode == "keyword":
+            return self._reflection
+
+        # llm/hybrid -> evolver_llm; llm_main -> main self._llm
+        llm: LLMPort | None = self._llm if mode == "llm_main" else self._evolver_llm
+
+        # Defensive: if EnvironmentManager.configure() was bypassed (e.g.
+        # the row was written directly to the DB), still fall back to
+        # keyword instead of crashing on a None LLM.
+        if llm is None:
+            return self._reflection
+
+        return ReflectionEngine(
+            self._memory,
+            self._message_repo,
+            llm=llm,
+            mode=mode,
+            storage=self._storage,
+            max_tokens=max_tokens,
+        )
 
     def _inject_handoff_if_resuming(
         self,
@@ -456,6 +641,7 @@ class SymbioteKernel:
                 llm=self._evolver_llm or self._llm,
                 max_llm_calls=cfg.dream_max_llm_calls,
                 min_sessions=cfg.dream_min_sessions,
+                skills_loader=self._skills_loader,
             )
         return self._dream_engine
 
@@ -480,6 +666,7 @@ class SymbioteKernel:
             max_llm_calls=cfg.dream_max_llm_calls if cfg else 10,
             min_sessions=1,  # manual trigger ignores min_sessions
             dry_run=dry_run,
+            skills_loader=self._skills_loader,
         )
         return engine.dream(symbiote_id, mode)
 

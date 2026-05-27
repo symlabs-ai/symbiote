@@ -108,6 +108,9 @@ class MemoryEntry(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     created_at: datetime = Field(default_factory=_utcnow)
     last_used_at: datetime = Field(default_factory=_utcnow)
+    # Bumped by MemoryPort.update (PATCH from reflection). None until first patch.
+    # Distinct from last_used_at: PATCH is content refinement, not recall.
+    updated_at: datetime | None = None
     is_active: bool = True
 
     def model_post_init(self, __context: object) -> None:
@@ -174,6 +177,29 @@ class EnvironmentConfig(BaseModel):
     dream_mode: Literal["off", "light", "full"] = "off"
     dream_max_llm_calls: int = Field(default=10, ge=1, le=50)
     dream_min_sessions: int = Field(default=5, ge=1, le=100)
+    # Reflection mode configuration
+    #   keyword  — legacy heuristic (no LLM); default for backward compat
+    #   llm      — LLM-based via _evolver_llm (cheap aux model required)
+    #   llm_main — LLM-based via main _llm (explicit opt-in to higher cost)
+    #   hybrid   — runs both, persists keyword, logs diff to reflection_audit
+    reflection_mode: Literal["keyword", "llm", "llm_main", "hybrid"] = "keyword"
+    reflection_max_tokens: int = Field(default=4000, ge=500, le=20000)
+    # Skill self-improvement (Sprint 4)
+    # When True, BackgroundReviewEngine runs after close_session (and optionally
+    # mid-session every skill_nudge_interval tool iterations) to consider
+    # creating/patching skills. Requires _evolver_llm (cost guard); fails fast
+    # at configure() time when enabled without one.
+    skill_review_enabled: bool = False
+    skill_nudge_interval: int = Field(default=10, ge=1, le=100)
+    # Caps on how many agent-created skills the library may hold. The two
+    # buckets exist because conflating them deadlocks the loop: a library
+    # full of un-promoted quarantine entries would refuse all new creates
+    # until a human runs `symbiote skills promote`, even though the active
+    # listing is still tiny. Counted separately:
+    #   max_active_skills   — listed in <available-skills>, visible to LLM
+    #   max_quarantine_skills — created by background review, awaiting promotion
+    max_active_skills: int = Field(default=20, ge=1, le=200)
+    max_quarantine_skills: int = Field(default=10, ge=1, le=100)
 
 
 # ── Decision ─────────────────────────────────────────────────────────────────

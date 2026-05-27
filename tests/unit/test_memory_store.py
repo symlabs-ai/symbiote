@@ -287,3 +287,76 @@ class TestDeactivate:
     def test_deactivate_nonexistent_raises(self, store: MemoryStore) -> None:
         with pytest.raises(EntityNotFoundError, match="not found"):
             store.deactivate("ghost-memory-id")
+
+
+# ── Update (Sprint 2: PATCH first-class) ───────────────────────────────────
+
+
+class TestUpdate:
+    def test_update_content_only(self, store: MemoryStore, symbiote_id: str) -> None:
+        entry = _make_entry(symbiote_id, content="old content", importance=0.5)
+        store.store(entry)
+
+        ok = store.update(entry.id, content="new content")
+        assert ok is True
+
+        fetched = store.get(entry.id)
+        assert fetched.content == "new content"
+        assert fetched.importance == 0.5  # untouched
+        assert fetched.updated_at is not None
+
+    def test_update_all_fields(self, store: MemoryStore, symbiote_id: str) -> None:
+        entry = _make_entry(symbiote_id, content="orig", importance=0.4, tags=["a"])
+        store.store(entry)
+
+        ok = store.update(
+            entry.id,
+            content="patched",
+            importance=0.8,
+            tags=["b", "c"],
+        )
+        assert ok is True
+
+        fetched = store.get(entry.id)
+        assert fetched.content == "patched"
+        assert fetched.importance == 0.8
+        assert fetched.tags == ["b", "c"]
+
+    def test_update_nonexistent_returns_false(self, store: MemoryStore) -> None:
+        """Contract: missing id returns False, never raises."""
+        ok = store.update("ghost-id", content="anything")
+        assert ok is False
+
+    def test_update_inactive_returns_false(
+        self, store: MemoryStore, symbiote_id: str
+    ) -> None:
+        """Soft-deleted entries are off-limits to PATCH."""
+        entry = _make_entry(symbiote_id, content="will deactivate")
+        store.store(entry)
+        store.deactivate(entry.id)
+
+        ok = store.update(entry.id, content="should not apply")
+        assert ok is False
+        assert store.get(entry.id).content == "will deactivate"
+
+    def test_update_no_op_returns_true(
+        self, store: MemoryStore, symbiote_id: str
+    ) -> None:
+        """All kwargs None == idempotent no-op, still True."""
+        entry = _make_entry(symbiote_id, content="unchanged")
+        store.store(entry)
+        ok = store.update(entry.id)
+        assert ok is True
+        assert store.get(entry.id).content == "unchanged"
+
+    def test_update_does_not_touch_last_used_at(
+        self, store: MemoryStore, symbiote_id: str
+    ) -> None:
+        """PATCH is refinement, not recall — decay timer must NOT reset."""
+        entry = _make_entry(symbiote_id, content="orig")
+        store.store(entry)
+        original_last_used = store.get(entry.id).last_used_at
+
+        store.update(entry.id, content="patched")
+        fetched = store.get(entry.id)
+        assert fetched.last_used_at == original_last_used

@@ -1,8 +1,13 @@
-"""Tests for MemoryConsolidator — B-10."""
+"""Tests for MemoryConsolidator — compression-only path.
+
+The Consolidator was deliberately narrowed (Sprint 1 of the LLM-reflection
+plan): it now produces a single `session_summary` MemoryEntry per overflow,
+and fact extraction (preference/constraint/procedural/etc.) lives solely in
+ReflectionEngine on close_session. These tests pin that contract.
+"""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -16,14 +21,15 @@ from symbiote.memory.working import WorkingMemory
 
 
 class MockLLM:
-    """Mock LLM that returns a consolidation response."""
+    """Mock LLM that returns a compression summary string."""
 
     def __init__(self, response: str | None = None) -> None:
         self.calls: list[list[dict]] = []
-        self._response = response or json.dumps([
-            {"content": "User prefers Python", "type": "preference", "importance": 0.7},
-            {"content": "Always run tests first", "type": "constraint", "importance": 0.8},
-        ])
+        self._response = response or (
+            "User asked about Python project layout. Decision: use src/ "
+            "package structure with pyproject.toml. Files touched: "
+            "src/pkg/__init__.py. Open thread: whether to add ruff."
+        )
 
     def complete(self, messages: list[dict], config: dict | None = None) -> str:
         self.calls.append(messages)
@@ -75,9 +81,10 @@ class TestConsolidation:
         assert result == 0
         assert len(llm.calls) == 0
 
-    def test_sync_consolidation_persists_facts(
+    def test_sync_consolidation_persists_one_summary(
         self, store: MemoryStore, symbiote_id: str
     ) -> None:
+        """Sprint 1 contract: one session_summary per overflow, never N facts."""
         llm = MockLLM()
         consolidator = MemoryConsolidator(
             llm, store, token_threshold=100, keep_recent=3
@@ -86,7 +93,7 @@ class TestConsolidation:
         _fill_working_memory(wm, 12, chars_per_msg=200)
 
         result = consolidator.consolidate_sync(wm, symbiote_id)
-        assert result == 2  # 2 facts from MockLLM
+        assert result == 1  # exactly one session_summary
         assert len(llm.calls) == 1
 
     def test_working_memory_trimmed_immediately(
@@ -135,10 +142,10 @@ class TestConsolidation:
         consolidator._last_thread.join(timeout=5.0)
         assert not consolidator._last_thread.is_alive()
 
-    def test_sync_persists_facts_to_store(
+    def test_sync_persists_summary_to_store(
         self, store: MemoryStore, symbiote_id: str
     ) -> None:
-        """consolidate_sync persists directly (same thread, no SQLite issues)."""
+        """The persisted entry is type=session_summary, source=system."""
         llm = MockLLM()
         consolidator = MemoryConsolidator(
             llm, store, token_threshold=100, keep_recent=3
@@ -151,10 +158,12 @@ class TestConsolidation:
         entries = store.search("Python")
         assert len(entries) >= 1
         assert entries[0].source == "system"
+        assert entries[0].type == "session_summary"
 
     def test_fallback_on_llm_failure(
         self, store: MemoryStore, symbiote_id: str
     ) -> None:
+        """LLM failure -> naive pipe-joined fallback summary, still 1 entry."""
         llm = FailingLLM()
         consolidator = MemoryConsolidator(
             llm, store, token_threshold=100, keep_recent=3
@@ -163,8 +172,8 @@ class TestConsolidation:
         _fill_working_memory(wm, 10, chars_per_msg=200)
 
         result = consolidator.consolidate_sync(wm, symbiote_id)
-        # Fallback creates a summary fact
-        assert result >= 1
+        # Fallback still produces exactly one session_summary
+        assert result == 1
         assert len(wm.recent_messages) == 3
 
     def test_no_consolidation_with_few_messages(self, store: MemoryStore) -> None:
@@ -181,30 +190,47 @@ class TestConsolidation:
         assert result == 0
 
 
-class TestParseFacts:
-    def test_parses_valid_json_array(self) -> None:
-        response = json.dumps([
-            {"content": "fact1", "type": "factual", "importance": 0.5},
-        ])
-        facts = MemoryConsolidator._parse_facts(response)
-        assert len(facts) == 1
-        assert facts[0]["content"] == "fact1"
+class TestCompression:
+    """New tests covering the compression-only contract."""
 
-    def test_parses_json_in_code_block(self) -> None:
-        response = '```json\n[{"content": "fact", "type": "factual", "importance": 0.5}]\n```'
-        facts = MemoryConsolidator._parse_facts(response)
-        assert len(facts) == 1
+    def test_empty_summary_persists_nothing(
+        self, store: MemoryStore, symbiote_id: str
+    ) -> None:
+        """LLM returning whitespace -> 0 entries persisted."""
 
-    def test_returns_empty_on_invalid_json(self) -> None:
-        assert MemoryConsolidator._parse_facts("not json") == []
+        class BlankLLM:
+            def complete(self, messages: list[dict], config: dict | None = None) -> str:
+                return "   "
 
-    def test_filters_entries_without_content(self) -> None:
-        response = json.dumps([
-            {"content": "valid", "type": "factual"},
-            {"type": "factual"},  # no content
-        ])
-        facts = MemoryConsolidator._parse_facts(response)
-        assert len(facts) == 1
+        consolidator = MemoryConsolidator(
+            BlankLLM(), store, token_threshold=100, keep_recent=3
+        )
+        wm = WorkingMemory(session_id="s1", max_messages=50)
+        _fill_working_memory(wm, 10, chars_per_msg=200)
+
+        result = consolidator.consolidate_sync(wm, symbiote_id)
+        assert result == 0
+
+    def test_summary_truncated_to_max_chars(
+        self, store: MemoryStore, symbiote_id: str
+    ) -> None:
+        """Defense against runaway LLM output."""
+        huge = "x" * 10_000
+
+        class HugeLLM:
+            def complete(self, messages: list[dict], config: dict | None = None) -> str:
+                return huge
+
+        consolidator = MemoryConsolidator(
+            HugeLLM(), store, token_threshold=100, keep_recent=3
+        )
+        wm = WorkingMemory(session_id="s1", max_messages=50)
+        _fill_working_memory(wm, 10, chars_per_msg=200)
+
+        consolidator.consolidate_sync(wm, symbiote_id)
+        entries = store.search("x")
+        # _MAX_SUMMARY_CHARS = 2400
+        assert all(len(e.content) <= 2400 for e in entries)
 
 
 class TestChatRunnerIntegration:

@@ -208,6 +208,13 @@ class SQLiteAdapter:
             "ALTER TABLE environment_configs ADD COLUMN dream_mode TEXT DEFAULT 'off'",
             "ALTER TABLE environment_configs ADD COLUMN dream_max_llm_calls INTEGER DEFAULT 10",
             "ALTER TABLE environment_configs ADD COLUMN dream_min_sessions INTEGER DEFAULT 5",
+            "ALTER TABLE environment_configs ADD COLUMN reflection_mode TEXT DEFAULT 'keyword'",
+            "ALTER TABLE environment_configs ADD COLUMN reflection_max_tokens INTEGER DEFAULT 4000",
+            "ALTER TABLE memory_entries ADD COLUMN updated_at TEXT DEFAULT NULL",
+            "ALTER TABLE environment_configs ADD COLUMN skill_review_enabled INTEGER DEFAULT 0",
+            "ALTER TABLE environment_configs ADD COLUMN skill_nudge_interval INTEGER DEFAULT 10",
+            "ALTER TABLE environment_configs ADD COLUMN max_active_skills INTEGER DEFAULT 20",
+            "ALTER TABLE environment_configs ADD COLUMN max_quarantine_skills INTEGER DEFAULT 10",
         ):
             try:
                 self._conn.execute(stmt)
@@ -271,6 +278,18 @@ class SQLiteAdapter:
                 FOREIGN KEY (symbiote_id) REFERENCES symbiotes(id)
             )""",
             "CREATE INDEX IF NOT EXISTS idx_dream_reports_symbiote ON dream_reports(symbiote_id, started_at)",
+            """CREATE TABLE IF NOT EXISTS reflection_audit (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                symbiote_id TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                keyword_facts_json TEXT DEFAULT '[]',
+                llm_facts_json TEXT DEFAULT '[]',
+                llm_error TEXT,
+                created_at TEXT NOT NULL
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_reflection_audit_symbiote ON reflection_audit(symbiote_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_reflection_audit_session ON reflection_audit(session_id)",
         ):
             try:
                 self._conn.execute(stmt)

@@ -3,6 +3,83 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [Unreleased]
+
+### Aprendizado — Sprint 1 (LLM Reflection + Consolidator refactor)
+
+Primeira fase do plano de self-improvement (referência: `docs/RESEARCH-hermes-self-improvement.md`, processo de discussão em conversa). Defaults preservam comportamento atual: clientes embedados (`you_news`, `sym_talk_lt`) não veem diferença até trocar a flag explicitamente.
+
+- **Novo `core/_review_prompts.py`** — `REFLECTION_PROMPT` engineered com blocos modulares (`_SIGNALS_BLOCK`, `_ANTI_PATTERNS_BLOCK`, `_HIERARCHY_BLOCK`, `_OUTPUT_SCHEMA`). Adaptado dos prompts do Hermes (`~/dev/research/hermes-agent/agent/background_review.py`) com schema de saída próprio (`action: create|patch`, `target_id`, `tags`, `reasoning`). Reusável pelo futuro Background Skill Review (Item 1 do plano).
+- **`ReflectionEngine` ganha modos** — `keyword` (default, retrocompatível) | `llm` (via `_evolver_llm`) | `llm_main` (via main `_llm`, opt-in custo) | `hybrid` (roda os dois, persiste keyword, loga diff). Path LLM tem defense-in-depth (`_BLOCK_PATTERNS`): `constraint` com phrases tipo "command not found" / "broken tool" / "rm -rf" é descartado; importance > 0.9 fora de `constraint` é capped em 0.7. Fallback gracioso para keyword em qualquer falha LLM (parse error, timeout, JSON inválido).
+- **`MemoryConsolidator` refatorado para single-responsibility** — agora produz UM `MemoryEntry(type=session_summary)` por overflow, não N facts tipados. Elimina a redundância com Reflection (ambos extraíam o mesmo via LLM). Compressão narrativa (≤300 palavras), truncada em `_MAX_SUMMARY_CHARS=2400`. Fallback naive em LLM failure ainda persiste 1 entry. Prompt anterior (`_CONSOLIDATION_PROMPT`) substituído por `_COMPRESSION_PROMPT`.
+- **`EnvironmentConfig` ganha `reflection_mode` e `reflection_max_tokens`** — colunas novas em `environment_configs` via migration idempotente (`ALTER TABLE ... ADD COLUMN`). Defaults `"keyword"` e `4000`.
+- **Guard de custo no `EnvironmentManager.configure`** — `reflection_mode in {"llm","hybrid"}` exige `kernel.set_evolver_llm(...)` setado, senão `ValueError` na configuração (não silencioso). `"llm_main"` é variante opt-in explícita ao modelo principal. Evita consumo surpresa do LLM caro em produção.
+- **Tabela `reflection_audit`** — id, session_id, symbiote_id, mode, keyword_facts_json, llm_facts_json, llm_error, created_at. Permite auditar diferença keyword↔LLM antes de promover modo `"llm"` como default.
+- **CLI `symbiote audit reflection`** — dump dos últimos N dias (default 7), filtros `--symbiote / --session`, `--diff` mostra payload comparado.
+- **Tests** — `test_reflection_llm.py` (10 cenários: anti-patterns, positives, fallback, hybrid+audit), `test_backward_compat_reflection.py` (kernel sem flags = 0 LLM calls extras em `close_session`; `ValueError` em mode `llm/hybrid` sem evolver), `test_memory_consolidator.py` atualizado para o novo contrato (1 summary, não N facts).
+
+### Aprendizado — Sprint 2 (PATCH first-class)
+
+- **`MemoryPort.update(memory_id, *, content, importance, tags)`** — novo método no Protocol. Contrato: retorna `bool` (True se atualizou, False se id não existe ou já está inativo). Nunca levanta — caminho de PATCH em reflection cai gracioso para CREATE quando target_id é inválido. Adiciona `updated_at` em `MemoryEntry` (distinto de `last_used_at`: PATCH é refinamento, não recall, e não reseta decay).
+- **Migration `memory_entries.updated_at`** — coluna nullable idempotente.
+- **`ReflectionEngine._apply_llm_facts` agora honra PATCH** — resolve `target_id` (UUID completo ou prefixo de 8 chars vindo do `existing_memories`), chama `update()`, persiste no lugar. Fallback para CREATE quando: target_id inválido, memória inativa, `update()` retorna False, ou adapter sem `update`. Nenhum caminho perde a lição.
+- **`_format_existing_memories` expandido** — inclui `preference`, `constraint`, `procedural`, `decision`, `factual` (antes só preference+constraint). Ordena por importance desc + last_used_at desc. Renderiza IDs encurtados (8 chars) pra economia de tokens — `_resolve_target_id` aceita ambos no input do LLM.
+- **Tests** — 6 cenários de `MemoryStore.update` (content-only, all fields, nonexistent, inactive, no-op, preserva last_used_at), 5 cenários de PATCH path em reflection (atualiza no lugar sem duplicar, prefixo curto, target inválido → CREATE, sem target_id → CREATE, target inativo → CREATE), 1 cenário de `existing_memories` cobrindo os 5 tipos.
+
+### Aprendizado — Sprint 3 (SkillsStore + skill_manage tool, manual)
+
+Item 1 do plano (Hermes-style skill manager). Peças completas para criação/edição autônoma de skills, mas dispara apenas via humano (CLI). Trigger automático em background fica para Sprint 4. Defaults preservam comportamento atual.
+
+- **Novo `core/provenance.py`** — `ContextVar write_origin` com `FOREGROUND` / `BACKGROUND_REVIEW`. Espelha `tools/skill_provenance.py` do Hermes. `is_background_review()` é a query rápida usada por `SkillsStore.create` para decidir se marca a skill como `agent_created`.
+- **Novo `skills/usage.py`** — sidecar `{skill_dir}/.skill_meta.json` com `{agent_created, status, pinned, created_at, last_used_at, use_count, patch_count}`. **Regra de backward-compat invariante**: ausência de sidecar = `status="active"`, `agent_created=false` — preserva todas as skills humanas (`process/skills/feature.md` etc.) sem migração. Lifecycle: `quarantine → active → stale → archived`. `pinned` protege de delete e de futura archive do curator.
+- **Novo `skills/store.py`** — `SkillsStore` com 6 ações (`create`, `edit`, `patch`, `delete`, `write_file`, `remove_file`). Validações: nome regex `^[a-z0-9][a-z0-9._-]*$`, max 64 chars, max 100k chars conteúdo, max 1 MiB arquivo suporte, allowlist subdirs (`references/templates/scripts/assets`), atomic write via `tempfile + os.replace`, path traversal bloqueado. `protected_roots` (e.g. `process/skills/`) bloqueia edit/patch/delete mas permite read. `delete` refuses pinned. Erros tipados (`SkillValidationError / NotFound / Exists / Protected`).
+- **`skills/loader.py` lifecycle-aware** — `build_summary()` agora filtra `status="quarantine"` e `status="archived"` (quarantine sumida do `<available-skills>` até promoção, archived invisível em qualquer query). `listable_skills()` retorna o subset que vai pro LLM; `list_skills()` mantém comportamento antigo (incluindo quarantine pra CLI/inspeção). `get_skill()` bumpa `use_count` na sidecar — telemetria pra futura SkillCuratorPhase. Novo `refresh()` re-discovery após writes do `SkillsStore`. `discover()` agora público (alias de `_discover`).
+- **Novo `skills/tool.py`** — wrapper `skill_manage` para `ToolGateway` com schema OpenAI-style. **Não auto-autorizada**: host opta-in via `kernel.environment.configure(tools=[..., 'skill_manage'])`. Erros do `SkillsStore` viram JSON tipado (`kind: validation|not_found|exists|protected|error|internal`) para audit log.
+- **CLI `symbiote skills`** — `list` (com `--all` mostra quarantine/archived; tabela com status, autor, use_count, patch_count, pinned), `promote <name>` (quarantine→active), `pin/unpin`. Defaults busca `.symbiote/skills/agent/` + `skills/` se existirem.
+- **Tests** — 27 cenários em `test_skills_store.py` (validação, criação foreground/background, edit/patch/write_file/remove_file, delete + protection, atomic write), 4 em `test_provenance.py` (default, set/reset, falsy normalization, thread isolation), 8 em `test_skills_loader_lifecycle.py` (backward-compat sem sidecar, quarantine filter, archived discovery, promote+refresh, use_count telemetry). `test_skills_loader.py` (17 testes existentes) continua verde.
+
+### Aprendizado — Sprint 4 (loop autônomo)
+
+Fecha o circuito do plano de self-improvement: skill review autônomo em background (durante e após sessão) + lifecycle automático no DreamEngine. **Defaults preservam comportamento atual** (`skill_review_enabled=False`).
+
+- **Novo `SKILL_REVIEW_PROMPT`** em `core/_review_prompts.py` — engineered com signals + anti-patterns + hierarquia (PATCH skill carregada > WRITE_FILE em umbrella existente > CREATE classe). Schema JSON com 3 ações suportadas (create/patch/write_file); delete é bloqueado por design. Adaptado de `~/dev/research/hermes-agent/agent/background_review.py:45-148`.
+- **Novo `core/background_review.py`** — `BackgroundReviewEngine` com `spawn(session_id, symbiote_id)` (daemon thread non-blocking) e `run_sync` (testes / CLI). Design: **single LLM call** (não tool loop reentrant) + aplicação sequencial via `SkillsStore`. Provenance: todo write roda sob `set_current_write_origin(BACKGROUND_REVIEW)` → skills nascem como `agent_created=true, status=quarantine`. Respeita `max_active_skills` (refuses `create` ao bater cap, mas aceita patch/write_file). Refresh `SkillsLoader` após writes. Erros (LLM raise, JSON inválido, write conflict) viram log; nunca propagam.
+- **`EnvironmentConfig`** ganha 3 fields: `skill_review_enabled=False`, `skill_nudge_interval=10`, `max_active_skills=20`. Colunas idempotentes via ALTER TABLE.
+- **`EnvironmentManager.configure` guard** — `skill_review_enabled=True` exige `kernel.set_evolver_llm(...)` setado, senão `ValueError` na configuração (mesma defesa que `reflection_mode='llm'` herdou no Sprint 1). Evita Opus rodando N vezes por sessão como surpresa de fatura.
+- **`KernelConfig.skills_root` opcional** (+ `skills_extra_roots`, `skills_protected_roots`). Default: `{db_path.parent}/skills/` — layout flat onde sidecar `.skill_meta.json` distingue agent-created de humano. Kernel auto-wire em `__init__`: cria `SkillsStore` + `SkillsLoader` + registra `skill_manage` no `ToolGateway` (não autorizada por default).
+- **Trigger em `ChatRunner`** — kwarg-only `background_review: Callable[[str], engine | None] | None` (resolver per-symbiote para um runner singleton servir vários symbiotes). Contador `_iters_since_skill_review` dispara `engine.spawn(session_id, symbiote_id)` a cada `skill_nudge_interval` tool iterations. Falhas swallowed; preserva clientes externos (you_news, sym_talk_lt) que instanciam `ChatRunner` direto sem o kwarg.
+- **Trigger em `kernel.close_session`** — após reflection, chama `_background_review_for(symbiote_id)`; se retornar engine, `spawn_final(...)` em daemon (não bloqueia `close_session`). `_background_review_for` retorna `None` quando flag off, sem `_evolver_llm`, ou sem `SkillsStore`.
+- **`DreamEngine.PrunePhase` estendido para skills** — novo passo após o memory prune. Para cada skill com `agent_created=true and not pinned`: `active → stale` após 30d sem `last_used_at` growth; `stale → archived` após 90d total. **Skills sem sidecar (humanas) e skills pinadas nunca são tocadas.** `dry_run` propõe sem aplicar. `DreamContext.skills_loader` é opcional — kernels sem skills root configurado continuam funcionando sem mudança.
+- **Tests (+15)** — `test_background_review.py` (provenance: quarantine + agent_created=true; loader refresh; max_active_skills cap; LLM raise / JSON inválido / array vazio; delete recusado; patch + write_file). `test_dream_skills.py` (humanas sem sidecar untouched; pinadas untouched mesmo após 365d; active→stale 30d; stale→archived 90d; recente fica active; dry_run propõe sem aplicar).
+
+### Aprendizado — Sprint 4.1 (hardening: thread safety + concurrency caps)
+
+Quatro fixes [Major] identificados no code review do Sprint 4. Endereçam race conditions latentes que só se manifestariam com `skill_review_enabled=True` em produção — defaults continuam preservados.
+
+- **H1 — Lock no `kernel._background_review_for`**: lazy construction do `BackgroundReviewEngine` era unsafe (duas threads podiam ver `None` e construir engines rivais). Hot path preserva fast-return sem lock; cold path serializa via `threading.Lock`. Teste de regressão `TestKernelLazyBuildLock.test_concurrent_calls_build_engine_once` (8 threads via `Barrier`).
+- **H2 — Cap de threads concorrentes no `BackgroundReviewEngine`**: `spawn()` deduplica por `session_id`. Em sessão tool-heavy com `skill_nudge_interval=10` e 100 iters: antes spawneava 10 daemon threads concorrentes; agora retorna a thread em flight quando ainda viva. Slot liberado no `finally` do `_run` (com check de identidade — só limpa se a thread atual é a dona). Testes: 3 cenários (dedup mesma sessão, sessões independentes, slot liberado pós-completion).
+- **H3 — `SkillsLoader.refresh()` thread-safe via atomic ref swap**: `_skills.clear() + _discover()` deixava reader concorrente cair em `RuntimeError: dictionary changed size during iteration`. Agora `_discover` constrói dict fresh e atribui via single rebind (atômico sob GIL). Helper `_discover_root_into(root, target)` toma o dict alvo como parâmetro. `add_root` também usa o pattern. Teste stress: 3 readers + 1 refresher em loop por 10s, zero erros.
+- **H4 — Cap separado para quarantine**: antes `max_active_skills` contava `active + quarantine` no mesmo bucket, podendo bloquear creates quando o backlog de quarantine não promovido enchia. Agora `EnvironmentConfig` tem dois caps independentes: `max_active_skills` (default 20, bound do que vai pro `<available-skills>`) e `max_quarantine_skills` (default 10, bound do backlog de skills criadas pelo background review aguardando promoção). `BackgroundReviewEngine._count_skills_by_status` retorna a tupla; create checa só o quarantine cap. Migration idempotente `ALTER TABLE environment_configs ADD COLUMN max_quarantine_skills`. Teste do deadlock: 3 active skills + cap_active=3 + cap_quarantine=5 → create vai pra quarantine sem bloquear.
+- **Limpeza incidental**: `BackgroundReviewEngine._run` perdeu o param `return_result` (sempre retornava o mesmo valor em ambos ramos) — apontado no review como código morto.
+
+### Aprendizado — Sprint 4.2 (minor cleanup do review)
+
+Cinco fixes [Minor] do code review. Cosméticos individualmente, mas eliminam classes de bug e tornam o código mais auditável.
+
+- **M1 — `render_prompt` substitui `str.format()`**: novo helper em `core/_review_prompts.py` que usa `str.replace` em placeholders nomeados. Elimina a armadilha "escape `{` literal duas vezes ou explode com `KeyError` silencioso" — bug que pegou no Sprint 1. Schemas dos 3 prompts (REFLECTION/SKILL/COMPRESSION) limpos de `{{ }}` escapes; callers em `reflection.py`, `consolidator.py`, `background_review.py` migrados. Testes: 4 cenários (literal braces, unknown placeholders, real-prompt renders).
+- **M2 — CLI `symbiote skills` ganha `--layout`** `auto | direct | nested`. Helper `_require_skills_roots` substitui erro genérico por mensagem acionável. Antes a auto-detecção falhava silenciosamente em diretórios vazios.
+- **M3 — Import lazy movido pra topo em `dream/phases.py`**: `from symbiote.skills import usage` agora top-level (sem ciclo verificado). Alias renomeado de `_skill_usage` para `skill_usage`.
+- **M4 — Cap em `_format_existing_skills`**: hard limit `_MAX_EXISTING_SKILLS_LISTED = 30` no listing pro LLM. Active priorizadas antes de quarantine; trailing `"+ N more not shown"` sinaliza truncamento (visível no audit).
+- **M5 — `_setup_skills_wiring` re-raise quando `skills_root` foi explícito**: host setou `KernelConfig(skills_root=...)` → falha propaga. Default derivado → log + feature disabled. Stress test do lock (sprint4_hardening) refinado pra isolar do SQLite single-cursor concern.
+
+### Não incluído
+
+- Promoção de `reflection_mode` default para `"llm"` em symbiotes novos — fica para depois de 1-2 semanas de auditoria em modo `"hybrid"` em ambiente real.
+- Promoção automática `quarantine → active` (após N usos bem-sucedidos) — hoje promoção é manual via `symbiote skills promote <name>` (CLI Sprint 3).
+- `DreamEngine.ReconcilePhase` para skills (detectar overlap de `when_to_use`) — fica para quando houver volume suficiente para validar critério.
+- Auditoria do background review (tabela `skill_review_audit` similar ao `reflection_audit`) — pendente; hoje a única observabilidade é o sidecar `.skill_meta.json` e os logs.
+- Auto-archive de quarantine antiga (counterpart do `max_quarantine_skills` cap) — fica para um sprint dedicado ao curator.
+
 ## [v0.6.0] - 2026-05-26
 
 > **Release report user-facing:** [`docs/releases/v0.6.0.md`](docs/releases/v0.6.0.md) — quickstart, exemplos, cost cheat-sheet, limitações conhecidas, guia de migração.

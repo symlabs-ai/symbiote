@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 if TYPE_CHECKING:
     from symbiote.core.ports import LLMPort, StoragePort
     from symbiote.memory.store import MemoryStore
+    from symbiote.skills.loader import SkillsLoader
 
 
 def _uuid() -> str:
@@ -60,6 +61,10 @@ class DreamContext:
     budget: BudgetTracker
     dry_run: bool
     last_dream_at: datetime | None = None
+    # Optional skill library access (Sprint 4). When set, PrunePhase also
+    # transitions stale agent_created skills toward archived. None means
+    # "skills lifecycle is not managed by this kernel".
+    skills_loader: SkillsLoader | None = None
 
 
 # ── Phase result ────────────────────────────────────────────────────────────

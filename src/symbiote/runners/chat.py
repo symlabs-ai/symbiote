@@ -97,6 +97,13 @@ class ChatRunner:
         on_after_tool_result: Callable[[list[ToolCall], list[ToolCallResult]], str | None] | None = None,
         on_progress: Callable[[str, int, int], None] | None = None,
         on_stream: Callable[[str, int], None] | None = None,
+        # Sprint 4 — optional. When provided AND a per-symbiote
+        # skill_review_enabled=True, the runner fires the engine every N
+        # tool iterations from inside the loop. Default None preserves
+        # backward-compat with hosts (you_news, sym_talk_lt) that
+        # instantiate ChatRunner directly.
+        background_review: object | None = None,
+        skill_nudge_interval: int = 10,
     ) -> None:
         self._llm = llm
         self._working_memory = working_memory
@@ -108,6 +115,9 @@ class ChatRunner:
         self._on_after_tool_result = on_after_tool_result
         self._on_progress = on_progress
         self._on_stream = on_stream
+        self._background_review = background_review
+        self._skill_nudge_interval = max(1, int(skill_nudge_interval))
+        self._iters_since_skill_review = 0
 
     def can_handle(self, intent: str) -> bool:
         return intent in _HANDLED_INTENTS
@@ -387,6 +397,11 @@ class ChatRunner:
                     if self._on_progress is not None:
                         self._on_progress("iteration_end", iteration + 1, max_iters)
                     break
+
+            # Skill review nudge — fire a daemon review thread every N tool
+            # iterations when the host has wired one. Non-blocking; the
+            # engine handles its own errors. Sprint 4.
+            self._maybe_nudge_skill_review(context)
 
             # Check loop health — stop early on stagnation or circuit breaker
             should_stop, stop_reason = controller.should_stop()
@@ -1037,6 +1052,44 @@ class ChatRunner:
             block = json.dumps({"tool": call.tool_id, "params": call.params}, ensure_ascii=False)
             parts.append(f"```tool_call\n{block}\n```")
         return "\n".join(parts)
+
+    def _maybe_nudge_skill_review(self, context: AssembledContext) -> None:
+        """Fire skill review every ``skill_nudge_interval`` tool iterations.
+
+        ``background_review`` may be passed either as an engine (object with a
+        ``spawn(session_id, symbiote_id)`` method) or as a per-symbiote
+        resolver ``Callable[[str], engine | None]``. The resolver form lets a
+        shared ChatRunner check ``skill_review_enabled`` per symbiote without
+        the runner needing to know about ``EnvironmentManager``.
+
+        Counter is per-ChatRunner instance — same runner across sessions nudges
+        at the configured cadence. Failure modes (resolver raises, engine None,
+        spawn missing) are swallowed so nudging never breaks the turn.
+        """
+        if self._background_review is None:
+            return
+        self._iters_since_skill_review += 1
+        if self._iters_since_skill_review < self._skill_nudge_interval:
+            return
+        self._iters_since_skill_review = 0
+
+        try:
+            engine = (
+                self._background_review(context.symbiote_id)
+                if callable(self._background_review)
+                else self._background_review
+            )
+            if engine is None:
+                return
+            spawn = getattr(engine, "spawn", None)
+            if spawn is None:
+                return
+            spawn(context.session_id, context.symbiote_id)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "skill review nudge failed: %s", exc,
+            )
 
     @classmethod
     def _format_tool_results(cls, results: list[ToolCallResult]) -> str:

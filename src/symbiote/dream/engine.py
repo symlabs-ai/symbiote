@@ -39,6 +39,7 @@ class DreamEngine:
         max_llm_calls: int = 10,
         min_sessions: int = 5,
         dry_run: bool = False,
+        skills_loader: object | None = None,
     ) -> None:
         self._storage = storage
         self._memory = memory
@@ -46,6 +47,7 @@ class DreamEngine:
         self._max_llm_calls = max_llm_calls
         self._min_sessions = min_sessions
         self._dry_run = dry_run
+        self._skills_loader = skills_loader
         self._active_threads: dict[str, threading.Thread] = {}
 
     # ── public API ─────────────────────────────────────────────────────
@@ -91,6 +93,7 @@ class DreamEngine:
             budget=budget,
             dry_run=self._dry_run,
             last_dream_at=last_dream_at,
+            skills_loader=self._skills_loader,  # may be None
         )
 
         phase_classes = _FULL_PHASES if dream_mode == "full" else _LIGHT_PHASES

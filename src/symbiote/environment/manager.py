@@ -13,6 +13,9 @@ class EnvironmentManager:
 
     def __init__(self, storage: StoragePort) -> None:
         self._storage = storage
+        # Back-reference set by SymbioteKernel after construction so configure()
+        # can validate evolver_llm requirements without circular imports.
+        self._kernel = None  # type: ignore[assignment]
 
     # ── public API ─────────────────────────────────────────────────────
 
@@ -46,8 +49,52 @@ class EnvironmentManager:
         dream_mode: str | None = None,
         dream_max_llm_calls: int | None = None,
         dream_min_sessions: int | None = None,
+        # Reflection mode fields
+        reflection_mode: str | None = None,
+        reflection_max_tokens: int | None = None,
+        # Skill self-improvement fields (Sprint 4)
+        skill_review_enabled: bool | None = None,
+        skill_nudge_interval: int | None = None,
+        max_active_skills: int | None = None,
+        max_quarantine_skills: int | None = None,
     ) -> EnvironmentConfig:
         """Create or update an environment config for a symbiote+workspace combo."""
+        # Guard: reflection_mode='llm' requires evolver_llm; 'llm_main' requires main llm.
+        # This is the requirement-vs-fallback policy: opt-in to LLM reflection must be
+        # explicit about which model pays the bill. Fails at configure() rather than
+        # silently consuming the main (potentially expensive) model on every close_session.
+        if reflection_mode in {"llm", "hybrid"}:
+            kernel = getattr(self, "_kernel", None)
+            evolver = getattr(kernel, "_evolver_llm", None) if kernel else None
+            if evolver is None:
+                raise ValueError(
+                    f"reflection_mode={reflection_mode!r} requires kernel.set_evolver_llm(...) "
+                    f"first. This protects against runaway cost from running LLM reflection "
+                    f"on every close_session with the main (potentially expensive) model. "
+                    f"Either set an evolver LLM (e.g. claude-haiku-4-5), or use "
+                    f"reflection_mode='llm_main' to opt into the main LLM explicitly."
+                )
+        if reflection_mode == "llm_main":
+            kernel = getattr(self, "_kernel", None)
+            main_llm = getattr(kernel, "_llm", None) if kernel else None
+            if main_llm is None:
+                raise ValueError(
+                    "reflection_mode='llm_main' requires a main LLM to be configured on the kernel."
+                )
+
+        # Same cost guard for the background skill review fork: turning it on
+        # without an evolver LLM would silently use the (expensive) main model
+        # for every nudge interval. Fail fast at configure().
+        if skill_review_enabled:
+            kernel = getattr(self, "_kernel", None)
+            evolver = getattr(kernel, "_evolver_llm", None) if kernel else None
+            if evolver is None:
+                raise ValueError(
+                    "skill_review_enabled=True requires kernel.set_evolver_llm(...) first. "
+                    "Background skill review runs N times per session — using the main LLM "
+                    "would explode cost. Set a cheap aux model (e.g. claude-haiku-4-5) first."
+                )
+
         existing = self._fetch_exact(symbiote_id, workspace_id)
 
         # Auto-derive tool_loop from tool_mode when tool_mode is set explicitly
@@ -87,6 +134,12 @@ class EnvironmentManager:
                 dream_mode=dream_mode if dream_mode is not None else existing.dream_mode,
                 dream_max_llm_calls=dream_max_llm_calls if dream_max_llm_calls is not None else existing.dream_max_llm_calls,
                 dream_min_sessions=dream_min_sessions if dream_min_sessions is not None else existing.dream_min_sessions,
+                reflection_mode=reflection_mode if reflection_mode is not None else existing.reflection_mode,
+                reflection_max_tokens=reflection_max_tokens if reflection_max_tokens is not None else existing.reflection_max_tokens,
+                skill_review_enabled=skill_review_enabled if skill_review_enabled is not None else existing.skill_review_enabled,
+                skill_nudge_interval=skill_nudge_interval if skill_nudge_interval is not None else existing.skill_nudge_interval,
+                max_active_skills=max_active_skills if max_active_skills is not None else existing.max_active_skills,
+                max_quarantine_skills=max_quarantine_skills if max_quarantine_skills is not None else existing.max_quarantine_skills,
             )
             self._storage.execute(
                 "UPDATE environment_configs SET "
@@ -97,7 +150,10 @@ class EnvironmentManager:
                 "tool_call_timeout = ?, loop_timeout = ?, tool_mode = ?, context_mode = ?, "
                 "planner_prompt = ?, evaluator_prompt = ?, evaluator_criteria_json = ?, "
                 "context_strategy = ?, max_blocks = ?, "
-                "dream_mode = ?, dream_max_llm_calls = ?, dream_min_sessions = ? "
+                "dream_mode = ?, dream_max_llm_calls = ?, dream_min_sessions = ?, "
+                "reflection_mode = ?, reflection_max_tokens = ?, "
+                "skill_review_enabled = ?, skill_nudge_interval = ?, max_active_skills = ?, "
+                "max_quarantine_skills = ? "
                 "WHERE id = ?",
                 (
                     json.dumps(cfg.tools),
@@ -124,6 +180,12 @@ class EnvironmentManager:
                     cfg.dream_mode,
                     cfg.dream_max_llm_calls,
                     cfg.dream_min_sessions,
+                    cfg.reflection_mode,
+                    cfg.reflection_max_tokens,
+                    int(cfg.skill_review_enabled),
+                    cfg.skill_nudge_interval,
+                    cfg.max_active_skills,
+                    cfg.max_quarantine_skills,
                     cfg.id,
                 ),
             )
@@ -157,6 +219,12 @@ class EnvironmentManager:
             dream_mode=dream_mode or "off",
             dream_max_llm_calls=dream_max_llm_calls if dream_max_llm_calls is not None else 10,
             dream_min_sessions=dream_min_sessions if dream_min_sessions is not None else 5,
+            reflection_mode=reflection_mode or "keyword",
+            reflection_max_tokens=reflection_max_tokens if reflection_max_tokens is not None else 4000,
+            skill_review_enabled=skill_review_enabled if skill_review_enabled is not None else False,
+            skill_nudge_interval=skill_nudge_interval if skill_nudge_interval is not None else 10,
+            max_active_skills=max_active_skills if max_active_skills is not None else 20,
+            max_quarantine_skills=max_quarantine_skills if max_quarantine_skills is not None else 10,
         )
         self._storage.execute(
             "INSERT INTO environment_configs "
@@ -165,8 +233,11 @@ class EnvironmentManager:
             "tool_loading, tool_loop, prompt_caching, memory_share, knowledge_share, "
             "max_tool_iterations, tool_call_timeout, loop_timeout, tool_mode, context_mode, "
             "planner_prompt, evaluator_prompt, evaluator_criteria_json, context_strategy, max_blocks, "
-            "dream_mode, dream_max_llm_calls, dream_min_sessions) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "dream_mode, dream_max_llm_calls, dream_min_sessions, "
+            "reflection_mode, reflection_max_tokens, "
+            "skill_review_enabled, skill_nudge_interval, max_active_skills, "
+            "max_quarantine_skills) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 cfg.id,
                 cfg.symbiote_id,
@@ -195,6 +266,12 @@ class EnvironmentManager:
                 cfg.dream_mode,
                 cfg.dream_max_llm_calls,
                 cfg.dream_min_sessions,
+                cfg.reflection_mode,
+                cfg.reflection_max_tokens,
+                int(cfg.skill_review_enabled),
+                cfg.skill_nudge_interval,
+                cfg.max_active_skills,
+                cfg.max_quarantine_skills,
             ),
         )
         return cfg
@@ -413,4 +490,10 @@ class EnvironmentManager:
             dream_mode=row.get("dream_mode") or "off",
             dream_max_llm_calls=int(row.get("dream_max_llm_calls", 10) or 10),
             dream_min_sessions=int(row.get("dream_min_sessions", 5) or 5),
+            reflection_mode=row.get("reflection_mode") or "keyword",
+            reflection_max_tokens=int(row.get("reflection_max_tokens", 4000) or 4000),
+            skill_review_enabled=bool(row.get("skill_review_enabled", 0)),
+            skill_nudge_interval=int(row.get("skill_nudge_interval", 10) or 10),
+            max_active_skills=int(row.get("max_active_skills", 20) or 20),
+            max_quarantine_skills=int(row.get("max_quarantine_skills", 10) or 10),
         )

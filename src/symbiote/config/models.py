@@ -21,6 +21,13 @@ class KernelConfig(BaseModel):
     context_budget: int = 4000
     llm_provider: str = "forge"
     log_level: str = "INFO"
+    # Optional skill library roots. If None, the kernel derives
+    # ``{db_path.parent}/skills/agent`` as the agent write root and (if it
+    # exists) ``./skills`` next to the project as a read+modify root. Host
+    # apps can override to point at any layout (multi-tenant, shared, etc.).
+    skills_root: Path | None = None
+    skills_extra_roots: list[Path] = []
+    skills_protected_roots: list[Path] = []
 
     # ── validators ────────────────────────────────────────────────────
 
