@@ -412,8 +412,19 @@ class ChatRunner:
                     messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
                     messages.append({"role": "user", "content": self._format_tool_results(results)})
                     messages.append({"role": "user", "content": injection})
+                    # Drop ``tools`` from kwargs for the injection call so
+                    # the LLM is forced to emit assistant text rather than
+                    # yet-another tool_call. Observed in sym_talk_lt
+                    # 2026-05-27: stagnation fired correctly, but the
+                    # injection call still had tools exposed and Sonnet
+                    # emitted one more tool_call instead of text, leaving
+                    # final_text empty and triggering a deterministic
+                    # fallback bubble. With tools absent the model has no
+                    # choice but to text-respond.
+                    inj_kwargs = dict(kwargs)
+                    inj_kwargs.pop("tools", None)
                     try:
-                        inj_response, inj_chunks = self._call_llm_sync(messages, kwargs, on_token)
+                        inj_response, inj_chunks = self._call_llm_sync(messages, inj_kwargs, on_token)
                         inj_text, _ = self._parse_response(inj_response)
                         final_text = inj_text
                         if on_token is not None:
@@ -606,8 +617,19 @@ class ChatRunner:
                     messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
                     messages.append({"role": "user", "content": self._format_tool_results(results)})
                     messages.append({"role": "user", "content": injection})
+                    # Drop ``tools`` from kwargs for the injection call so
+                    # the LLM is forced to emit assistant text rather than
+                    # yet-another tool_call. Observed in sym_talk_lt
+                    # 2026-05-27: stagnation fired correctly, but the
+                    # injection call still had tools exposed and Sonnet
+                    # emitted one more tool_call instead of text, leaving
+                    # final_text empty and triggering a deterministic
+                    # fallback bubble. With tools absent the model has no
+                    # choice but to text-respond.
+                    inj_kwargs = dict(kwargs)
+                    inj_kwargs.pop("tools", None)
                     try:
-                        inj_response, inj_chunks = self._call_llm_sync(messages, kwargs, on_token)
+                        inj_response, inj_chunks = self._call_llm_sync(messages, inj_kwargs, on_token)
                         inj_text, _ = self._parse_response(inj_response)
                         final_text = inj_text
                         if on_token is not None:

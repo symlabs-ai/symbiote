@@ -5,6 +5,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.6.3] - 2026-05-27
+
+### Correções
+
+- **fix(runners): `LoopController` detecta ping-pong (A,B,A,B,A) — corta loops alternados que escapavam do check consecutivo** — observado em sym_talk_lt 2026-05-27 ("qual a versão estável do Python?"): LLM alternou `web_search "Python latest"` ↔ `web_extract python.org/downloads` por **6 iterações cada** (12 tool calls, 17 totais), batendo o dedup cache em cada chamada mas nunca DUAS consecutivas idênticas — então o stagnation check anterior (`A,A`) jamais disparava. ### Fix em `should_stop()`: novo branch ping-pong com janela deslizante de 5 calls. Se `len(distinct (tool_id, params)) <= 2` na janela → reusa `stop_reason="stagnation"` (e a `injection_message` correspondente — kernel feedback scoring + host recovery prompts já tratam idêntico). Constantes `_PING_PONG_WINDOW=5` e `_PING_PONG_MAX_UNIQUE=2` documentadas in-line. Preserva o teste pré-existente `test_non_consecutive_duplicates_no_stagnation` (3 calls com 2 keys continuam OK — só dispara na 5ª).
+- **fix(runners): `ChatRunner` drop `tools` do kwargs na injection final pós-stagnation** — observado em sym_talk_lt 2026-05-27 11:49 ("O Corinthians joga hoje?"): controller fired stagnation, injection msg "Respond to the user" enviada, mas Sonnet em sessão pt-BR ignorou e emitiu **mais um tool_call** em vez de texto (porque `kwargs["tools"]` ainda estava populado com 62 ferramentas). `final_text=""` → host caiu no fallback determinístico ("Empty response after N tool calls"). ### Fix em `_run_loop`/`_run_async_loop`: copiar `kwargs` e dropar `"tools"` antes do `_call_llm_sync` do injection. Sem tools no schema, o LLM é forçado a text-respond. Cobre `ForgeAdapter` e `SymTalkAgentAdapter` (ambos tratam ausência de `tools` como "sem ferramentas disponíveis"). Comentário in-line referencia o incidente como pin de regressão.
+
+### Testes
+
+- 3 novos em `test_loop_control.py::TestDuplicateDetection`: `test_ping_pong_fires_at_window_size` (A,B,A,B,A → stagnation), `test_ping_pong_three_unique_no_stop` (A,B,C,A,B → 3 unique → continua), `test_ping_pong_below_window_no_stop` (4 calls A,B,A,B → ainda abaixo da janela).
+- 1 novo em `test_loop_control.py::TestChatRunnerIntegration`: `test_injection_call_omits_tools_kwarg` — `_CaptureLLM` mock grava `tools` de cada call; pin que a última chamada (injection, identificável pela mensagem "repeating the same action") tem `tools_present is False`. Bloqueia regressão silenciosa.
+- Suite full: 1530 passed, 4 falhas pré-existentes em `test_generation_settings.py` / `test_instant_mode.py` (mesmas que já estavam na v0.6.2 da main, zero relacionadas com este release).
+
 ## [v0.6.2] - 2026-05-27
 
 > **Escopo agregado**: este release consolida os PRs #1 (Sprints 1-4 + 4.1 + 4.2) e #2 (Sprint 5 + 5.1) — o **loop completo de self-improvement** (LLM reflection, skill autonomy, lifecycle automation, audit). Defaults preservados: `reflection_mode='keyword'` e `skill_review_enabled=False` mantêm comportamento idêntico ao v0.6.1; clientes embedados (`you_news`, `sym_talk_lt`) atualizam sem mudar código.

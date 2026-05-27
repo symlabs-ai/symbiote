@@ -54,10 +54,55 @@ class TestDuplicateDetection:
         assert should_stop is False
 
     def test_non_consecutive_duplicates_no_stagnation(self) -> None:
+        # ``A, B, A`` (3 calls, 2 unique keys) is legitimate "let me
+        # double-check" behavior. Ping-pong detection only fires when
+        # the same low-diversity pattern persists for ``_PING_PONG_WINDOW``
+        # (=5) calls. See test_ping_pong_fires_at_window_size below.
         ctrl = LoopController(max_iterations=10)
         ctrl.record("search", {"query": "hello"}, True)
         ctrl.record("fetch", {"url": "http://example.com"}, True)
         ctrl.record("search", {"query": "hello"}, True)
+        should_stop, _ = ctrl.should_stop()
+        assert should_stop is False
+
+    def test_ping_pong_fires_at_window_size(self) -> None:
+        """A,B,A,B,A — same 2 keys cycled across the trailing 5-call window.
+
+        Real case from sym_talk_lt 2026-05-27 ("qual a versão do Python"
+        smoke): LLM alternated web_search "Python latest" ↔ web_extract
+        python.org/downloads, hitting the dedup cache every time but
+        never repeating consecutively (which would have triggered the
+        existing A,A check). The ping-pong heuristic catches exactly
+        this: 5 calls, ≤ 2 unique signatures.
+        """
+        ctrl = LoopController(max_iterations=20)
+        ctrl.record("search", {"q": "x"}, True)
+        ctrl.record("extract", {"url": "u"}, True)
+        ctrl.record("search", {"q": "x"}, True)
+        ctrl.record("extract", {"url": "u"}, True)
+        ctrl.record("search", {"q": "x"}, True)
+        should_stop, reason = ctrl.should_stop()
+        assert should_stop is True
+        assert reason == "stagnation"
+
+    def test_ping_pong_three_unique_no_stop(self) -> None:
+        """A,B,C,A,B — 3 unique keys → legitimate multi-source exploration."""
+        ctrl = LoopController(max_iterations=20)
+        ctrl.record("search", {"q": "x"}, True)
+        ctrl.record("extract", {"url": "u1"}, True)
+        ctrl.record("extract", {"url": "u2"}, True)
+        ctrl.record("search", {"q": "x"}, True)
+        ctrl.record("extract", {"url": "u1"}, True)
+        should_stop, _ = ctrl.should_stop()
+        assert should_stop is False
+
+    def test_ping_pong_below_window_no_stop(self) -> None:
+        """A,B,A,B — only 4 calls, still under the 5-call window."""
+        ctrl = LoopController(max_iterations=20)
+        ctrl.record("search", {"q": "x"}, True)
+        ctrl.record("extract", {"url": "u"}, True)
+        ctrl.record("search", {"q": "x"}, True)
+        ctrl.record("extract", {"url": "u"}, True)
         should_stop, _ = ctrl.should_stop()
         assert should_stop is False
 
@@ -220,3 +265,98 @@ class TestChatRunnerIntegration:
         assert llm._call_count <= 4
 
         adapter.close()
+
+    def test_injection_call_omits_tools_kwarg(self, tmp_path: Path) -> None:
+        """The post-stagnation injection call must pass ``tools=None``.
+
+        Without dropping tools the LLM is free to emit yet another
+        tool_call instead of plain text, producing the "Empty response
+        after N tool calls" deterministic fallback observed in sym_talk_lt
+        2026-05-27 11:49 ("O Corinthians joga hoje?"). The fix is in
+        chat.py: ``inj_kwargs = dict(kwargs); inj_kwargs.pop("tools", None)``
+        right before the injection ``_call_llm_sync``. This test pins
+        that behavior so the fix can't regress silently.
+        """
+        from symbiote.adapters.storage.sqlite import SQLiteAdapter
+        from symbiote.core.context import AssembledContext
+        from symbiote.core.identity import IdentityManager
+        from symbiote.environment.manager import EnvironmentManager
+        from symbiote.environment.policies import PolicyGate
+        from symbiote.environment.tools import ToolGateway
+        from symbiote.runners.chat import ChatRunner
+
+        class _CaptureLLM:
+            """Records each call's `tools` kwarg + always emits a native tool_call.
+
+            Uses the same OpenAI-shaped tool_calls structure ChatRunner
+            consumes when ``native_tools=True``; without that flag the
+            runner builds the catalog inside the prompt text instead of
+            passing ``tools=[...]`` to the adapter, defeating the test.
+            """
+            def __init__(self) -> None:
+                self.calls: list[dict] = []
+                self._n = 0
+
+            def complete(self, messages, config=None, tools=None):
+                self._n += 1
+                last_msg = messages[-1]["content"] if messages else ""
+                self.calls.append({
+                    "tools_present": tools is not None,
+                    "tools_count": len(tools) if tools else 0,
+                    "last_msg": last_msg,
+                })
+                if "repeating the same action" in last_msg:
+                    return "Aqui está a resposta sintetizada."
+                # Emit a native LLMResponse with a NativeToolCall so the
+                # ChatRunner's native_tools=True path executes the tool
+                # and continues the loop.
+                from symbiote.environment.descriptors import LLMResponse, NativeToolCall
+                return LLMResponse(
+                    content="",
+                    tool_calls=[NativeToolCall(
+                        call_id=f"call_{self._n}",
+                        tool_id="dummy_search",
+                        params={"q": "test"},
+                    )],
+                )
+
+        db = tmp_path / "capture.db"
+        adapter = SQLiteAdapter(db_path=db)
+        adapter.init_schema()
+        mgr = IdentityManager(storage=adapter)
+        sym = mgr.create(name="TestBot2", role="assistant")
+        env_mgr = EnvironmentManager(storage=adapter)
+        gate = PolicyGate(env_manager=env_mgr, storage=adapter)
+        gw = ToolGateway(policy_gate=gate)
+        gw.register_tool("dummy_search", lambda p: {"result": "found"})
+        env_mgr.configure(symbiote_id=sym.id, tools=["dummy_search"])
+
+        llm = _CaptureLLM()
+        runner = ChatRunner(llm, tool_gateway=gw, native_tools=True)
+        context = AssembledContext(
+            symbiote_id=sym.id, session_id="sess-cap", user_input="Search",
+            available_tools=[
+                {"tool_id": "dummy_search", "name": "Dummy Search",
+                 "description": "dummy", "parameters": {}},
+            ],
+            tool_loop=True,
+        )
+        runner.run(context)
+        adapter.close()
+
+        # The runner makes ≥3 calls: at least 2 tool-emitting + 1 injection.
+        assert len(llm.calls) >= 3
+        # Tool-emitting calls all see ``tools`` populated (the catalog).
+        for call in llm.calls[:-1]:
+            assert call["tools_present"] is True, "tool calls should expose tools"
+
+        # The FINAL call must be the injection — recognizable by the
+        # injection message landing as the last user message — and it
+        # must have NO tools exposed.
+        last = llm.calls[-1]
+        assert "repeating the same action" in last["last_msg"], (
+            "expected the last LLM call to be the post-stagnation injection"
+        )
+        assert last["tools_present"] is False, (
+            "injection call must drop tools to force text output"
+        )

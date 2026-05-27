@@ -8,11 +8,34 @@ import json
 class LoopController:
     """Monitors tool loop health and decides when to stop.
 
-    Detects three stop conditions:
+    Detects four stop conditions:
     1. Max iterations reached
-    2. Stagnation: same tool_id + same params called 2+ times consecutively
-    3. Circuit breaker: same tool_id failed 3+ times consecutively
+    2. Stagnation — same tool_id + same params called 2+ times consecutively
+    3. Stagnation (ping-pong) — last ``_PING_PONG_WINDOW`` calls alternate
+       across at most 2 distinct (tool_id, params) keys. Catches the
+       A,B,A,B,A pattern that condition 2 misses by definition (the
+       LLM "checking again" against the same source on alternate turns
+       while in fact getting the same dedup'd result every time).
+    4. Circuit breaker — same tool_id failed 3+ times consecutively
     """
+
+    # Number of trailing calls inspected for the ping-pong heuristic.
+    # 5 is the sweet spot from log analysis (sym_talk_lt 2026-05-27):
+    # • Window=3 would over-trigger — A,B,A is a legitimate "let me
+    #   double-check" pattern and downstream tests (e.g.
+    #   test_non_consecutive_duplicates_no_stagnation) lock that in.
+    # • Window=4 only catches A,B,A,B which the LLM frequently produces
+    #   organically when refining a query mid-research, also false-positive
+    #   prone.
+    # • Window=5 catches A,B,A,B,A — by that point the LLM has revisited
+    #   the same 2 sources THREE times each (cache hits all the way) and
+    #   is clearly stuck. The Jitto "qual a versão do Python?" loop that
+    #   reached 17 tool calls hit this pattern at the 5th call.
+    _PING_PONG_WINDOW = 5
+    # Min distinct call signatures in the window for ping-pong to fire.
+    # If unique <= this, we're cycling. Set to 2 because cycling among
+    # 3+ distinct calls is normal "exploring different sources".
+    _PING_PONG_MAX_UNIQUE = 2
 
     _DEFAULT_STAGNATION_MSG = (
         "You are repeating the same action. "
@@ -54,7 +77,8 @@ class LoopController:
         Stop conditions:
         1. Max iterations reached
         2. Duplicate detection: same tool_id + same params called 2+ times consecutively
-        3. Circuit breaker: same tool_id failed 3+ times consecutively
+        3. Ping-pong: last ``_PING_PONG_WINDOW`` calls cycle across ≤ 2 distinct keys
+        4. Circuit breaker: same tool_id failed 3+ times consecutively
         """
         if self._iteration >= self._max_iterations:
             return True, "max_iterations"
@@ -69,6 +93,18 @@ class LoopController:
             prev_tool, prev_params, _ = self._history[-2]
             curr_tool, curr_params, _ = self._history[-1]
             if prev_tool == curr_tool and prev_params == curr_params:
+                return True, "stagnation"
+
+        # Ping-pong detection: trailing window with very low call diversity.
+        # Reusing the "stagnation" reason (and its injection message) on
+        # purpose — both are the same logical event from the LLM's POV
+        # ("you've been going in circles, time to respond"), and the
+        # downstream handling (kernel feedback scoring, /v1/agent retry
+        # logic, host-level recovery prompts) treats them identically.
+        if len(self._history) >= self._PING_PONG_WINDOW:
+            window = self._history[-self._PING_PONG_WINDOW:]
+            unique = {(t, p) for t, p, _ in window}
+            if len(unique) <= self._PING_PONG_MAX_UNIQUE:
                 return True, "stagnation"
 
         return False, ""
