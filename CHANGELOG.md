@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.6.2] - 2026-05-27
+
+> **Escopo agregado**: este release consolida os PRs #1 (Sprints 1-4 + 4.1 + 4.2) e #2 (Sprint 5 + 5.1) — o **loop completo de self-improvement** (LLM reflection, skill autonomy, lifecycle automation, audit). Defaults preservados: `reflection_mode='keyword'` e `skill_review_enabled=False` mantêm comportamento idêntico ao v0.6.1; clientes embedados (`you_news`, `sym_talk_lt`) atualizam sem mudar código.
+>
+> Bumpado como **patch** apesar do escopo MINOR — decisão do mantenedor priorizando estabilidade do canal de versionamento. CHANGELOG abaixo documenta o escopo real para auditoria.
+
 ### Aprendizado — Sprint 5.1 (hardening do review)
 
 Quatro fixes do review do PR #2. Defaults preservados; nenhum impacto observável quando `skill_review_enabled=False`.
