@@ -34,6 +34,14 @@ Symbiote is the runtime infrastructure for AI-powered assistants ("Symbiotas") t
 - **Process Engine** — declarative step-by-step workflows
 - **Reflection Engine** — automatic fact extraction with semantic type classification
 
+### Web & Browser (v0.6.0+)
+- **Web Search** — `web_search` tool backed by Brave Search via SymGateway proxy (centralized billing, no extra credentials)
+- **Web Extract** — `web_extract` with platform-aware extraction (YouTube transcripts, Reddit posts, Twitter, Instagram, generic markdown via trafilatura). Configurable provider chain: forge_scraper primary → Firecrawl fallback
+- **Web Crawl** — `web_crawl` for instruction-driven domain crawls via Firecrawl
+- **Browser Automation** — `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_fill`, `browser_screenshot`, `browser_wait_for`, `browser_close` via Playwright (Chromium local)
+- **Website Policy** — domain blocklist/allowlist with wildcard matching (`*.ads.com`) and TTL cache
+- **Opt-in subpackage** — `symbiote.browser` ships in the package but stays inert until `register(kernel, ...)` is called. Zero impact on existing clients.
+
 ## Quick Start
 
 ```bash
@@ -212,9 +220,61 @@ Memories are auto-classified into categories for policy and retrieval:
 procedural = store.get_by_category(symbiote_id, "procedural")
 ```
 
+## Web & Browser tools (v0.6.0+)
+
+`symbiote.browser` adds web search, content extraction, and full browser automation as opt-in tools registered on the `ToolGateway`. Activation is a single line:
+
+```python
+from symbiote.core.kernel import SymbioteKernel
+from symbiote.browser import register
+
+kernel = SymbioteKernel(config, llm)
+
+register(
+    kernel,
+    search_backend="brave",                            # web_search via SymGateway
+    extract_backend=["forge_scraper", "firecrawl"],    # chain with fallback
+    browser_backend="chromium",                        # browser_* via Playwright
+    policy={"blocklist": ["*.ads.com", "doubleclick.net"]},
+)
+```
+
+The Symbiota can now use 10 new tools: `web_search`, `web_extract`, `web_crawl`, `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_fill`, `browser_screenshot`, `browser_wait_for`, `browser_close`.
+
+### Optional extras
+
+| Extra | Includes | When to install |
+|---|---|---|
+| `pip install "symbiote[extract]"` | forge_scraper + trafilatura + youtube-transcript-api | Web content extraction (free for public URLs) |
+| `pip install "symbiote[browser]"` | Playwright | Browser automation. Run `playwright install chromium` after install (~170MB, one-time) |
+| `pip install "symbiote[stealth]"` | playwright-stealth | Reserved for anti-fingerprinting (not yet wired) |
+
+Without these extras the package stays slim — `import symbiote` adds no extra dependencies, and tools only appear in the kernel after `register()` is called.
+
+### Cost
+
+| Tool | Provider | Cost |
+|---|---|---|
+| `web_search` | Brave via SymGateway | $0.003/query (billed via SymGateway) |
+| `web_extract` (public URLs) | forge_scraper local | $0 |
+| `web_extract` (Cloudflare/etc) | Firecrawl via SymGateway | per Firecrawl pricing |
+| `web_crawl` | Firecrawl via SymGateway | per Firecrawl pricing × pages |
+| `browser_*` | Chromium local | $0 (your CPU/RAM) |
+
+### Visual demo
+
+```bash
+.venv/bin/python scripts/demo_browser.py --headed --slow-mo 1500
+```
+
+Opens a real Chromium window, navigates, snapshots, clicks, closes. Useful for validation and debugging.
+
 ## Documentation
 
 - **[QUICKSTART.md](QUICKSTART.md)** — Full usage guide (Python, CLI, HTTP API, embedded)
+- **[docs/releases/v0.6.0.md](docs/releases/v0.6.0.md)** — Release report for clients: quickstart, examples, cost cheat-sheet, migration
+- **[docs/integrations/symbiote-browser-quickstart.md](docs/integrations/symbiote-browser-quickstart.md)** — Detailed `symbiote.browser` user guide (setup, troubleshooting, FAQ)
+- **[docs/integrations/symbiote-browser.md](docs/integrations/symbiote-browser.md)** — Architectural plan and decisions for the browser subpackage
 
 ## License
 
