@@ -5,6 +5,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.6.4] - 2026-05-29
+
+### Correções
+
+- **storage**: `SQLiteAdapter` agora serializa `execute`/`fetch_one`/`fetch_all` com um `threading.Lock` por adapter. Elimina `sqlite3.InterfaceError: bad parameter or other API misuse` quando background threads (consolidation, skill/reflection review, dream) escreviam enquanto a main thread lia. `check_same_thread` default `True`→`False` (necessário para a conexão única ser usada por outras threads sob o lock; produção já passava `False` explicitamente, zero mudança de comportamento). Novo teste de stress concorrente (12 threads × 25 insert+select). (B-47)
+
+### Testes
+
+- **chat runner**: atualizadas 4 assertions defasadas em `test_instant_mode` e `test_generation_settings` que mockavam a assinatura de `_run_instant`/`_run_loop` anterior ao kwarg `llm_config` (v0.5.0). Drift de teste, não regressão funcional. (B-46)
+
 ## [v0.6.3] - 2026-05-27
 
 ### Correções
