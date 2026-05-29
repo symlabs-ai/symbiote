@@ -5,6 +5,32 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.6.5] - 2026-05-29
+
+### Novas funcionalidades
+
+- **Teto de `max_tool_iterations` controlável pelo host**: o valor por-symbiota já era
+  configurável; agora o teto também. Novo `KernelConfig.max_tool_iterations_ceiling`
+  (default `50`, faixa 1–10000, carregável via YAML) deixa o app embutido decidir o limite.
+  `EnvironmentManager.configure(max_tool_iterations=N)` valida contra esse teto e **falha
+  alto** (`ValueError` claro) quando excede — antes era um `Field(le=50)` estático que
+  levantava `ValidationError` (e era engolido por wrappers de host, deixando o DB no valor
+  antigo). O `le=` do modelo `EnvironmentConfig` virou apenas backstop absoluto (10000);
+  `loop_timeout` (≤3600s) segue como co-guard de wall-clock independente.
+
+  *Compat*: clientes que não setam o ceiling têm comportamento idêntico (teto 50). Único
+  impacto observável: quem capturava `pydantic.ValidationError` ao exceder 50 agora recebe
+  `ValueError`.
+
+### Correções
+
+- **storage**: `SQLiteAdapter.close()` agora adquire o lock do adapter. Completa o fix de
+  thread safety do v0.6.4 (B-47): com `check_same_thread=False`, fechar a conexão enquanto
+  uma thread de background (consolidation/review/dream) está em `execute` é use-after-free
+  nativo (segfault, não capturável em Python). Com o lock, `close()` espera o statement em
+  voo terminar; um statement tardio passa a levantar `ProgrammingError` capturável.
+  Reproduzível na suíte unit completa após o B-47 expor o race; 4 runs full verdes pós-fix.
+
 ## [v0.6.4] - 2026-05-29
 
 ### Correções
