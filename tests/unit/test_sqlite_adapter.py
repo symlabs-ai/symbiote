@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 
 import pytest
@@ -179,3 +180,53 @@ class TestProtocol:
         assert callable(getattr(adapter, "fetch_one", None))
         assert callable(getattr(adapter, "fetch_all", None))
         assert callable(getattr(adapter, "close", None))
+
+
+# ── Thread safety (B-47 regression) ────────────────────────────────────────
+
+
+class TestThreadSafety:
+    """Concurrent reads/writes against the shared connection must not raise
+    ``sqlite3.InterfaceError: bad parameter or other API misuse`` (B-47)."""
+
+    def test_concurrent_writes_and_reads(self, adapter: SQLiteAdapter) -> None:
+        adapter.execute(
+            "INSERT INTO symbiotes (id, name, role) VALUES (?, ?, ?)",
+            ("sym-1", "Atlas", "assistant"),
+        )
+
+        threads_n = 12
+        per_thread = 25
+        errors: list[Exception] = []
+        barrier = threading.Barrier(threads_n)
+
+        def writer(tid: int) -> None:
+            barrier.wait()  # maximize contention: release all threads at once
+            try:
+                for i in range(per_thread):
+                    adapter.execute(
+                        "INSERT INTO memory_entries "
+                        "(id, symbiote_id, type, scope, content) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (f"m-{tid}-{i}", "sym-1", "working", "session", "x"),
+                    )
+                    adapter.fetch_all(
+                        "SELECT id FROM memory_entries WHERE symbiote_id = ?",
+                        ("sym-1",),
+                    )
+            except Exception as exc:  # noqa: BLE001 — capture for assertion
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=writer, args=(tid,)) for tid in range(threads_n)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == [], f"concurrent access raised: {errors!r}"
+        # Every insert must have landed — no lost writes under the lock.
+        row = adapter.fetch_one("SELECT COUNT(*) AS n FROM memory_entries")
+        assert row is not None
+        assert row["n"] == threads_n * per_thread

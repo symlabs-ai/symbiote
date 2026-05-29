@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 
 _SCHEMA_SQL = """\
@@ -163,11 +164,25 @@ CREATE INDEX IF NOT EXISTS idx_discovered_tools_symbiote
 
 
 class SQLiteAdapter:
-    """Thin wrapper around stdlib ``sqlite3`` with WAL + foreign keys."""
+    """Thin wrapper around stdlib ``sqlite3`` with WAL + foreign keys.
 
-    def __init__(self, db_path: Path, *, check_same_thread: bool = True) -> None:
+    A single :class:`sqlite3.Connection` is shared across the process. CPython's
+    sqlite3 does not allow a shared connection/cursor to be driven by multiple
+    threads concurrently — doing so surfaces as
+    ``sqlite3.InterfaceError: bad parameter or other API misuse``. To stay safe
+    when background threads (consolidation, skill/reflection review, dream)
+    write while the main thread reads, every statement is serialized through a
+    per-adapter lock. Single-user is the common case, so the contention cost is
+    negligible; multi-tenant deployments should move to a connection pool.
+    """
+
+    def __init__(self, db_path: Path, *, check_same_thread: bool = False) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Serializes all statements against the shared connection. ``execute``
+        # never calls ``fetch_*`` (and vice versa), so a plain Lock is enough.
+        self._lock = threading.Lock()
 
         self._conn = sqlite3.connect(
             str(self._db_path), check_same_thread=check_same_thread
@@ -314,23 +329,32 @@ class SQLiteAdapter:
                 pass  # column already exists
 
     def execute(self, sql: str, params: tuple | None = None) -> sqlite3.Cursor:
-        """Run an INSERT / UPDATE / DELETE and auto-commit."""
-        cur = self._conn.execute(sql, params or ())
-        self._conn.commit()
-        return cur
+        """Run an INSERT / UPDATE / DELETE and auto-commit.
+
+        The returned cursor is only safe to read for metadata that is already
+        materialized after commit (``rowcount``, ``lastrowid``); callers must
+        not iterate rows off it. Row reads go through ``fetch_one``/``fetch_all``.
+        """
+        with self._lock:
+            cur = self._conn.execute(sql, params or ())
+            self._conn.commit()
+            return cur
 
     def fetch_one(self, sql: str, params: tuple | None = None) -> dict | None:
         """Return a single row as a dict, or ``None``."""
-        cur = self._conn.execute(sql, params or ())
-        row = cur.fetchone()
+        with self._lock:
+            cur = self._conn.execute(sql, params or ())
+            row = cur.fetchone()
         if row is None:
             return None
         return dict(row)
 
     def fetch_all(self, sql: str, params: tuple | None = None) -> list[dict]:
         """Return all matching rows as a list of dicts."""
-        cur = self._conn.execute(sql, params or ())
-        return [dict(r) for r in cur.fetchall()]
+        with self._lock:
+            cur = self._conn.execute(sql, params or ())
+            rows = cur.fetchall()
+        return [dict(r) for r in rows]
 
     def close(self) -> None:
         """Close the underlying connection."""
