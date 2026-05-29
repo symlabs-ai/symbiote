@@ -357,5 +357,13 @@ class SQLiteAdapter:
         return [dict(r) for r in rows]
 
     def close(self) -> None:
-        """Close the underlying connection."""
-        self._conn.close()
+        """Close the underlying connection.
+
+        Acquires the lock so it cannot free the connection while a background
+        thread is mid-statement — with ``check_same_thread=False`` a concurrent
+        close during an in-flight ``execute`` is a native use-after-free
+        (segfault), not a catchable Python error. A late statement that arrives
+        after close raises a catchable ``ProgrammingError`` instead.
+        """
+        with self._lock:
+            self._conn.close()

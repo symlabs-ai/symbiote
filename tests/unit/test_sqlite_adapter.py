@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -230,3 +231,61 @@ class TestThreadSafety:
         row = adapter.fetch_one("SELECT COUNT(*) AS n FROM memory_entries")
         assert row is not None
         assert row["n"] == threads_n * per_thread
+
+    def test_close_during_concurrent_writes_no_segfault(
+        self, tmp_path: Path
+    ) -> None:
+        """``close()`` concurrent with an in-flight write must not segfault.
+
+        With ``check_same_thread=False`` a background thread can drive the shared
+        connection; freeing it mid-``execute`` from another thread is a native
+        use-after-free (segfault) that no ``try/except`` can catch. ``close()``
+        takes the lock, so it waits for the in-flight statement; a statement that
+        arrives *after* close raises a catchable ``ProgrammingError`` instead.
+
+        The process surviving to the assertions is itself the proof that no
+        segfault occurred — a crash would take the whole interpreter down.
+        """
+        adp = SQLiteAdapter(db_path=tmp_path / "close_race.db")
+        adp.init_schema()
+        adp.execute(
+            "INSERT INTO symbiotes (id, name, role) VALUES (?, ?, ?)",
+            ("sym-1", "Atlas", "assistant"),
+        )
+
+        stop = threading.Event()
+        errors: list[Exception] = []
+        started = threading.Barrier(5)
+
+        def writer(tid: int) -> None:
+            started.wait()
+            i = 0
+            while not stop.is_set():
+                try:
+                    adp.execute(
+                        "INSERT INTO memory_entries "
+                        "(id, symbiote_id, type, scope, content) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (f"m-{tid}-{i}", "sym-1", "working", "session", "x"),
+                    )
+                except sqlite3.ProgrammingError:
+                    # Expected once the connection is closed underneath us.
+                    return
+                except Exception as exc:  # noqa: BLE001 — any other error is a bug
+                    errors.append(exc)
+                    return
+                i += 1
+
+        threads = [threading.Thread(target=writer, args=(t,)) for t in range(4)]
+        for t in threads:
+            t.start()
+        started.wait()  # release all writers together
+        time.sleep(0.01)  # let writes get in flight, then close mid-stream
+        adp.close()
+        stop.set()
+        for t in threads:
+            t.join()
+
+        # Only ProgrammingError (closed connection) is tolerated; the B-47
+        # symptom (InterfaceError) or anything else means the race is unfixed.
+        assert errors == [], f"unexpected errors during close race: {errors!r}"
