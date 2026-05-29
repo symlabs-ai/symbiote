@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from symbiote.adapters.storage.sqlite import SQLiteAdapter
+from symbiote.config.models import KernelConfig
 from symbiote.core.identity import IdentityManager
 from symbiote.core.models import EnvironmentConfig
 from symbiote.environment.manager import EnvironmentManager
@@ -401,3 +403,54 @@ class TestSkillLifecycleRoundTrip:
         manager.configure(symbiote_id=symbiote_id, tools=["pytest"])
         cfg = manager.get_config(symbiote_id)
         assert cfg.skill_auto_promote_threshold == 7
+
+
+# ── max_tool_iterations host ceiling ─────────────────────────────────────────
+
+
+class TestMaxToolIterationsCeiling:
+    """The per-symbiote value is configurable, but the host owns the upper
+    bound via KernelConfig.max_tool_iterations_ceiling (default 50)."""
+
+    def test_within_default_ceiling_persists(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        manager.configure(symbiote_id=symbiote_id, max_tool_iterations=40)
+        assert manager.get_config(symbiote_id).max_tool_iterations == 40
+
+    def test_above_default_ceiling_raises(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        # No kernel back-reference → ceiling falls back to the default 50.
+        with pytest.raises(ValueError, match="exceeds the host ceiling"):
+            manager.configure(symbiote_id=symbiote_id, max_tool_iterations=60)
+
+    def test_host_can_raise_ceiling(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        manager._kernel = SimpleNamespace(  # type: ignore[assignment]
+            _config=KernelConfig(max_tool_iterations_ceiling=500)
+        )
+        manager.configure(symbiote_id=symbiote_id, max_tool_iterations=120)
+        assert manager.get_config(symbiote_id).max_tool_iterations == 120
+
+    def test_above_host_ceiling_raises(
+        self, manager: EnvironmentManager, symbiote_id: str
+    ) -> None:
+        manager._kernel = SimpleNamespace(  # type: ignore[assignment]
+            _config=KernelConfig(max_tool_iterations_ceiling=500)
+        )
+        with pytest.raises(ValueError, match="exceeds the host ceiling"):
+            manager.configure(symbiote_id=symbiote_id, max_tool_iterations=600)
+
+    def test_model_absolute_backstop(self) -> None:
+        # Even with a permissive host ceiling, the EnvironmentConfig model
+        # rejects absurd values (backstop le=10000).
+        with pytest.raises(ValueError):
+            EnvironmentConfig(symbiote_id="s1", max_tool_iterations=99999)
+
+    def test_kernel_config_ceiling_bounds(self) -> None:
+        with pytest.raises(ValueError):
+            KernelConfig(max_tool_iterations_ceiling=0)
+        with pytest.raises(ValueError):
+            KernelConfig(max_tool_iterations_ceiling=20000)

@@ -28,6 +28,11 @@ class KernelConfig(BaseModel):
     skills_root: Path | None = None
     skills_extra_roots: list[Path] = []
     skills_protected_roots: list[Path] = []
+    # Host-controlled ceiling for per-symbiote ``max_tool_iterations``. The
+    # embedding application owns this policy; ``EnvironmentManager.configure()``
+    # rejects per-symbiote values above it. Default 50 preserves the historical
+    # hardcoded cap. Bounded by the EnvironmentConfig absolute backstop (10000).
+    max_tool_iterations_ceiling: int = 50
 
     # ── validators ────────────────────────────────────────────────────
 
@@ -36,6 +41,16 @@ class KernelConfig(BaseModel):
     def _context_budget_positive(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("context_budget must be a positive integer")
+        return v
+
+    @field_validator("max_tool_iterations_ceiling")
+    @classmethod
+    def _ceiling_in_range(cls, v: int) -> int:
+        if not 1 <= v <= 10000:
+            raise ValueError(
+                "max_tool_iterations_ceiling must be between 1 and 10000 "
+                f"(the EnvironmentConfig absolute backstop), got {v}"
+            )
         return v
 
     @field_validator("log_level")

@@ -98,6 +98,26 @@ class EnvironmentManager:
                     "would explode cost. Set a cheap aux model (e.g. claude-haiku-4-5) first."
                 )
 
+        # Host-policy ceiling on max_tool_iterations. The per-symbiote value is
+        # configurable, but the embedding application owns the upper bound via
+        # KernelConfig.max_tool_iterations_ceiling (default 50). Enforced here —
+        # the layer that knows the host policy — rather than as a static Pydantic
+        # bound. Fail-fast with a clear error instead of silently no-op'ing.
+        if max_tool_iterations is not None:
+            kernel = getattr(self, "_kernel", None)
+            ceiling = getattr(
+                getattr(kernel, "_config", None),
+                "max_tool_iterations_ceiling",
+                50,
+            )
+            if max_tool_iterations > ceiling:
+                raise ValueError(
+                    f"max_tool_iterations={max_tool_iterations} exceeds the host "
+                    f"ceiling ({ceiling}). Raise KernelConfig."
+                    f"max_tool_iterations_ceiling to allow higher values. "
+                    f"loop_timeout (≤3600s) remains the independent wall-clock guard."
+                )
+
         existing = self._fetch_exact(symbiote_id, workspace_id)
 
         # Auto-derive tool_loop from tool_mode when tool_mode is set explicitly
