@@ -70,7 +70,7 @@ class TestChatRunnerPassesConfig:
         assert len(calls) == 1
         assert calls[0]["config"] == {"temperature": 0.5, "max_tokens": 500}
 
-    def test_none_config_passes_none(self) -> None:
+    def test_no_settings_passes_empty_config(self) -> None:
         from symbiote.runners.chat import ChatRunner
 
         calls: list[dict] = []
@@ -86,7 +86,9 @@ class TestChatRunnerPassesConfig:
         )
         runner.run(ctx)
 
-        assert calls[0]["config"] is None
+        # With no generation_settings the runner builds an empty config dict
+        # (config = dict(context.generation_settings or {})) — never None.
+        assert calls[0]["config"] == {}
 
 
 class TestPromptCachingIntegration:

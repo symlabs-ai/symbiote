@@ -105,14 +105,14 @@ class TestInstantFastPath:
         ctx = self._make_context()
         with patch.object(runner, "_run_instant", return_value=RunResult(success=True, output="fast")) as mock:
             runner.run(ctx)
-            mock.assert_called_once_with(ctx, None)
+            mock.assert_called_once_with(ctx, None, llm_config=None)
 
     def test_brief_uses_run_loop(self):
         runner = self._make_runner()
         ctx = self._make_context(tool_mode="brief")
         with patch.object(runner, "_run_loop", return_value=RunResult(success=True, output="loop")) as mock:
             runner.run(ctx)
-            mock.assert_called_once_with(ctx, None)
+            mock.assert_called_once_with(ctx, None, llm_config=None)
 
     def test_instant_returns_trace_with_tool_mode(self):
         runner = self._make_runner(llm_response="done")
@@ -165,7 +165,7 @@ class TestInstantFastPath:
         ctx = self._make_context()
         with patch.object(runner, "_run_instant", return_value=RunResult(success=True, output="fast")) as mock:
             asyncio.run(runner.run_async(ctx))
-            mock.assert_called_once_with(ctx, None)
+            mock.assert_called_once_with(ctx, None, llm_config=None)
 
 
 # ── LoopTrace tool_mode field ────────────────────────────────────────────────
