@@ -5,6 +5,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.6.6] - 2026-06-01
+
+- feat(console): `SYMBIOTE_DB_PATH` permite o server abrir o SQLite de qualquer instância (inclusive embarcada) sem depender do cwd
+- feat(console): `SYMBIOTE_LOCAL_ADMIN=1` auto-provisiona key admin e injeta no Console, destravando a edição contra bancos sem API keys (resolve o chicken-and-egg do `require_admin`)
+- feat(console): editor e wizard com campos estruturados (system prompt + tone/language + JSON avançado) no lugar de JSON cru
+- fix(console): fim do erro silencioso no editor — falha de carregamento aparece no modal em vez de deixar campos vazios
+- feat(persona): `_render_persona` renderiza `description`/`system_prompt`/`instructions`/`behavior` como prosa (lossless)
+- docs: `SYMBIOTE_DB_PATH` e `SYMBIOTE_LOCAL_ADMIN` no QUICKSTART; seção de inspeção de Symbiote embarcado no HOST_INTEGRATION
+
 ## [v0.6.5] - 2026-05-29
 
 ### Novas funcionalidades
