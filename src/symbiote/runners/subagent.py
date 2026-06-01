@@ -102,7 +102,8 @@ class SubagentManager:
             params: {
                 "target_symbiote": str,
                 "task": str,
-                "effort": "normal" | "high"  (optional)
+                "effort": "normal" | "high"  (optional),
+                "extra_context": dict  (optional)
             }
 
         ``effort`` (when set) is forwarded to ``kernel.message`` as
@@ -111,12 +112,23 @@ class SubagentManager:
         budget. The default omits ``llm_config`` entirely (sub-session
         uses the target Symbiota's adapter default).
 
+        ``extra_context`` (when set) is forwarded to ``kernel.message`` and
+        rendered by the ChatRunner under the sub-session's ``## Context``
+        block — the same per-turn channel the parent session uses for
+        volatile facts (OS, paths, environment). It is deliberately **not**
+        part of ``SPAWN_DESCRIPTOR.parameters``: the calling LLM must not
+        author it. It is a host-injection channel — the embedding app wires
+        it in (e.g. by wrapping this handler) to pass deterministic,
+        code-derived facts to a delegated Symbiota. Default ``None`` keeps
+        the legacy behaviour, so older callers are unaffected.
+
         Returns:
             Dict with spawn result details.
         """
         target_name = params.get("target_symbiote", "")
         task = params.get("task", "")
         effort = params.get("effort")
+        extra_context = params.get("extra_context")
 
         # Recursion guard
         if self._depth >= self.MAX_DEPTH:
@@ -157,6 +169,20 @@ class SubagentManager:
                 ),
             ).model_dump()
 
+        # Validate extra_context shape before creating the session, for the
+        # same reason as effort: surface a structured error rather than let a
+        # bad type propagate into kernel.message.
+        if extra_context is not None and not isinstance(extra_context, dict):
+            return SpawnResult(
+                success=False,
+                target_symbiote=target_name,
+                task=task,
+                error=(
+                    f"invalid extra_context: expected a dict or omit, "
+                    f"got {type(extra_context).__name__}"
+                ),
+            ).model_dump()
+
         # Resolve target Symbiota
         target = self._resolve_symbiote(target_name)
         if target is None:
@@ -184,10 +210,13 @@ class SubagentManager:
             if effort is not None:
                 llm_config = {"mode": effort}
 
-            # Run the task
+            # Run the task. extra_context (when provided by the host) is
+            # rendered under the sub-session's ## Context block, fresh for
+            # this delegated turn.
             response = self._kernel.message(
                 session_id=session.id,
                 content=task,
+                extra_context=extra_context,
                 llm_config=llm_config,
             )
 

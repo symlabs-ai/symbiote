@@ -171,6 +171,27 @@ response = kernel.message(
 
 The extra_context is available in `AssembledContext.extra_context` and included in the ChatRunner's system prompt.
 
+### Injecting context into delegated (spawned) sub-sessions
+
+The `spawn` tool (`SubagentManager`) also accepts `extra_context`, forwarded to
+the delegated Symbiota's `kernel.message` and rendered in its own `## Context`
+block. This lets a host pass deterministic, code-derived facts (OS, paths,
+platform hints) to a sub-agent through the same per-turn channel — instead of
+baking them into the sub-agent's persona.
+
+```python
+mgr.spawn({
+    "target_symbiote": "install_agent",
+    "task": "Install ripgrep",
+    "extra_context": {"host_environment": "OS=Linux; pkg=apt"},
+})
+```
+
+`extra_context` is intentionally **not** part of `SPAWN_DESCRIPTOR.parameters`,
+so the calling LLM never authors it — it is a host-injection channel. The host
+wires it in (e.g. by wrapping the spawn handler) based on the target. Omitting
+it preserves the legacy behaviour (`None`).
+
 ---
 
 ## Streaming

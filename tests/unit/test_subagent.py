@@ -275,3 +275,87 @@ class TestSpawnEffort:
         assert result["success"] is False
         assert "effort" in result["error"].lower()
         assert "ultra" in result["error"]
+
+
+class TestSpawnExtraContext:
+    """extra_context is a host-injection channel forwarded to kernel.message."""
+
+    def test_extra_context_forwarded_to_message(
+        self, kernel: SymbioteKernel, monkeypatch
+    ) -> None:
+        kernel.create_symbiote(name="CtxBot", role="assistant")
+        mgr = SubagentManager(kernel)
+
+        captured: dict = {}
+        original_message = kernel.message
+
+        def spy_message(*args, **kwargs):
+            captured["extra_context"] = kwargs.get("extra_context")
+            return original_message(*args, **kwargs)
+
+        monkeypatch.setattr(kernel, "message", spy_message)
+
+        ctx = {"host_environment": "OS=Linux; shell=bash"}
+        result = mgr.spawn({
+            "target_symbiote": "CtxBot",
+            "task": "Install ripgrep",
+            "extra_context": ctx,
+        })
+
+        assert result["success"] is True
+        assert captured["extra_context"] == ctx
+
+    def test_extra_context_rendered_in_subsession_prompt(self, tmp_path: Path) -> None:
+        # End-to-end: the injected context reaches the sub-session's system prompt.
+        llm = MockLLM()
+        k = SymbioteKernel(KernelConfig(db_path=tmp_path / "ctx_e2e.db"), llm=llm)
+        try:
+            k.create_symbiote(name="CtxBot", role="assistant")
+            mgr = SubagentManager(k)
+            result = mgr.spawn({
+                "target_symbiote": "CtxBot",
+                "task": "do it",
+                "extra_context": {"host_environment": "OS=Linux distro=pop"},
+            })
+            assert result["success"] is True
+            system_msg = llm.calls[-1][0]
+            assert system_msg["role"] == "system"
+            assert "host_environment" in system_msg["content"]
+            assert "OS=Linux distro=pop" in system_msg["content"]
+        finally:
+            k.shutdown()
+
+    def test_without_extra_context_passes_none(
+        self, kernel: SymbioteKernel, monkeypatch
+    ) -> None:
+        kernel.create_symbiote(name="CtxBot", role="assistant")
+        mgr = SubagentManager(kernel)
+
+        captured: dict = {}
+        original_message = kernel.message
+
+        def spy_message(*args, **kwargs):
+            captured["extra_context"] = kwargs.get("extra_context")
+            return original_message(*args, **kwargs)
+
+        monkeypatch.setattr(kernel, "message", spy_message)
+
+        result = mgr.spawn({"target_symbiote": "CtxBot", "task": "x"})
+        assert result["success"] is True
+        assert captured["extra_context"] is None
+
+    def test_invalid_extra_context_rejected(self, kernel: SymbioteKernel) -> None:
+        kernel.create_symbiote(name="CtxBot", role="assistant")
+        mgr = SubagentManager(kernel)
+        result = mgr.spawn({
+            "target_symbiote": "CtxBot",
+            "task": "x",
+            "extra_context": "not a dict",
+        })
+        assert result["success"] is False
+        assert "extra_context" in result["error"]
+
+    def test_extra_context_not_in_descriptor_schema(self) -> None:
+        # The LLM must not be prompted to author it.
+        props = SPAWN_DESCRIPTOR.parameters.get("properties", {})
+        assert "extra_context" not in props
