@@ -7,12 +7,73 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import symbiote.api.http as http_mod
 from symbiote.adapters.storage.sqlite import SQLiteAdapter
-from symbiote.api.http import app, get_adapter
+from symbiote.api.auth import APIKeyManager
+from symbiote.api.http import _ensure_local_admin_key, _resolve_config, app, get_adapter
 from symbiote.core.identity import IdentityManager
 from symbiote.core.models import MemoryEntry
 from symbiote.core.session import SessionManager
 from symbiote.memory.store import MemoryStore
+
+
+class TestLocalAdminMode:
+    """SYMBIOTE_LOCAL_ADMIN auto-provisions an admin key for the Console."""
+
+    @pytest.fixture()
+    def key_manager(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> APIKeyManager:
+        # Always start from a clean module global.
+        monkeypatch.setattr(http_mod, "_local_admin_key", None)
+        adp = SQLiteAdapter(db_path=tmp_path / "admin.db", check_same_thread=False)
+        adp.init_schema()
+        mgr = APIKeyManager(adp)
+        mgr.init_schema()
+        yield mgr
+        adp.close()
+
+    def test_no_provision_without_flag(
+        self, key_manager: APIKeyManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("SYMBIOTE_LOCAL_ADMIN", raising=False)
+        _ensure_local_admin_key(key_manager)
+        assert http_mod._local_admin_key is None
+        assert key_manager.list_keys("default") == []
+
+    def test_provisions_admin_key_with_flag(
+        self, key_manager: APIKeyManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SYMBIOTE_LOCAL_ADMIN", "1")
+        _ensure_local_admin_key(key_manager)
+        raw = http_mod._local_admin_key
+        assert raw and raw.startswith("sk-symbiote_")
+        keys = key_manager.list_keys("default")
+        assert len(keys) == 1
+        assert keys[0].role == "admin"
+        assert keys[0].name == "local-console"
+        # the injected raw key actually validates as admin
+        validated = key_manager.validate_key(raw)
+        assert validated is not None
+        assert validated.role == "admin"
+
+    def test_revokes_stale_local_console_keys(
+        self, key_manager: APIKeyManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SYMBIOTE_LOCAL_ADMIN", "1")
+        stale, _ = key_manager.create_key("default", "local-console", role="admin")
+        _ensure_local_admin_key(key_manager)
+        active = [k for k in key_manager.list_keys("default") if k.is_active]
+        assert len(active) == 1
+        assert active[0].id != stale.id
+
+
+class TestResolveConfig:
+    def test_defaults_when_env_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("SYMBIOTE_DB_PATH", raising=False)
+        assert _resolve_config().db_path == Path(".symbiote/symbiote.db")
+
+    def test_db_path_overridden_by_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SYMBIOTE_DB_PATH", "/tmp/embedded/symbiote.db")
+        assert _resolve_config().db_path == Path("/tmp/embedded/symbiote.db")
 
 
 @pytest.fixture()
@@ -295,3 +356,28 @@ class TestMemorySearch:
         )
         assert resp.status_code == 200
         assert len(resp.json()) == 2
+
+
+class TestPersonaRoundTrip:
+    """persona_json composed by the Console editor round-trips through the API."""
+
+    def test_create_get_update_persona(self, client: TestClient) -> None:
+        persona = {"system_prompt": "You are Atlas.", "tone": "professional"}
+        created = client.post(
+            "/symbiotes", json={"name": "Atlas", "role": "assistant", "persona_json": persona}
+        )
+        assert created.status_code == 201
+        sid = created.json()["id"]
+
+        got = client.get(f"/symbiotes/{sid}")
+        assert got.status_code == 200
+        assert got.json()["persona_json"] == persona
+
+        # Edit the system prompt (what the structured editor does) and persist.
+        updated = {"system_prompt": "You are Atlas v2.", "tone": "professional"}
+        put = client.put(
+            f"/symbiotes/{sid}",
+            json={"name": "Atlas", "role": "assistant", "persona_json": updated},
+        )
+        assert put.status_code == 200
+        assert client.get(f"/symbiotes/{sid}").json()["persona_json"] == updated

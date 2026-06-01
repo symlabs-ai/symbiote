@@ -6,6 +6,7 @@ import collections
 import logging
 import os
 import time as _time
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -318,6 +319,36 @@ _adapter: SQLiteAdapter | None = None
 _tool_gateway: ToolGateway | None = None
 _kernel: SymbioteKernel | None = None
 _key_manager: APIKeyManager | None = None
+_local_admin_key: str | None = None
+
+
+def _ensure_local_admin_key(key_manager: APIKeyManager) -> None:
+    """Provision a local admin API key when ``SYMBIOTE_LOCAL_ADMIN=1``.
+
+    Against a fresh/embedded database there are no API keys, and creating the
+    first one requires admin auth — a chicken-and-egg that locks the admin
+    Console out of every authenticated endpoint. With the flag enabled we mint
+    a real admin key (revoking any previous ``local-console`` key so they don't
+    accumulate across restarts) and stash the raw value so ``dashboard_page()``
+    can hand it to the Console. Auth stays ON: the key is real and auditable in
+    ``api_keys``; it is merely auto-resolved for local use.
+
+    Intended for a Console bound to ``127.0.0.1`` — the raw key is embedded in
+    the served HTML. Off by default, so production auth is unchanged.
+    """
+    global _local_admin_key
+    if os.environ.get("SYMBIOTE_LOCAL_ADMIN") != "1":
+        return
+    if _local_admin_key is not None:
+        return
+    # Revoke stale local-console keys so restarts don't pile them up.
+    for existing in key_manager.list_keys("default"):
+        if existing.name == "local-console" and existing.is_active:
+            key_manager.revoke_key(existing.id)
+    _, raw_key = key_manager.create_key(
+        tenant_id="default", name="local-console", role="admin"
+    )
+    _local_admin_key = raw_key
 
 
 def _resolve_llm() -> LLMPort | None:
@@ -331,11 +362,28 @@ def _resolve_llm() -> LLMPort | None:
     return ForgeLLMAdapter(provider=provider, model=model)
 
 
+def _resolve_config() -> KernelConfig:
+    """Build the kernel config from env.
+
+    ``SYMBIOTE_DB_PATH`` overrides the default ``db_path``, letting the
+    server (and its admin Console at ``/``) open the SQLite file of *any*
+    Symbiote instance — e.g. one embedded in a host app like SymTalk —
+    without having to run the server from that app's working directory.
+
+    Both ``get_adapter()`` and ``get_kernel()`` route through here so they
+    always open the *same* file.
+    """
+    db_path = os.environ.get("SYMBIOTE_DB_PATH")
+    if db_path:
+        return KernelConfig(db_path=Path(db_path))
+    return KernelConfig()
+
+
 def get_adapter() -> SQLiteAdapter:
     """Return the singleton SQLiteAdapter, creating it on first call."""
     global _adapter
     if _adapter is None:
-        config = KernelConfig()
+        config = _resolve_config()
         _adapter = SQLiteAdapter(db_path=config.db_path, check_same_thread=False)
         _adapter.init_schema()
 
@@ -344,6 +392,7 @@ def get_adapter() -> SQLiteAdapter:
         _key_manager = APIKeyManager(_adapter)
         _key_manager.init_schema()
         set_key_manager(_key_manager)
+        _ensure_local_admin_key(_key_manager)
 
     return _adapter
 
@@ -352,7 +401,7 @@ def get_kernel() -> SymbioteKernel:
     """Return the singleton SymbioteKernel with LLM."""
     global _kernel
     if _kernel is None:
-        config = KernelConfig()
+        config = _resolve_config()
         llm = _resolve_llm()
         _kernel = SymbioteKernel(config=config, llm=llm)
 
@@ -361,6 +410,7 @@ def get_kernel() -> SymbioteKernel:
         _key_manager = APIKeyManager(_kernel._storage)
         _key_manager.init_schema()
         set_key_manager(_key_manager)
+        _ensure_local_admin_key(_key_manager)
 
     return _kernel
 
@@ -1347,8 +1397,21 @@ def dashboard_data(
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard_page() -> HTMLResponse:
-    """Serve the admin dashboard UI."""
+    """Serve the admin dashboard UI.
+
+    In local admin mode the auto-provisioned admin key is injected as
+    ``window.__SYMBIOTE_KEY__`` so the Console authenticates without the
+    operator having to mint and paste a key by hand.
+    """
     import importlib.resources
+    import json as _json
+
+    # Trigger key-manager init (and local-admin provisioning) if not yet done.
+    get_adapter()
 
     html_path = importlib.resources.files("symbiote.api") / "dashboard.html"
-    return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+    html = html_path.read_text(encoding="utf-8")
+    if _local_admin_key:
+        inject = f"<script>window.__SYMBIOTE_KEY__ = {_json.dumps(_local_admin_key)};</script>"
+        html = html.replace("<head>", f"<head>\n{inject}", 1)
+    return HTMLResponse(content=html)

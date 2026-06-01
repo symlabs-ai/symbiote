@@ -1282,14 +1282,21 @@ class ChatRunner:
 
         return "\n\n".join(parts)
 
+    # Free-text persona fields rendered as prose (the system prompt itself).
+    # ``description``/``system_prompt``/``instructions`` are the canonical
+    # prompt fields the admin Console edits; ``behavior`` is the legacy name.
+    _PERSONA_PROSE_KEYS = ("description", "system_prompt", "instructions", "behavior")
+
     @staticmethod
     def _render_persona(persona: dict) -> str:
         """Render persona dict as natural-language instructions.
 
-        Recognised keys are rendered as structured text; any remaining
-        keys are appended as a compact JSON block so nothing is lost.
+        Recognised keys are rendered as structured text; the free-text prompt
+        fields are rendered as prose; any remaining keys are appended as a
+        compact JSON block so nothing is lost.
         """
-        known_keys = {"role", "tone", "language", "behavior"}
+        prose_keys = ChatRunner._PERSONA_PROSE_KEYS
+        known_keys = {"role", "tone", "language", *prose_keys}
         lines: list[str] = []
 
         if role := persona.get("role"):
@@ -1298,11 +1305,20 @@ class ChatRunner:
             lines.append(f"Tone: {tone}")
         if lang := persona.get("language"):
             lines.append(f"Language: {lang}")
-        if behavior := persona.get("behavior"):
-            lines.append(f"\n{behavior}")
+        # Render each free-text prompt field as prose (lossless: all present
+        # ones are emitted, not just the first).
+        for key in prose_keys:
+            val = persona.get(key)
+            if isinstance(val, str) and val:
+                lines.append(f"\n{val}")
 
-        # Render any extra keys the host added (custom fields)
-        extra = {k: v for k, v in persona.items() if k not in known_keys}
+        # Render any extra keys the host added (custom fields), plus any
+        # prose-key whose value isn't a plain string (kept in JSON, lossless).
+        extra = {
+            k: v
+            for k, v in persona.items()
+            if k not in known_keys or (k in prose_keys and not isinstance(v, str))
+        }
         if extra:
             lines.append(json.dumps(extra, indent=2, default=str, ensure_ascii=False))
 

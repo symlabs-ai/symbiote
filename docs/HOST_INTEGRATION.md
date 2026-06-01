@@ -500,3 +500,74 @@ def weekly_tuning():
 # 8. Shutdown
 kernel.shutdown()
 ```
+
+---
+
+## Inspecting & Administering an Embedded Symbiote
+
+When the kernel runs **embedded** in your host app (e.g. SymTalk drops a
+`SymbioteKernel` into its own process), there is no Symbiote server — but there
+is no separate datastore either. **All state lives in a single SQLite file**:
+symbiotes, sessions, messages, memory, workspaces, discovered tools, audit log.
+By default that file is `.symbiote/symbiote.db` relative to the host process's
+working directory, unless the host passes a custom `db_path`:
+
+```python
+kernel = SymbioteKernel(config=KernelConfig(db_path="data/symbiote.db"), llm=...)
+```
+
+To find an embedded database on disk: `find ~ -name "symbiote.db"`.
+
+You can inspect or administer that database **without modifying the host app** —
+just open the same file with one of these tools:
+
+### Option A — Symbiote Console (visual admin UI)
+
+The standalone server (`symbiote.api.http:app`) is just another reader of the
+same SQLite file, and it serves the admin **Console** at `/`. Point it at the
+embedded database with `SYMBIOTE_DB_PATH` and open it in a browser:
+
+```bash
+SYMBIOTE_DB_PATH=/path/to/host-app/.symbiote/symbiote.db \
+SYMBIOTE_LOCAL_ADMIN=1 \
+  uvicorn symbiote.api.http:app --host 127.0.0.1 --port 8008
+# → open http://127.0.0.1:8008/
+```
+
+`SYMBIOTE_LOCAL_ADMIN=1` auto-provisions an admin key and injects it into the
+Console — required for the detail/edit endpoints (e.g. opening a symbiote's
+persona), which are auth-gated. Without it, an embedded DB has no API keys and
+the editor cannot load (it surfaces an auth error instead of the persona). Only
+use it on a Console bound to `127.0.0.1`.
+
+The Console lists symbiotes, browses sessions/traces, **registers** symbiotes
+(identity + persona + tools wizard), **edits** per-symbiote config, approves
+discovered tools, and shows logs. `SYMBIOTE_DB_PATH` is read once by both
+`get_adapter()` and `get_kernel()` in `api/http.py`, so the REST API and the
+Console always open the same file.
+
+### Option B — CLI
+
+The CLI accepts a global `--db-path` flag (before the subcommand):
+
+```bash
+symbiote --db-path /path/to/host-app/.symbiote/symbiote.db list
+symbiote --db-path /path/to/host-app/.symbiote/symbiote.db show <SYMBIOTE_ID>
+symbiote --db-path /path/to/host-app/.symbiote/symbiote.db memory search "..."
+symbiote --db-path /path/to/host-app/.symbiote/symbiote.db export session <SESSION_ID>
+```
+
+### Option C — raw SQLite
+
+```bash
+sqlite3 /path/to/host-app/.symbiote/symbiote.db ".tables"
+```
+
+### ⚠️ Concurrency caveat
+
+SQLite is a single-file store. Opening the database from the server/CLI while
+the host app is also writing to it is safe **for reads/inspection**, but
+concurrent writes from two processes can hit `database is locked` errors. For
+write operations (registering symbiotes, editing config), prefer doing them
+while the host app is idle, or point the host app and the server at the same
+file deliberately and accept the locking semantics.

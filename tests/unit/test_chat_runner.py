@@ -451,3 +451,43 @@ class TestLLMConfigOverride:
         # context.generation_settings stays intact
         assert ctx.generation_settings == {"mode": "normal"}
         assert original_settings == {"mode": "normal"}
+
+
+class TestRenderPersona:
+    """_render_persona renders the canonical prose prompt fields as text."""
+
+    def test_system_prompt_rendered_as_prose(self) -> None:
+        out = ChatRunner._render_persona({"system_prompt": "You are Jitto, an OS agent."})
+        assert "You are Jitto, an OS agent." in out
+        # rendered as prose, not a JSON dump
+        assert '"system_prompt"' not in out
+
+    def test_description_and_instructions_both_rendered(self) -> None:
+        # SymTalk-style persona: both fields must survive (lossless).
+        out = ChatRunner._render_persona(
+            {"description": "Desktop assistant.", "instructions": "Never loop."}
+        )
+        assert "Desktop assistant." in out
+        assert "Never loop." in out
+        assert '"instructions"' not in out
+
+    def test_structured_keys_still_rendered(self) -> None:
+        out = ChatRunner._render_persona(
+            {"role": "analyst", "tone": "dry", "language": "pt-BR"}
+        )
+        assert "You are: analyst" in out
+        assert "Tone: dry" in out
+        assert "Language: pt-BR" in out
+
+    def test_unknown_keys_dumped_as_json(self) -> None:
+        out = ChatRunner._render_persona(
+            {"system_prompt": "Hi.", "custom_field": "x"}
+        )
+        assert "Hi." in out
+        assert "custom_field" in out  # preserved via JSON block
+
+    def test_non_string_prose_value_kept_in_json(self) -> None:
+        # A non-str value for a prose key must not be dropped.
+        out = ChatRunner._render_persona({"instructions": ["a", "b"]})
+        assert "instructions" in out
+        assert "a" in out and "b" in out

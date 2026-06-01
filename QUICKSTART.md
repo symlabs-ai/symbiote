@@ -70,6 +70,20 @@ curl -X POST http://localhost:8008/sessions/<SESSION_ID>/chat \
   -d '{"content": "Explain dataclasses"}'
 ```
 
+The server also serves the **Symbiote Console** — an admin dashboard — at `/`.
+Open `http://localhost:8008/` in a browser to list symbiotes, browse sessions
+and traces, register new symbiotes (identity + persona + tools wizard), edit
+per-symbiote config, approve discovered tools, and view logs.
+
+Server environment variables:
+
+| Variable | Purpose |
+|----------|---------|
+| `SYMBIOTE_DB_PATH` | Override the SQLite file the server opens (default `.symbiote/symbiote.db`). Point this at the database of an **embedded** Symbiote to inspect/manage it via the Console — see [Inspecting an embedded Symbiote](docs/HOST_INTEGRATION.md#inspecting--administering-an-embedded-symbiote). |
+| `SYMBIOTE_LOCAL_ADMIN` | Set to `1` for **local administration**: the server auto-provisions a real admin API key and hands it to the Console, so editing personas/config works without minting a key by hand. Auth stays on (the key is real and auditable); the raw key is embedded in the page, so use only on a Console bound to `127.0.0.1`. Off by default — production auth unchanged. |
+| `SYMBIOTE_LLM_PROVIDER` | LLM provider for the server's kernel (`mock`/unset = no LLM). |
+| `SYMBIOTE_LLM_MODEL` | Model id passed to the provider. |
+
 ### 3. CLI
 
 ```bash
