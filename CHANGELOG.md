@@ -5,6 +5,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.6.7] - 2026-06-01
+
+- feat(console): aba **Memory** — inspeção de memória, reflexões (fatos aprendidos) e atividade (tools executadas) por símbiota
+- feat(console): aba **Harness** — ver histórico de versões dos textos auto-evoluídos, editar (nova versão ativa) e rollback, com `avg_score`/contagem de sessões
+- feat(api): endpoints de leitura `/api/symbiotes/{id}/memory|reflections|activity` (sem auth) e de harness `GET/POST /symbiotes/{id}/harness[/{component}][/rollback]` (mutação via `require_admin`)
+- docs: QUICKSTART cita as novas abas do Console
+
 ## [v0.6.6] - 2026-06-01
 
 - feat(console): `SYMBIOTE_DB_PATH` permite o server abrir o SQLite de qualquer instância (inclusive embarcada) sem depender do cwd
