@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.6.8] - 2026-06-01
+
+- feat(spawn): `SubagentManager.spawn` aceita `extra_context` (dict|None) e o repassa a `kernel.message`, renderizado no bloco `## Context` da sub-sessão delegada
+- canal de injeção do host (fora do `SPAWN_DESCRIPTOR.parameters` — a LLM não autora); retrocompatível (omitir = `None`); validação de tipo com erro estruturado
+- docs: seção sobre injeção de contexto em sub-sessões no HOST_INTEGRATION.md
+
 ## [v0.6.7] - 2026-06-01
 
 - feat(console): aba **Memory** — inspeção de memória, reflexões (fatos aprendidos) e atividade (tools executadas) por símbiota
