@@ -32,6 +32,8 @@ from symbiote.environment.descriptors import HttpToolConfig, ToolDescriptor
 from symbiote.environment.manager import EnvironmentManager
 from symbiote.environment.policies import PolicyGate
 from symbiote.environment.tools import ToolGateway
+from symbiote.harness.evolver import EVOLVABLE_COMPONENTS
+from symbiote.harness.versions import HarnessVersionRepository
 from symbiote.memory.store import MemoryStore
 
 # ── In-memory log ring buffer ────────────────────────────────────────────
@@ -1340,6 +1342,141 @@ def api_symbiote_scores(
         (symbiote_id, limit),
     )
     return [dict(r) for r in rows]
+
+
+@app.get("/api/symbiotes/{symbiote_id}/memory")
+def api_symbiote_memory(
+    symbiote_id: str,
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[dict]:
+    """Get active memory entries for a symbiote (admin console — what it knows)."""
+    rows = adapter.fetch_all(
+        "SELECT id, session_id, type, scope, content, importance, source, "
+        "tags_json, created_at, last_used_at "
+        "FROM memory_entries WHERE symbiote_id = ? AND is_active = 1 "
+        "ORDER BY created_at DESC LIMIT ?",
+        (symbiote_id, limit),
+    )
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/symbiotes/{symbiote_id}/reflections")
+def api_symbiote_reflections(
+    symbiote_id: str,
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    limit: int = Query(default=20, ge=1, le=100),
+) -> list[dict]:
+    """Get reflection audit rows for a symbiote (admin console — what it learned)."""
+    rows = adapter.fetch_all(
+        "SELECT id, session_id, mode, keyword_facts_json, llm_facts_json, "
+        "llm_error, created_at "
+        "FROM reflection_audit WHERE symbiote_id = ? ORDER BY created_at DESC LIMIT ?",
+        (symbiote_id, limit),
+    )
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/symbiotes/{symbiote_id}/activity")
+def api_symbiote_activity(
+    symbiote_id: str,
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[dict]:
+    """Get tool-execution audit log for a symbiote (admin console — what it did)."""
+    rows = adapter.fetch_all(
+        "SELECT id, session_id, tool_id, action, params_json, result, created_at "
+        "FROM audit_log WHERE symbiote_id = ? ORDER BY created_at DESC LIMIT ?",
+        (symbiote_id, limit),
+    )
+    return [dict(r) for r in rows]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# HARNESS — Evolvable text versions (admin console, item 4)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def get_harness_repo(
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+) -> HarnessVersionRepository:
+    return HarnessVersionRepository(storage=adapter)
+
+
+class HarnessVersionBody(BaseModel):
+    """Body for creating a new harness text version (manual edit)."""
+
+    content: str
+
+
+@app.get("/api/symbiotes/{symbiote_id}/harness")
+def api_symbiote_harness(
+    symbiote_id: str,
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    repo: Annotated[HarnessVersionRepository, Depends(get_harness_repo)],
+) -> list[dict]:
+    """List harness components for a symbiote with their active version.
+
+    Returns one row per component that has versions, plus the base
+    ``EVOLVABLE_COMPONENTS`` (even without versions) so the UI can offer them.
+    """
+    present = adapter.fetch_all(
+        "SELECT DISTINCT component FROM harness_versions WHERE symbiote_id = ?",
+        (symbiote_id,),
+    )
+    components = {r["component"] for r in present} | set(EVOLVABLE_COMPONENTS)
+    out: list[dict] = []
+    for component in sorted(components):
+        active = repo.get_active_version(symbiote_id, component)
+        out.append(
+            {
+                "component": component,
+                "active_version": active["version"] if active else None,
+                "avg_score": active["avg_score"] if active else None,
+                "session_count": active["session_count"] if active else None,
+                "has_versions": active is not None,
+            }
+        )
+    return out
+
+
+@app.get("/api/symbiotes/{symbiote_id}/harness/{component}")
+def api_symbiote_harness_versions(
+    symbiote_id: str,
+    component: str,
+    repo: Annotated[HarnessVersionRepository, Depends(get_harness_repo)],
+    limit: int = Query(default=20, ge=1, le=100),
+) -> list[dict]:
+    """Version history for a harness component, most recent first."""
+    return [dict(r) for r in repo.list_versions(symbiote_id, component, limit=limit)]
+
+
+@app.post("/symbiotes/{symbiote_id}/harness/{component}", status_code=201)
+def create_harness_version(
+    symbiote_id: str,
+    component: str,
+    body: HarnessVersionBody,
+    auth: Annotated[APIKey, Depends(require_admin)],
+    repo: Annotated[HarnessVersionRepository, Depends(get_harness_repo)],
+) -> dict:
+    """Create a new (active) harness text version from a manual edit."""
+    version = repo.create_version(symbiote_id, component, body.content)
+    return {"symbiote_id": symbiote_id, "component": component, "version": version}
+
+
+@app.post("/symbiotes/{symbiote_id}/harness/{component}/rollback")
+def rollback_harness_version(
+    symbiote_id: str,
+    component: str,
+    auth: Annotated[APIKey, Depends(require_admin)],
+    repo: Annotated[HarnessVersionRepository, Depends(get_harness_repo)],
+) -> dict:
+    """Reactivate the previous version of a harness component."""
+    ok = repo.rollback(symbiote_id, component)
+    if not ok:
+        raise HTTPException(status_code=404, detail="No previous version to roll back to")
+    active = repo.get_active_version(symbiote_id, component)
+    return {"rolled_back": True, "active_version": active["version"] if active else None}
 
 
 # ══════════════════════════════════════════════════════════════════════════

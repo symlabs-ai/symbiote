@@ -102,6 +102,8 @@ input, select, textarea { font-family: 'JetBrains Mono', monospace; }
   <a href="#chat" class="tab-link px-4 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 border-transparent hover:text-text-bright hover:bg-bg-hover transition-colors" data-tab="chat">Chat</a>
   <a href="#tools" class="tab-link px-4 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 border-transparent hover:text-text-bright hover:bg-bg-hover transition-colors" data-tab="tools">Tools</a>
   <a href="#config" class="tab-link px-4 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 border-transparent hover:text-text-bright hover:bg-bg-hover transition-colors" data-tab="config">Config</a>
+  <a href="#memory" class="tab-link px-4 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 border-transparent hover:text-text-bright hover:bg-bg-hover transition-colors" data-tab="memory">Memory</a>
+  <a href="#harness" class="tab-link px-4 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 border-transparent hover:text-text-bright hover:bg-bg-hover transition-colors" data-tab="harness">Harness</a>
   <a href="#api-keys" class="tab-link px-4 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 border-transparent hover:text-text-bright hover:bg-bg-hover transition-colors" data-tab="api-keys">API Keys</a>
   <a href="#logs" class="tab-link px-4 py-2.5 text-[11px] uppercase tracking-wider font-medium border-b-2 border-transparent hover:text-text-bright hover:bg-bg-hover transition-colors" data-tab="logs">Logs</a>
 </nav>
@@ -231,6 +233,36 @@ input, select, textarea { font-family: 'JetBrains Mono', monospace; }
     <div id="config-form" class="p-6">
       <div class="text-center text-text-dim text-xs py-10">Select a symbiote to configure.</div>
     </div>
+  </div>
+
+  <!-- ──── MEMORY TAB ──── -->
+  <div id="tab-memory" class="tab-panel hidden">
+    <div class="px-6 py-4 border-b border-border bg-bg-card flex items-center gap-3 flex-wrap">
+      <span class="font-sans text-sm font-semibold text-text-bright">Memory &amp; Activity</span>
+      <select id="memory-symbiote" onchange="loadMemoryTab()" class="bg-bg border border-border rounded px-2 py-1 text-[11px] text-text focus:border-accent focus:outline-none w-48">
+        <option value="">Select symbiote...</option>
+      </select>
+      <div class="flex gap-1 ml-2">
+        <button id="mtab-memory" onclick="switchMemoryView('memory')" class="px-3 py-1 text-[11px] uppercase tracking-wider rounded border border-accent text-accent">Memória</button>
+        <button id="mtab-reflections" onclick="switchMemoryView('reflections')" class="px-3 py-1 text-[11px] uppercase tracking-wider rounded border border-border text-text-dim hover:text-text-bright">Reflexões</button>
+        <button id="mtab-activity" onclick="switchMemoryView('activity')" class="px-3 py-1 text-[11px] uppercase tracking-wider rounded border border-border text-text-dim hover:text-text-bright">Atividade</button>
+      </div>
+    </div>
+    <div id="memory-content" class="p-6 overflow-x-auto"><div class="py-10 text-center text-text-dim text-xs">Selecione um símbiota.</div></div>
+  </div>
+
+  <!-- ──── HARNESS TAB ──── -->
+  <div id="tab-harness" class="tab-panel hidden">
+    <div class="px-6 py-4 border-b border-border bg-bg-card flex items-center gap-3 flex-wrap">
+      <span class="font-sans text-sm font-semibold text-text-bright">Harness</span>
+      <select id="harness-symbiote" onchange="loadHarnessComponents()" class="bg-bg border border-border rounded px-2 py-1 text-[11px] text-text focus:border-accent focus:outline-none w-48">
+        <option value="">Select symbiote...</option>
+      </select>
+      <select id="harness-component" onchange="loadHarnessVersions()" class="bg-bg border border-border rounded px-2 py-1 text-[11px] text-text focus:border-accent focus:outline-none w-64">
+        <option value="">Componente...</option>
+      </select>
+    </div>
+    <div id="harness-content" class="p-6 overflow-x-auto"><div class="py-10 text-center text-text-dim text-xs">Selecione um símbiota e um componente.</div></div>
   </div>
 
   <!-- ──── API KEYS TAB ──── -->
@@ -656,6 +688,8 @@ function navigate() {
     case 'chat': initChat(); break;
     case 'tools': loadTools(); state.refreshTimers.tools = setInterval(loadTools, 15000); break;
     case 'config': initConfig(); break;
+    case 'memory': initMemory(); break;
+    case 'harness': initHarness(); break;
     case 'api-keys': break;
     case 'logs': loadLogs(); toggleLogsAuto(); break;
   }
@@ -1253,7 +1287,7 @@ async function deleteSymbiote(symbioteId, name) {
 }
 
 function updateSymbioteSelects(symbiotes) {
-  const selects = ['sessions-filter-symbiote', 'chat-symbiote', 'config-symbiote', 'new-sess-symbiote', 'discover-symbiote'];
+  const selects = ['sessions-filter-symbiote', 'chat-symbiote', 'config-symbiote', 'new-sess-symbiote', 'discover-symbiote', 'memory-symbiote', 'harness-symbiote'];
   selects.forEach(id => {
     const el = $(id);
     if (!el) return;
@@ -1678,6 +1712,185 @@ async function initConfig() {
     state.symbiotes = syms;
     updateSymbioteSelects(syms);
   } catch {}
+}
+
+// ── Memory / Activity tab (item 3) ─────────────────────────────────────────
+const memoryState = { view: 'memory' };
+
+async function initMemory() {
+  try {
+    const syms = await fetch('/api/symbiotes').then(r => r.json());
+    state.symbiotes = syms;
+    updateSymbioteSelects(syms);
+  } catch {}
+  switchMemoryView(memoryState.view);
+}
+
+function switchMemoryView(view) {
+  memoryState.view = view;
+  for (const v of ['memory', 'reflections', 'activity']) {
+    const btn = $(`mtab-${v}`);
+    const on = v === view;
+    btn.className = `px-3 py-1 text-[11px] uppercase tracking-wider rounded border ${on ? 'border-accent text-accent' : 'border-border text-text-dim hover:text-text-bright'}`;
+  }
+  loadMemoryTab();
+}
+
+async function loadMemoryTab() {
+  const symId = $('memory-symbiote').value;
+  const box = $('memory-content');
+  if (!symId) { box.innerHTML = '<div class="py-10 text-center text-text-dim text-xs">Selecione um símbiota.</div>'; return; }
+  box.innerHTML = '<div class="py-10 text-center text-text-dim text-xs">Carregando…</div>';
+  try {
+    if (memoryState.view === 'memory') {
+      const rows = await fetch(`/api/symbiotes/${symId}/memory?limit=100`).then(r => r.json());
+      box.innerHTML = renderTable(
+        ['Tipo', 'Scope', 'Conteúdo', 'Imp.', 'Origem', 'Criado'],
+        rows.map(m => [
+          `<span class="text-blue">${esc(m.type)}</span>`,
+          `<span class="text-text-dim">${esc(m.scope)}</span>`,
+          `<span class="text-text-bright" title="${esc(m.content)}">${esc(truncate(m.content, 80))}</span>`,
+          (m.importance ?? '-'),
+          `<span class="text-text-dim">${esc(m.source || '-')}</span>`,
+          `<span class="text-text-dim">${fmtDate(m.created_at)}</span>`,
+        ]),
+        { empty: 'Sem memórias.' }
+      );
+    } else if (memoryState.view === 'reflections') {
+      const rows = await fetch(`/api/symbiotes/${symId}/reflections?limit=50`).then(r => r.json());
+      box.innerHTML = renderTable(
+        ['Modo', 'Fatos (keyword)', 'Fatos (LLM)', 'Erro', 'Criado'],
+        rows.map(r => {
+          const kw = jsonLen(r.keyword_facts_json), llm = jsonLen(r.llm_facts_json);
+          return [
+            `<span class="text-purple">${esc(r.mode)}</span>`,
+            `<span class="text-text-bright" title="${esc(r.keyword_facts_json)}">${kw} fato(s)</span>`,
+            `<span class="text-text-bright" title="${esc(r.llm_facts_json)}">${llm} fato(s)</span>`,
+            r.llm_error ? `<span class="text-red" title="${esc(r.llm_error)}">erro</span>` : '<span class="text-text-dim">-</span>',
+            `<span class="text-text-dim">${fmtDate(r.created_at)}</span>`,
+          ];
+        }),
+        { empty: 'Sem reflexões.' }
+      );
+    } else {
+      const rows = await fetch(`/api/symbiotes/${symId}/activity?limit=100`).then(r => r.json());
+      box.innerHTML = renderTable(
+        ['Tool', 'Ação', 'Resultado', 'Criado'],
+        rows.map(a => [
+          `<span class="text-blue">${esc(a.tool_id)}</span>`,
+          `<span class="text-text-bright">${esc(a.action)}</span>`,
+          `<span class="text-text-dim" title="${esc(a.result)}">${esc(truncate(a.result, 60))}</span>`,
+          `<span class="text-text-dim">${fmtDate(a.created_at)}</span>`,
+        ]),
+        { empty: 'Sem atividade.' }
+      );
+    }
+  } catch (e) {
+    box.innerHTML = `<div class="py-10 text-center text-red text-xs">Erro: ${esc(e.message)}</div>`;
+  }
+}
+
+function jsonLen(s) {
+  try { const v = JSON.parse(s || '[]'); return Array.isArray(v) ? v.length : 0; } catch { return 0; }
+}
+
+// ── Harness tab (item 4) ────────────────────────────────────────────────────
+async function initHarness() {
+  try {
+    const syms = await fetch('/api/symbiotes').then(r => r.json());
+    state.symbiotes = syms;
+    updateSymbioteSelects(syms);
+  } catch {}
+  $('harness-component').innerHTML = '<option value="">Componente...</option>';
+  $('harness-content').innerHTML = '<div class="py-10 text-center text-text-dim text-xs">Selecione um símbiota e um componente.</div>';
+}
+
+async function loadHarnessComponents() {
+  const symId = $('harness-symbiote').value;
+  const sel = $('harness-component');
+  sel.innerHTML = '<option value="">Componente...</option>';
+  $('harness-content').innerHTML = '<div class="py-10 text-center text-text-dim text-xs">Selecione um componente.</div>';
+  if (!symId) return;
+  try {
+    const comps = await fetch(`/api/symbiotes/${symId}/harness`).then(r => r.json());
+    comps.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.component;
+      const tag = c.has_versions ? `v${c.active_version} · score ${c.avg_score ?? 0}` : 'sem versões';
+      opt.textContent = `${c.component} (${tag})`;
+      sel.appendChild(opt);
+    });
+  } catch (e) {
+    $('harness-content').innerHTML = `<div class="py-10 text-center text-red text-xs">Erro: ${esc(e.message)}</div>`;
+  }
+}
+
+async function loadHarnessVersions() {
+  const symId = $('harness-symbiote').value;
+  const component = $('harness-component').value;
+  const box = $('harness-content');
+  if (!symId || !component) { box.innerHTML = '<div class="py-10 text-center text-text-dim text-xs">Selecione um componente.</div>'; return; }
+  box.innerHTML = '<div class="py-10 text-center text-text-dim text-xs">Carregando…</div>';
+  try {
+    const versions = await fetch(`/api/symbiotes/${symId}/harness/${encodeURIComponent(component)}`).then(r => r.json());
+    const active = versions.find(v => v.is_active);
+    const activeContent = active ? active.content : '';
+    const editor = `
+      <div class="mb-5 space-y-2">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] uppercase tracking-wider text-text-dim">Versão ativa${active ? ` — v${active.version}` : ' — nenhuma'}</span>
+          <div class="flex gap-2">
+            <button onclick="saveHarnessVersion()" class="bg-accent text-bg text-[11px] font-semibold px-3 py-1.5 rounded hover:opacity-90">Salvar nova versão</button>
+            <button onclick="rollbackHarness()" class="text-amber text-[11px] font-semibold px-3 py-1.5 rounded border border-amber/40 hover:bg-amber/10">Rollback</button>
+          </div>
+        </div>
+        <textarea id="harness-editor" rows="8" class="w-full bg-bg border border-border rounded px-3 py-2 text-[11px] text-text-bright focus:border-accent focus:outline-none font-mono">${esc(activeContent)}</textarea>
+      </div>`;
+    const history = renderTable(
+      ['Versão', 'Ativa', 'Avg score', 'Sessões', 'Criado', 'Conteúdo'],
+      versions.map(v => [
+        `v${v.version}`,
+        v.is_active ? '<span class="text-accent">●</span>' : '<span class="text-text-dim">○</span>',
+        (v.avg_score ?? 0),
+        (v.session_count ?? 0),
+        `<span class="text-text-dim">${fmtDate(v.created_at)}</span>`,
+        `<span class="text-text-dim" title="${esc(v.content)}">${esc(truncate(v.content, 70))}</span>`,
+      ]),
+      { empty: 'Sem versões — salve uma para começar a versionar este componente.' }
+    );
+    box.innerHTML = editor + history;
+  } catch (e) {
+    box.innerHTML = `<div class="py-10 text-center text-red text-xs">Erro: ${esc(e.message)}</div>`;
+  }
+}
+
+async function saveHarnessVersion() {
+  const symId = $('harness-symbiote').value;
+  const component = $('harness-component').value;
+  const content = $('harness-editor').value;
+  if (!symId || !component) return;
+  if (!content.trim()) { toast('Conteúdo vazio', 'warn'); return; }
+  try {
+    await api('POST', `/symbiotes/${symId}/harness/${encodeURIComponent(component)}`, { content });
+    toast('Nova versão salva (ativa)', 'success');
+    await loadHarnessComponents();
+    $('harness-component').value = component;
+    loadHarnessVersions();
+  } catch (e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function rollbackHarness() {
+  const symId = $('harness-symbiote').value;
+  const component = $('harness-component').value;
+  if (!symId || !component) return;
+  if (!await confirmDialog(`Reverter "${component}" para a versão anterior?`)) return;
+  try {
+    await api('POST', `/symbiotes/${symId}/harness/${encodeURIComponent(component)}/rollback`);
+    toast('Rollback aplicado', 'success');
+    await loadHarnessComponents();
+    $('harness-component').value = component;
+    loadHarnessVersions();
+  } catch (e) { toast('Erro: ' + e.message, 'error'); }
 }
 
 async function loadConfig() {

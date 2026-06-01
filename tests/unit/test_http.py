@@ -381,3 +381,99 @@ class TestPersonaRoundTrip:
         )
         assert put.status_code == 200
         assert client.get(f"/symbiotes/{sid}").json()["persona_json"] == updated
+
+
+class TestDebugEndpoints:
+    """Read endpoints feeding the Memory/Activity console tab (item 3)."""
+
+    @staticmethod
+    def _seed_symbiote(adapter: SQLiteAdapter, sid: str) -> None:
+        adapter.execute(
+            "INSERT INTO symbiotes (id, name, role, status) VALUES (?, ?, ?, ?)",
+            (sid, "Dbg", "assistant", "active"),
+        )
+
+    def test_memory_endpoint(self, client: TestClient, adapter: SQLiteAdapter) -> None:
+        sid = "sym-dbg-mem"
+        self._seed_symbiote(adapter, sid)
+        adapter.execute(
+            "INSERT INTO memory_entries (id, symbiote_id, type, scope, content, "
+            "created_at, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)",
+            ("m1", sid, "preference", "long_term", "likes dark mode", "2026-01-01"),
+        )
+        # inactive row must be excluded
+        adapter.execute(
+            "INSERT INTO memory_entries (id, symbiote_id, type, scope, content, "
+            "created_at, is_active) VALUES (?, ?, ?, ?, ?, ?, 0)",
+            ("m2", sid, "factual", "long_term", "stale", "2026-01-02"),
+        )
+        resp = client.get(f"/api/symbiotes/{sid}/memory")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["content"] == "likes dark mode"
+
+    def test_reflections_endpoint(self, client: TestClient, adapter: SQLiteAdapter) -> None:
+        sid = "sym-dbg-ref"
+        adapter.execute(
+            "INSERT INTO reflection_audit (id, session_id, symbiote_id, mode, "
+            "keyword_facts_json, llm_facts_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("r1", "s1", sid, "full", '["a", "b"]', "[]", "2026-01-01"),
+        )
+        resp = client.get(f"/api/symbiotes/{sid}/reflections")
+        assert resp.status_code == 200
+        assert resp.json()[0]["mode"] == "full"
+
+    def test_activity_endpoint(self, client: TestClient, adapter: SQLiteAdapter) -> None:
+        sid = "sym-dbg-act"
+        self._seed_symbiote(adapter, sid)
+        adapter.execute(
+            "INSERT INTO audit_log (id, symbiote_id, session_id, tool_id, action, "
+            "result, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("a1", sid, "s1", "fs_read", "read", "ok", "2026-01-01"),
+        )
+        resp = client.get(f"/api/symbiotes/{sid}/activity")
+        assert resp.status_code == 200
+        assert resp.json()[0]["tool_id"] == "fs_read"
+
+
+class TestHarnessEndpoints:
+    """Harness version list/create/rollback feeding the Harness tab (item 4)."""
+
+    def test_create_list_summary_rollback(self, client: TestClient) -> None:
+        sid = "sym-harness"
+        comp = "tool_instructions"
+
+        r1 = client.post(f"/symbiotes/{sid}/harness/{comp}", json={"content": "v1 text"})
+        assert r1.status_code == 201
+        assert r1.json()["version"] == 1
+        r2 = client.post(f"/symbiotes/{sid}/harness/{comp}", json={"content": "v2 text"})
+        assert r2.json()["version"] == 2
+
+        versions = client.get(f"/api/symbiotes/{sid}/harness/{comp}").json()
+        assert len(versions) == 2
+        active = [v for v in versions if v["is_active"]]
+        assert len(active) == 1
+        assert active[0]["version"] == 2
+
+        summary = client.get(f"/api/symbiotes/{sid}/harness").json()
+        comp_row = next(c for c in summary if c["component"] == comp)
+        assert comp_row["active_version"] == 2
+        assert comp_row["has_versions"] is True
+
+        rb = client.post(f"/symbiotes/{sid}/harness/{comp}/rollback")
+        assert rb.status_code == 200
+        assert rb.json()["active_version"] == 1
+
+    def test_summary_lists_base_components_without_versions(self, client: TestClient) -> None:
+        sid = "sym-harness-empty"
+        summary = client.get(f"/api/symbiotes/{sid}/harness").json()
+        comps = {c["component"]: c for c in summary}
+        assert "tool_instructions" in comps
+        assert comps["tool_instructions"]["has_versions"] is False
+
+    def test_rollback_without_previous_returns_404(self, client: TestClient) -> None:
+        sid = "sym-harness-single"
+        client.post(f"/symbiotes/{sid}/harness/tool_instructions", json={"content": "only"})
+        rb = client.post(f"/symbiotes/{sid}/harness/tool_instructions/rollback")
+        assert rb.status_code == 404

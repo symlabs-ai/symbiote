@@ -73,7 +73,9 @@ curl -X POST http://localhost:8008/sessions/<SESSION_ID>/chat \
 The server also serves the **Symbiote Console** — an admin dashboard — at `/`.
 Open `http://localhost:8008/` in a browser to list symbiotes, browse sessions
 and traces, register new symbiotes (identity + persona + tools wizard), edit
-per-symbiote config, approve discovered tools, and view logs.
+per-symbiote config, inspect each symbiote's **memory, reflections and tool
+activity** (Memory tab), view/edit/rollback the self-evolving **harness text
+versions** (Harness tab), approve discovered tools, and view logs.
 
 Server environment variables:
 
