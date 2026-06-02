@@ -5,6 +5,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.6.9] - 2026-06-02
+
+- fix: `symbiote.__version__` deriva de `importlib.metadata.version("symbiote")` em vez de hardcode (estava defasado em `0.6.3`); nunca mais desatualiza a cada release
+
 ## [v0.6.8] - 2026-06-01
 
 - feat(spawn): `SubagentManager.spawn` aceita `extra_context` (dict|None) e o repassa a `kernel.message`, renderizado no bloco `## Context` da sub-sessão delegada

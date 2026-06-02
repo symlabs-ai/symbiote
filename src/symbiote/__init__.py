@@ -1,3 +1,8 @@
 """Symbiote — Kernel for persistent cognitive entities."""
 
-__version__ = "0.6.3"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("symbiote")
+except PackageNotFoundError:  # pragma: no cover — running from a source tree without install
+    __version__ = "0.0.0+unknown"
