@@ -284,6 +284,7 @@ class DiscoveredToolResponse(BaseModel):
     url_template: str | None = None
     parameters: dict = {}
     tags: list[str] = []
+    risk_level: str = "medium"
     status: str
     source_path: str | None = None
     discovered_at: str
@@ -943,6 +944,7 @@ def _tool_to_response(tool: DiscoveredTool) -> DiscoveredToolResponse:
         url_template=tool.url_template,
         parameters=tool.parameters,
         tags=tool.tags,
+        risk_level=tool.risk_level,
         status=tool.status,
         source_path=tool.source_path,
         discovered_at=tool.discovered_at,

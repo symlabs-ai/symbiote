@@ -22,9 +22,9 @@ class DiscoveredToolRepository:
             """
             INSERT INTO discovered_tools
                 (id, symbiote_id, tool_id, name, description, handler_type,
-                 method, url_template, parameters_json, tags_json,
+                 method, url_template, parameters_json, tags_json, risk_level,
                  status, source_path, discovered_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(symbiote_id, tool_id) DO UPDATE SET
                 name           = excluded.name,
                 description    = excluded.description,
@@ -33,6 +33,7 @@ class DiscoveredToolRepository:
                 url_template   = excluded.url_template,
                 parameters_json = excluded.parameters_json,
                 tags_json      = excluded.tags_json,
+                risk_level     = excluded.risk_level,
                 source_path    = excluded.source_path,
                 discovered_at  = excluded.discovered_at
             """,
@@ -47,6 +48,7 @@ class DiscoveredToolRepository:
                 tool.url_template,
                 json.dumps(tool.parameters),
                 json.dumps(tool.tags),
+                tool.risk_level,
                 tool.status,
                 tool.source_path,
                 tool.discovered_at or datetime.now(tz=UTC).isoformat(),
@@ -161,6 +163,7 @@ class DiscoveredToolRepository:
             url_template=row.get("url_template"),
             parameters=json.loads(row.get("parameters_json") or "{}"),
             tags=json.loads(row.get("tags_json") or "[]"),
+            risk_level=row.get("risk_level") or "medium",
             status=row.get("status", "pending"),
             source_path=row.get("source_path"),
             discovered_at=row.get("discovered_at", ""),

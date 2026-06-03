@@ -287,6 +287,88 @@ class TestOpenApiUrlStrategy:
         assert "get_api_items" in ids
         assert "yn_list_items" not in ids
 
+    def test_risk_level_method_heuristic(
+        self, service: DiscoveryService, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        """Without x-risk-level, risk falls back to the HTTP-method heuristic."""
+        with self._mock_urlopen(self._SPEC):
+            result = service.discover(symbiote_id, str(tmp_path), url="http://localhost:8000")
+
+        by_id = {t.tool_id: t for t in result.discovered}
+        # POST → medium
+        assert by_id["yn_publish_item"].risk_level == "medium"
+        # GET → low
+        assert by_id["yn_list_items"].risk_level == "low"
+
+    def test_risk_level_delete_is_high(
+        self, service: DiscoveryService, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        spec = {
+            "openapi": "3.0.0",
+            "info": {"title": "T", "version": "1.0.0"},
+            "paths": {
+                "/api/goals/{goal_id}": {
+                    "delete": {"operationId": "delete_goal", "summary": "Delete a goal"}
+                }
+            },
+        }
+        with self._mock_urlopen(spec):
+            result = service.discover(symbiote_id, str(tmp_path), url="http://localhost:8000")
+        assert result.discovered[0].risk_level == "high"
+
+    def test_explicit_x_risk_level_overrides_heuristic(
+        self, service: DiscoveryService, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        """x-risk-level on the operation takes precedence over the method heuristic."""
+        spec = {
+            "openapi": "3.0.0",
+            "info": {"title": "T", "version": "1.0.0"},
+            "paths": {
+                # POST would default to medium, but host declares it low.
+                "/api/habits/log": {
+                    "post": {
+                        "operationId": "log_habit",
+                        "summary": "Log a habit",
+                        "x-risk-level": "low",
+                    }
+                },
+                # GET would default to low, but host declares it high.
+                "/api/export/all": {
+                    "get": {
+                        "operationId": "export_all",
+                        "summary": "Export everything",
+                        "x-risk-level": "high",
+                    }
+                },
+            },
+        }
+        with self._mock_urlopen(spec):
+            result = service.discover(symbiote_id, str(tmp_path), url="http://localhost:8000")
+        by_id = {t.tool_id: t for t in result.discovered}
+        assert by_id["log_habit"].risk_level == "low"
+        assert by_id["export_all"].risk_level == "high"
+
+    def test_invalid_x_risk_level_falls_back_to_heuristic(
+        self, service: DiscoveryService, symbiote_id: str, tmp_path: Path
+    ) -> None:
+        spec = {
+            "openapi": "3.0.0",
+            "info": {"title": "T", "version": "1.0.0"},
+            "paths": {
+                "/api/items": {
+                    "post": {
+                        "operationId": "create_item",
+                        "summary": "Create",
+                        "x-risk-level": "catastrophic",  # invalid
+                    }
+                }
+            },
+        }
+        with self._mock_urlopen(spec):
+            result = service.discover(symbiote_id, str(tmp_path), url="http://localhost:8000")
+        # invalid → heuristic → POST → medium
+        assert result.discovered[0].risk_level == "medium"
+
     def test_captures_tags_from_openapi(
         self, service: DiscoveryService, symbiote_id: str, tmp_path: Path
     ) -> None:

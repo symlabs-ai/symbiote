@@ -145,6 +145,7 @@ class DiscoveryService:
                     url_template=f"{base_url}{path}",
                     parameters=parameters,
                     tags=op.get("tags", []),
+                    risk_level=_risk_for_operation(method, op),
                     source_path=openapi_url,
                     discovered_at=now,
                 ))
@@ -216,6 +217,7 @@ class DiscoveryService:
                     url_template=f"{base_url}{path}",
                     parameters=parameters,
                     tags=op.get("tags", []),
+                    risk_level=_risk_for_operation(method, op),
                     source_path=str(spec_file),
                     discovered_at=now,
                 ))
@@ -347,6 +349,38 @@ def _slugify(s: str) -> str:
     s = re.sub(r"[^a-zA-Z0-9_]", "_", s)
     s = re.sub(r"_+", "_", s).strip("_")
     return s.lower()
+
+
+# Heuristic fallback: HTTP method → risk_level when no explicit annotation.
+# GET/HEAD are read-only (low); POST/PUT/PATCH mutate state (medium);
+# DELETE is destructive (high).
+_METHOD_RISK: dict[str, str] = {
+    "GET": "low",
+    "HEAD": "low",
+    "OPTIONS": "low",
+    "POST": "medium",
+    "PUT": "medium",
+    "PATCH": "medium",
+    "DELETE": "high",
+}
+
+_VALID_RISK = {"low", "medium", "high"}
+
+
+def _risk_for_operation(method: str, op: dict[str, Any]) -> str:
+    """Determine the risk_level for an OpenAPI operation.
+
+    Precedence:
+        1. Explicit ``x-risk-level`` extension on the operation
+           (values: ``low`` | ``medium`` | ``high``, case-insensitive).
+        2. Heuristic fallback by HTTP method (see ``_METHOD_RISK``).
+
+    An invalid/unknown ``x-risk-level`` value falls back to the heuristic.
+    """
+    raw = op.get("x-risk-level")
+    if isinstance(raw, str) and raw.lower() in _VALID_RISK:
+        return raw.lower()
+    return _METHOD_RISK.get(method.upper(), "medium")
 
 
 def _path_to_tool_id(method: str, path: str) -> str:

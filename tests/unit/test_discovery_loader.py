@@ -170,6 +170,32 @@ class TestLoad:
         assert gateway.get_descriptor("disabled_tool") is None
 
 
+class TestRiskLevel:
+    def test_risk_level_propagated_to_descriptor(
+        self, loader: DiscoveredToolLoader, repo: DiscoveredToolRepository,
+        gateway: ToolGateway, symbiote_id: str,
+    ) -> None:
+        tool = _make_tool(symbiote_id, "delete_goal", "approved", "DELETE",
+                          "{base_url}/goals/{goal_id}")
+        tool.risk_level = "high"
+        repo.save(tool)
+
+        loader.load(symbiote_id, base_url="http://localhost:8000")
+
+        assert gateway.get_risk_level("delete_goal") == "high"
+
+    def test_default_risk_level_is_medium(
+        self, loader: DiscoveredToolLoader, repo: DiscoveredToolRepository,
+        gateway: ToolGateway, symbiote_id: str,
+    ) -> None:
+        # _make_tool leaves risk_level at the model default ("medium").
+        repo.save(_make_tool(symbiote_id, "get_items", "approved"))
+
+        loader.load(symbiote_id, base_url="http://localhost:8000")
+
+        assert gateway.get_risk_level("get_items") == "medium"
+
+
 class TestHeaderFactory:
     def test_header_factory_applied_to_all_tools(
         self, loader: DiscoveredToolLoader, repo: DiscoveredToolRepository,

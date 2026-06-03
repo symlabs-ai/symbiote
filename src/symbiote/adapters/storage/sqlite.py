@@ -155,6 +155,7 @@ CREATE TABLE IF NOT EXISTS discovered_tools (
     discovered_at  TEXT NOT NULL,
     approved_at    TEXT,
     tags_json       TEXT DEFAULT '[]',
+    risk_level     TEXT NOT NULL DEFAULT 'medium',
     UNIQUE(symbiote_id, tool_id)
 );
 
@@ -202,6 +203,7 @@ class SQLiteAdapter:
         # Idempotent migrations for existing databases
         for stmt in (
             "ALTER TABLE discovered_tools ADD COLUMN tags_json TEXT DEFAULT '[]'",
+            "ALTER TABLE discovered_tools ADD COLUMN risk_level TEXT NOT NULL DEFAULT 'medium'",
             "ALTER TABLE environment_configs ADD COLUMN tool_tags_json TEXT DEFAULT '[]'",
             "ALTER TABLE environment_configs ADD COLUMN tool_loading TEXT DEFAULT 'full'",
             "ALTER TABLE environment_configs ADD COLUMN tool_loop INTEGER DEFAULT 1",

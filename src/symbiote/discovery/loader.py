@@ -81,6 +81,7 @@ class DiscoveredToolLoader:
                 parameters=tool.parameters or {},
                 tags=tool.tags,
                 handler_type="http",
+                risk_level=tool.risk_level,
             )
 
             params = tool.parameters or {}

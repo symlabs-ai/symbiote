@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.6.10] - 2026-06-03
+
+- feat(discovery): `risk_level` é cidadão de primeira classe no discovery via OpenAPI. `DiscoveredTool` ganha campo `risk_level` (`low|medium|high`, default `medium`); `DiscoveryService` lê a extensão `x-risk-level` por operação e, na ausência, aplica heurística por método HTTP (GET/HEAD→low, POST/PUT/PATCH→medium, DELETE→high); `DiscoveredToolLoader` propaga o valor ao `ToolDescriptor(risk_level=...)`. Host não precisa mais manter mapa de risco paralelo.
+- feat(discovery): coluna `risk_level` em `discovered_tools` (migração idempotente) e campo `risk_level` exposto em `DiscoveredToolResponse` (HTTP API).
+- docs: convenção `x-risk-level` documentada no HOST_INTEGRATION.md; CLARK_MIGRATION_v0.3.md atualizado para preferir anotação no host em vez de override pós-load.
+
 ## [v0.6.9] - 2026-06-02
 
 - fix: `symbiote.__version__` deriva de `importlib.metadata.version("symbiote")` em vez de hardcode (estava defasado em `0.6.3`); nunca mais desatualiza a cada release

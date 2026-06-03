@@ -119,6 +119,36 @@ Automatically discover and load tools from a repository:
 tool_ids = kernel.load_discovered_tools(sym.id, base_url="http://127.0.0.1:8000")
 ```
 
+#### Risk levels from discovery
+
+Discovery assigns a `risk_level` to every discovered tool and propagates it all
+the way through to the loaded `ToolDescriptor`, so your approval callback can
+distinguish a low-risk read from a destructive write **without** maintaining a
+parallel risk map in the host.
+
+Two sources, in precedence order:
+
+1. **Explicit `x-risk-level` OpenAPI extension** on the operation
+   (`low` | `medium` | `high`). This is the recommended way for a host to
+   declare intent:
+
+   ```python
+   @app.delete("/api/goals/{goal_id}", openapi_extra={"x-risk-level": "high"})
+   def delete_goal(goal_id: int): ...
+
+   @app.post("/api/habits/log", openapi_extra={"x-risk-level": "low"})
+   def log_habit(...): ...   # a POST that is cheap/reversible → low
+   ```
+
+2. **HTTP-method heuristic** (fallback when `x-risk-level` is absent or invalid):
+   `GET`/`HEAD`/`OPTIONS` → `low`, `POST`/`PUT`/`PATCH` → `medium`,
+   `DELETE` → `high`.
+
+The same precedence applies to live-URL discovery (`discover(url=...)`) and
+file-based OpenAPI specs. An unknown `x-risk-level` value is ignored and the
+heuristic is used. `risk_level` is also exposed on the discovered-tools REST/HTTP
+responses.
+
 ---
 
 ## Session Management

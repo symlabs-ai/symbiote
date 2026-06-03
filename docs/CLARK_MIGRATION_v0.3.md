@@ -154,10 +154,18 @@ runner = ChatRunner(
 O Clark pode publicar matérias e enviar newsletters. Essas ações são irreversíveis. Com risk_level, o host pode exigir confirmação.
 
 ```python
-# Ao registrar/descobrir tools, marcar as destrutivas como high-risk
-from symbiote.environment.descriptors import ToolDescriptor
-
-# Se usando discovered tools, setar risk_level após o load
+# Preferido (desde o suporte a risk_level no discovery): anote o risco no
+# próprio host via a extensão OpenAPI `x-risk-level`. O discovery lê esse
+# valor e o propaga até o ToolDescriptor — sem mapa de risco paralelo.
+#
+#   @app.post("/api/items/{item_id}/publish",
+#             openapi_extra={"x-risk-level": "high"})
+#   def publish_item(...): ...
+#
+# Sem anotação explícita, o discovery usa heurística por método HTTP:
+#   GET/HEAD → low, POST/PUT/PATCH → medium, DELETE → high.
+#
+# Override manual pós-load (legado — só se você NÃO controla o OpenAPI do host):
 for tool_id in ["items_publish", "newsletter_send", "items_delete"]:
     desc = kernel.tool_gateway.get_descriptor(tool_id)
     if desc:
