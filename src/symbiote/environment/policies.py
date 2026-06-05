@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import inspect
 import json
 from collections.abc import Callable
@@ -87,8 +88,12 @@ class PolicyGate:
             )
 
         try:
+            # Propagate the caller's contextvars (e.g. host auth /
+            # current-user state) into the worker thread so handlers and
+            # header_factory observe them — a bare pool thread starts empty.
+            ctx = contextvars.copy_context()
             with ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(action_fn, params)
+                future = pool.submit(ctx.run, action_fn, params)
                 output = future.result(timeout=timeout)
             self._write_audit(
                 symbiote_id=symbiote_id,

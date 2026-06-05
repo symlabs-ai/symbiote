@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import os
 from collections.abc import Callable
@@ -386,7 +387,12 @@ class ToolGateway:
             pool = ThreadPoolExecutor(max_workers=max_workers)
             for idx, (call, fn) in enumerate(zip(calls, handler_fns, strict=False)):
                 if fn is not None:
-                    futures[idx] = pool.submit(fn, call.params)
+                    # Propagate the caller's contextvars (e.g. host auth /
+                    # current-user state) into the worker thread so handlers
+                    # and header_factory see them. Without copy_context the
+                    # pool thread starts with empty context.
+                    ctx = contextvars.copy_context()
+                    futures[idx] = pool.submit(ctx.run, fn, call.params)
             # Don't wait=True here — we collect results with timeout below
             pool.shutdown(wait=False)
 

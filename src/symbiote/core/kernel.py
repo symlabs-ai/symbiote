@@ -203,6 +203,34 @@ class SymbioteKernel:
         """
         self._evolver_llm = llm
 
+    def set_approval_callback(
+        self,
+        callback: Callable[[str, dict, str], bool] | None,
+    ) -> None:
+        """Install a human-in-the-loop approval gate on the chat runner.
+
+        The kernel builds its ChatRunner internally, so this is the supported
+        way for an embedded host to wire an approval callback that ``message()``
+        / ``message_async()`` actually use. Without it, the gate is inert and
+        high-risk tools execute unchecked.
+
+        The callback receives ``(tool_id, params, risk_level)`` and returns
+        ``True`` to allow or ``False`` to deny. It is invoked **only** for
+        tools whose ``risk_level == "high"`` (see ``ChatRunner._check_approval``).
+        Pass ``None`` to remove a previously installed gate.
+
+        Raises:
+            RuntimeError: if no chat runner is registered (kernel built
+                without an LLM).
+        """
+        runner = self._runner_registry.select("chat")
+        if runner is None or not hasattr(runner, "_on_before_tool_call"):
+            raise RuntimeError(
+                "No chat runner available to attach an approval callback "
+                "(kernel was constructed without an LLM)."
+            )
+        runner._on_before_tool_call = callback  # type: ignore[attr-defined]
+
     @property
     def environment(self) -> EnvironmentManager:
         return self._environment

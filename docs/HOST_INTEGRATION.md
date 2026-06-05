@@ -287,20 +287,32 @@ The final score combines auto-score (60%) with user feedback (40%).
 
 ## Human-in-the-Loop
 
-Tools can declare a `risk_level` (`"low"`, `"medium"`, `"high"`). The host provides an approval callback:
+Tools can declare a `risk_level` (`"low"`, `"medium"`, `"high"`). The host
+provides an approval callback. The gate fires **only for `risk_level == "high"`**
+tools — low/medium always execute and the callback is not consulted for them.
+
+**Embedded hosts (the kernel owns the runner) — use `set_approval_callback`:**
+
+```python
+def approval_gate(tool_id: str, params: dict, risk: str) -> bool:
+    # Called only for high-risk tools. Return True to allow, False to deny.
+    return ask_user(f"Allow {tool_id} with {params}?")
+
+kernel.set_approval_callback(approval_gate)
+# Now kernel.message() / kernel.message_async() enforce the gate.
+```
+
+> **Important:** the kernel builds its `ChatRunner` internally, so passing
+> `on_before_tool_call=` to a *standalone* `ChatRunner` you construct has **no
+> effect** on `kernel.message()` — that runner is never the one the kernel runs.
+> Embedded hosts must wire the gate via `kernel.set_approval_callback(...)`.
+> Pass `None` to remove a previously installed gate. The call raises
+> `RuntimeError` if the kernel was built without an LLM (no chat runner exists).
+
+**Standalone `ChatRunner` (you drive the runner directly, e.g. you_news):**
 
 ```python
 from symbiote.runners.chat import ChatRunner
-
-def approval_gate(tool_id: str, params: dict, risk: str) -> bool:
-    if risk == "high":
-        # Ask user for confirmation
-        return ask_user(f"Allow {tool_id} with {params}?")
-    if risk == "medium":
-        # Log but allow
-        logger.info(f"Medium-risk tool call: {tool_id}")
-        return True
-    return True  # Low risk: auto-approve
 
 runner = ChatRunner(
     llm=llm,
@@ -320,6 +332,39 @@ ToolDescriptor(
     # ...
 )
 ```
+
+### Multi-user hosts: identity in tool handlers
+
+Tool handlers are registered as `Callable[[dict], Any]` and receive **only the
+LLM-provided `params`** — not the `symbiote_id`/`session_id` of the turn (the
+gateway knows them, but does not pass them to the handler). In a host that runs
+one symbiote per user, the handler (and `HttpToolConfig.header_factory`, which
+is arg-less) typically needs the current user to authorize/route the action.
+
+The supported pattern is a **`contextvars.ContextVar`** set by the host before
+calling `message()`/`message_async()` and read inside the handler /
+`header_factory`. The gateway propagates the caller's context into worker
+threads (`contextvars.copy_context()` on both the single-call and parallel sync
+dispatch paths, and `asyncio.to_thread`/task copying on the async path), so the
+var survives into the handler:
+
+```python
+current_user: contextvars.ContextVar[str] = contextvars.ContextVar("current_user")
+
+def header_factory() -> dict[str, str]:
+    return {"Authorization": f"Bearer {mint_jwt(current_user.get())}"}
+
+# In your request handler (FastAPI), before invoking the kernel:
+token = current_user.set(request.state.user_id)
+try:
+    await kernel.message_async(session_id, content)
+finally:
+    current_user.reset(token)
+```
+
+> Both sync (`message`) and async (`message_async`) paths propagate contextvars
+> into handlers. `message_async` is still recommended for web hosts (it also
+> supports coroutine handlers and `on_token` streaming).
 
 ---
 

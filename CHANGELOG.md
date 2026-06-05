@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.6.11] - 2026-06-05
+
+- fix(security): `SymbioteKernel.set_approval_callback(cb)` — caminho suportado para plugar o gate de aprovação no runner interno usado por `message()`/`message_async()`. Antes, hosts embarcados não tinham como ativar o gate (o `ChatRunner` interno era construído sem `on_before_tool_call`), então o controle de risco ficava **silenciosamente desligado** em modo embarcado. O gate dispara só para `risk_level == "high"`.
+- fix(env): handlers de tool e `header_factory` agora enxergam os `contextvars` do chamador. `PolicyGate.execute_with_policy` (single-call) e `ToolGateway.execute_tool_calls` (paralelo) despacham via `contextvars.copy_context()`, então estado por-requisição do host (ex.: usuário atual/auth) sobrevive nas threads do pool. Antes, só o caminho async propagava.
+- docs: HOST_INTEGRATION.md corrigido — a seção de aprovação não induz mais a achar que `ChatRunner(on_before_tool_call=...)` avulso afeta `message()`; nova seção sobre identidade em handlers multiusuário via contextvar.
+
 ## [v0.6.10] - 2026-06-03
 
 - feat(discovery): `risk_level` é cidadão de primeira classe no discovery via OpenAPI. `DiscoveredTool` ganha campo `risk_level` (`low|medium|high`, default `medium`); `DiscoveryService` lê a extensão `x-risk-level` por operação e, na ausência, aplica heurística por método HTTP (GET/HEAD→low, POST/PUT/PATCH→medium, DELETE→high); `DiscoveredToolLoader` propaga o valor ao `ToolDescriptor(risk_level=...)`. Host não precisa mais manter mapa de risco paralelo.
