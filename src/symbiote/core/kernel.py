@@ -231,6 +231,27 @@ class SymbioteKernel:
             )
         runner._on_before_tool_call = callback  # type: ignore[attr-defined]
 
+    def set_native_tools(self, enabled: bool) -> None:
+        """Enable/disable native function-calling on the internal chat runner.
+
+        The kernel builds its ChatRunner with ``native_tools=False`` (text-based
+        tool-call parsing) for broad LLM-adapter compatibility. Hosts whose LLM
+        adapter supports native function calling should call this with ``True``
+        to use the provider's structured tool_calls instead of text parsing —
+        the supported way to flip it without poking the runner's private attr.
+
+        Raises:
+            RuntimeError: if no chat runner is registered (kernel built
+                without an LLM).
+        """
+        runner = self._runner_registry.select("chat")
+        if runner is None or not hasattr(runner, "_native_tools"):
+            raise RuntimeError(
+                "No chat runner available to set native_tools "
+                "(kernel was constructed without an LLM)."
+            )
+        runner._native_tools = enabled  # type: ignore[attr-defined]
+
     @property
     def environment(self) -> EnvironmentManager:
         return self._environment

@@ -121,6 +121,29 @@ class TestSetApprovalCallback:
         kernel.shutdown()
 
 
+class TestSetNativeTools:
+    def test_toggles_runner_native_tools(self, tmp_path: Path) -> None:
+        kernel = SymbioteKernel(
+            config=KernelConfig(db_path=tmp_path / "nt.db"),
+            llm=ScriptedLLM("noop"),
+        )
+        runner = kernel._runner_registry.select("chat")
+        assert runner._native_tools is False  # default
+
+        kernel.set_native_tools(True)
+        assert runner._native_tools is True
+
+        kernel.set_native_tools(False)
+        assert runner._native_tools is False
+        kernel.shutdown()
+
+    def test_raises_without_llm(self, tmp_path: Path) -> None:
+        kernel = SymbioteKernel(config=KernelConfig(db_path=tmp_path / "nt2.db"))
+        with pytest.raises(RuntimeError):
+            kernel.set_native_tools(True)
+        kernel.shutdown()
+
+
 # ── contextvar propagation into handlers ──────────────────────────────────────
 
 _current_user: contextvars.ContextVar[str] = contextvars.ContextVar(

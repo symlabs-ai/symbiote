@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.6.12] - 2026-06-05
+
+- feat(kernel): `SymbioteKernel.set_native_tools(bool)` — setter suportado para ligar native function-calling no runner interno (antes só dava pra setar `runner._native_tools` na marra). Levanta `RuntimeError` se o kernel não tem LLM.
+- docs(host): seção proeminente **"Conversation Memory (multi-turn)"** no HOST_INTEGRATION.md — deixa explícito que o kernel PERSISTE mensagens mas NÃO injeta o histórico no prompt sozinho; chat embarcado precisa passar `extra_context["conversation_history"]` a cada turno (erro de integração nº1). Documenta o formato exato do parser (rótulos `usuário/user`, `assistant/clark`; `get_messages` vem DESC, reverter pra cronológico) e o falso-positivo de "mensagens acumulam no DB = memória".
+- docs(host): checklist **"Common embedded-host pitfalls"** no topo do HOST_INTEGRATION.md — memória de conversa, gate de aprovação off-by-default, visibilidade de tools por TAG (não pela lista autorizada), e native_tools off-by-default. Todos silenciosos no happy-path.
+
 ## [v0.6.11] - 2026-06-05
 
 - fix(security): `SymbioteKernel.set_approval_callback(cb)` — caminho suportado para plugar o gate de aprovação no runner interno usado por `message()`/`message_async()`. Antes, hosts embarcados não tinham como ativar o gate (o `ChatRunner` interno era construído sem `on_before_tool_call`), então o controle de risco ficava **silenciosamente desligado** em modo embarcado. O gate dispara só para `risk_level == "high"`.

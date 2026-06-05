@@ -39,6 +39,27 @@ if sym is None:
 
 ---
 
+## Common embedded-host pitfalls (read this first)
+
+These are the silent footguns that bite hosts embedding the kernel in-process
+(chat bots, one-symbiote-per-user apps). Each defaults to the "safe but
+surprising" behavior and fails quietly — no error, just wrong behavior. Wire
+them explicitly:
+
+| Pitfall | Symptom | Fix |
+|---|---|---|
+| **Conversation memory not auto-injected** | Bot is amnesic across turns even though messages pile up in the DB | Inject `extra_context["conversation_history"]` every turn — see [Conversation Memory](#conversation-memory-multi-turn--read-this-before-building-a-chat-bot). Integration error #1. |
+| **Approval gate off by default** | High-risk tools execute without ever calling your callback | `kernel.set_approval_callback(cb)` — passing `on_before_tool_call` to a standalone `ChatRunner` does **not** affect `kernel.message()`. See [Human-in-the-Loop](#human-in-the-loop). |
+| **Tool visibility is by TAG, not by the authorized list** | LLM sees *all* registered descriptors (incl. builtins like `bash`/`fs_*`/`search_*`) even though you only authorized a few in `configure(tools=[...])` | `tools=` is **authorization** (what can run); to scope what the LLM **sees**, set `tool_tags=[...]` in `configure` and tag your tools accordingly. `get_descriptors(tags=None)` returns everything. |
+| **Native function-calling off by default** | LLM adapter supports structured tool_calls but the runner uses text-based parsing | `kernel.set_native_tools(True)` (since this release) — no more poking `runner._native_tools`. |
+
+> All four are non-obvious because the "happy path" looks correct: sessions
+> reuse, messages accumulate, tools register and run. Nothing warns you that
+> memory isn't injected, the gate is inert, the LLM sees more than you
+> authorized, or you're parsing tool calls from text.
+
+---
+
 ## Tool Registration
 
 ### HTTP Tools
@@ -179,6 +200,58 @@ response = kernel.message(session.id, user_message)
 closed = kernel.close_session(session.id)
 # closed.summary contains the auto-generated session summary
 ```
+
+---
+
+## Conversation Memory (multi-turn) — read this before building a chat bot
+
+> **Integration error #1 for chat hosts.** The kernel **persists** every message
+> to the `messages` table, but it does **NOT** automatically inject the
+> session's prior turns into the prompt. If your host does nothing, the model
+> sees only the system prompt + the current user message — **the bot is amnesic
+> across turns**, even though the messages are piling up in the DB.
+
+Why this is easy to miss (the false positive): `get_or_create_session` reuses
+the session correctly and the rows accumulate, so it *looks* like there's
+memory. There isn't — accumulation in the DB is not the same as injection into
+the prompt. `ContextAssembler.build()` assembles persona + memory + knowledge +
+tools, but **not** the session transcript, and `kernel.message()` runs the
+internal runner **without** working-memory wired. So multi-turn recall is the
+**host's responsibility**: you must pass the recent transcript as
+`extra_context["conversation_history"]` on **every** turn.
+
+```python
+# Fetch the recent transcript and inject it each turn so the bot remembers.
+def build_history(kernel, session_id, n=12):
+    # get_messages returns NEWEST-FIRST (ORDER BY created_at DESC), so reverse
+    # to chronological order before formatting.
+    msgs = kernel._message_repo.get_messages(session_id, limit=n)
+    lines = []
+    for m in reversed(msgs):
+        label = "Usuário" if m.role == "user" else "Assistant"
+        lines.append(f"{label}: {m.content}")
+    return "\n".join(lines)
+
+response = kernel.message(
+    session_id,
+    user_message,
+    extra_context={"conversation_history": build_history(kernel, session_id)},
+)
+```
+
+**Exact format the parser expects** (`ChatRunner._parse_conversation_history`):
+- One `"Label: content"` per line; lines without a recognized label are merged
+  into the previous turn (so multi-line messages work).
+- Recognized labels (case-insensitive): user side = `usuário` / `usuario` /
+  `user`; assistant side = `assistant` / `clark`. Anything else is ignored as a
+  label and folded into the prior turn — so **use one of those labels** or your
+  turns won't be attributed to a role.
+- The kernel promotes these into real `user`/`assistant` message pairs (not a
+  text blob), so the LLM sees proper multi-turn structure.
+
+> Roadmap: a structured `conversation_history` (list of `{"role", "content"}`)
+> and an opt-in auto-injection flag are under consideration so memory is the
+> default for chat hosts. Until then, inject it explicitly — it is required.
 
 ---
 
