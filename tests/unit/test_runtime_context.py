@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import re
+from datetime import UTC, datetime, timedelta, timezone
 
 from symbiote.environment.runtime_context import (
     build_runtime_block,
@@ -15,7 +16,25 @@ class TestBuildRuntimeBlock:
     def test_includes_timestamp(self) -> None:
         ts = datetime(2026, 3, 16, 12, 0, 0, tzinfo=UTC)
         block = build_runtime_block(timestamp=ts)
-        assert "2026-03-16 12:00:00 UTC" in block
+        # UTC renders with an explicit offset plus the friendly zone name.
+        assert "2026-03-16 12:00:00 +00:00 (UTC)" in block
+
+    def test_renders_local_offset_not_hardcoded_utc(self) -> None:
+        # A non-UTC tz-aware timestamp keeps its own wall-clock + offset,
+        # instead of being coerced to a UTC label (the old bug).
+        ts = datetime(2026, 3, 16, 12, 0, 0, tzinfo=timezone(timedelta(hours=-3)))
+        block = build_runtime_block(timestamp=ts)
+        assert "2026-03-16 12:00:00 -03:00" in block
+        assert " 12:00:00 +00:00" not in block
+
+    def test_default_timestamp_carries_explicit_offset(self) -> None:
+        # No timestamp → local now() with an explicit ±HH:MM offset, never a
+        # bare "UTC" wall-clock the LLM would misread as local time.
+        block = build_runtime_block()
+        assert re.search(
+            r"Timestamp: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}",
+            block,
+        )
 
     def test_includes_session_id(self) -> None:
         block = build_runtime_block(session_id="sess-42")
