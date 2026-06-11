@@ -93,6 +93,7 @@ class ChatRunner:
         *,
         native_tools: bool = False,
         context_budget: int = _DEFAULT_CONTEXT_BUDGET,
+        tool_result_max_chars: int = _MICROCOMPACT_MAX_CHARS,
         on_before_tool_call: Callable[[str, dict, str], bool] | None = None,
         on_after_tool_result: Callable[[list[ToolCall], list[ToolCallResult]], str | None] | None = None,
         on_progress: Callable[[str, int, int], None] | None = None,
@@ -111,6 +112,7 @@ class ChatRunner:
         self._consolidator = consolidator
         self._native_tools = native_tools
         self._context_budget = context_budget
+        self._tool_result_max_chars = max(1, int(tool_result_max_chars))
         self._on_before_tool_call = on_before_tool_call
         self._on_after_tool_result = on_after_tool_result
         self._on_progress = on_progress
@@ -995,19 +997,21 @@ class ChatRunner:
         messages.append({"role": "user", "content": summary})
         messages.extend(last_pair)
 
-    @staticmethod
-    def _microcompact_tool_result(result_text: str) -> str:
+    def _microcompact_tool_result(self, result_text: str) -> str:
         """Truncate a single tool result if it exceeds the size threshold.
 
         Layer 1 of the 3-layer compaction system.  Applied to each tool
         result *before* it is injected into the message list, preventing
-        large JSON payloads from consuming the context window.
+        large JSON payloads from consuming the context window.  The
+        threshold is per-runner (``tool_result_max_chars``, plumbed from
+        ``KernelConfig``) so hosts with large tool payloads can raise it.
         """
-        if len(result_text) <= _MICROCOMPACT_MAX_CHARS:
+        limit = self._tool_result_max_chars
+        if len(result_text) <= limit:
             return result_text
         # Keep first portion + tail marker
-        truncated = result_text[:_MICROCOMPACT_MAX_CHARS]
-        remaining = len(result_text) - _MICROCOMPACT_MAX_CHARS
+        truncated = result_text[:limit]
+        remaining = len(result_text) - limit
         return f"{truncated}\n... ({remaining} chars truncated)"
 
     def _autocompact_if_needed(
@@ -1113,8 +1117,7 @@ class ChatRunner:
                 "skill review nudge failed: %s", exc,
             )
 
-    @classmethod
-    def _format_tool_results(cls, results: list[ToolCallResult]) -> str:
+    def _format_tool_results(self, results: list[ToolCallResult]) -> str:
         """Format tool results as a user message for the next LLM turn.
 
         Applies Layer 1 microcompaction to each individual result.
@@ -1125,7 +1128,7 @@ class ChatRunner:
                 raw = f"[Tool result: {r.tool_id}]\n{json.dumps(r.output, default=str, ensure_ascii=False)}"
             else:
                 raw = f"[Tool error: {r.tool_id}]\n{r.error}"
-            parts.append(cls._microcompact_tool_result(raw))
+            parts.append(self._microcompact_tool_result(raw))
         return "\n\n".join(parts)
 
     def _build_messages(self, context: AssembledContext) -> list[dict]:

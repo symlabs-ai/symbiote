@@ -5,6 +5,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.6.14] - 2026-06-11
+
+- feat(chat): teto de truncamento de tool result (Layer 1 microcompaction) agora é configurável — `KernelConfig.tool_result_max_chars` (default 2000, comportamento inalterado) plumba até `ChatRunner(tool_result_max_chars=...)`. Antes era constante de módulo: payloads JSON maiores (ex.: árvore de tarefas completa) eram cortados em 2000 chars e o LLM tratava o rabo perdido como inexistente — respondia "não encontrei" para dados que a tool DEVOLVEU (bug observado no ChopChop/Vaigo). `_microcompact_tool_result`/`_format_tool_results` viraram métodos de instância.
+
 ## [v0.6.13] - 2026-06-09
 
 - fix(runtime): `build_runtime_block` agora carimba a mensagem com a hora **local** do host + offset UTC explícito (ex.: `2026-06-09 14:50:28 -03:00`) em vez de `datetime.now(tz=UTC)` rotulado `UTC`. O default antigo fazia o LLM tratar o relógio UTC como hora de parede local e julgar errado se um horário já tinha passado (ex.: "hoje às 16h" lido como passado contra 16:57 UTC num host UTC−3). Timestamps tz-aware explícitos são renderizados no próprio fuso; naive vira local. Sem mudança no formato/delimitadores do bloco — `strip_runtime_context` intacto.

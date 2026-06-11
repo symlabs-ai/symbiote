@@ -61,16 +61,20 @@ def _make_context(
 # ── Layer 1: Microcompact ─────────────────────────────────────────────────
 
 
+def _runner(**kwargs) -> ChatRunner:
+    return ChatRunner(MockLLM("ok"), **kwargs)
+
+
 class TestMicrocompact:
     def test_short_result_unchanged(self) -> None:
         text = "[Tool result: search]\n{\"items\": [1, 2, 3]}"
-        assert ChatRunner._microcompact_tool_result(text) == text
+        assert _runner()._microcompact_tool_result(text) == text
 
     def test_long_result_truncated(self) -> None:
         # Build a result longer than _MICROCOMPACT_MAX_CHARS
         big_json = json.dumps({"data": "x" * 5000})
         text = f"[Tool result: fetch]\n{big_json}"
-        result = ChatRunner._microcompact_tool_result(text)
+        result = _runner()._microcompact_tool_result(text)
 
         assert len(result) < len(text)
         assert "truncated" in result
@@ -78,12 +82,20 @@ class TestMicrocompact:
 
     def test_exact_threshold_not_truncated(self) -> None:
         text = "x" * _MICROCOMPACT_MAX_CHARS
-        assert ChatRunner._microcompact_tool_result(text) == text
+        assert _runner()._microcompact_tool_result(text) == text
 
     def test_one_over_threshold_truncated(self) -> None:
         text = "x" * (_MICROCOMPACT_MAX_CHARS + 1)
-        result = ChatRunner._microcompact_tool_result(text)
+        result = _runner()._microcompact_tool_result(text)
         assert "truncated" in result
+
+    def test_custom_threshold_respected(self) -> None:
+        """tool_result_max_chars raises the per-result ceiling."""
+        text = "x" * (_MICROCOMPACT_MAX_CHARS + 1)
+        runner = _runner(tool_result_max_chars=_MICROCOMPACT_MAX_CHARS * 5)
+        assert runner._microcompact_tool_result(text) == text
+        long_text = "x" * (_MICROCOMPACT_MAX_CHARS * 5 + 1)
+        assert "truncated" in runner._microcompact_tool_result(long_text)
 
     def test_format_tool_results_applies_microcompact(self, symbiote_id: str) -> None:
         """_format_tool_results should microcompact large results."""
@@ -93,7 +105,7 @@ class TestMicrocompact:
         results = [
             ToolCallResult(tool_id="big_tool", success=True, output=big_output),
         ]
-        formatted = ChatRunner._format_tool_results(results)
+        formatted = _runner()._format_tool_results(results)
         assert "truncated" in formatted
 
 

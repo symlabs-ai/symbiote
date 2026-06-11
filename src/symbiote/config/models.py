@@ -19,6 +19,11 @@ class KernelConfig(BaseModel):
 
     db_path: Path = Path(".symbiote/symbiote.db")
     context_budget: int = 4000
+    # Per-result ceiling (chars) for tool outputs fed back to the LLM in the
+    # chat tool loop (Layer 1 microcompaction). Hosts whose tools return large
+    # JSON payloads (e.g. full task trees) should raise this so results are
+    # not cut mid-payload — the LLM treats the missing tail as nonexistent.
+    tool_result_max_chars: int = 2000
     llm_provider: str = "forge"
     log_level: str = "INFO"
     # Optional skill library roots. If None, the kernel derives
@@ -41,6 +46,13 @@ class KernelConfig(BaseModel):
     def _context_budget_positive(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("context_budget must be a positive integer")
+        return v
+
+    @field_validator("tool_result_max_chars")
+    @classmethod
+    def _tool_result_max_chars_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("tool_result_max_chars must be a positive integer")
         return v
 
     @field_validator("max_tool_iterations_ceiling")

@@ -91,6 +91,7 @@ class SymbioteKernel:
                 ChatRunner(
                     llm,
                     tool_gateway=self._tool_gateway,
+                    tool_result_max_chars=config.tool_result_max_chars,
                     # Resolver form: ChatRunner is per-kernel, but
                     # skill_review_enabled is per-symbiote. The resolver
                     # returns the engine (or None) for the symbiote driving
