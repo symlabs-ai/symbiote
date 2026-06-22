@@ -235,6 +235,9 @@ class SQLiteAdapter:
             "ALTER TABLE environment_configs ADD COLUMN skill_auto_promote_threshold INTEGER DEFAULT 3",
             "ALTER TABLE environment_configs ADD COLUMN skill_quarantine_timeout_days INTEGER DEFAULT 14",
             "ALTER TABLE environment_configs ADD COLUMN skill_injection_enabled INTEGER DEFAULT 0",
+            "ALTER TABLE environment_configs ADD COLUMN skill_injection_mode TEXT DEFAULT 'full'",
+            "ALTER TABLE environment_configs ADD COLUMN skill_review_strict INTEGER DEFAULT 0",
+            "ALTER TABLE environment_configs ADD COLUMN skill_review_extra_criteria TEXT DEFAULT NULL",
         ):
             try:
                 self._conn.execute(stmt)

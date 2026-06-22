@@ -201,6 +201,20 @@ class EnvironmentConfig(BaseModel):
     # behaviour (skills reachable only on-demand by name, never auto-injected).
     # Per-symbiote so one symbiote opting in never affects another.
     skill_injection_enabled: bool = False
+    # How injected skills are presented (only relevant when injection is on):
+    #   full  — name + description per skill (legacy/default behaviour).
+    #   index — same one-line index PLUS an instruction to load full bodies on
+    #           demand via the skill_view tool (progressive disclosure). Pair
+    #           with tools=[..., 'skill_view']. Mirrors tool_loading=full|index.
+    skill_injection_mode: Literal["full", "index"] = "full"
+    # Skill review quality criteria (S5). ``skill_review_strict`` prepends a
+    # stricter "do NOT capture" block to the evolver prompt (reject persona
+    # re-documentation, task-scoped names, etc.). ``skill_review_extra_criteria``
+    # is free-text the host appends verbatim to the review prompt (domain rules,
+    # e.g. "never capture anything about user PII handling"). Both no-op by
+    # default — the baseline prompt already carries the core anti-patterns.
+    skill_review_strict: bool = False
+    skill_review_extra_criteria: str | None = None
     skill_nudge_interval: int = Field(default=10, ge=1, le=100)
     # Caps on how many agent-created skills the library may hold. The two
     # buckets exist because conflating them deadlocks the loop: a library

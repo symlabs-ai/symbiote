@@ -75,6 +75,35 @@ the environment changes):
 - One-off task narratives. 'Analyze this PR' / 'analisa esse PR',
   'summarize today's news' / 'resume as notícias de hoje' — these are
   single-instance work, not a class of work that warrants a memory.
+
+- Re-documenting capabilities the persona/agent ALREADY has. Answering a
+  normal question the agent is already good at ('what's my name?' / 'qual é
+  o meu nome?', 'recommend a workout' / 'recomenda um treino') is NOT a
+  lesson — do not 'learn' a skill that just restates the agent's existing
+  job. A skill captures a NON-OBVIOUS technique, fix, or user-specific
+  rule that changed how the work should be done, not the work itself.
+"""
+
+
+# Stricter rejection block — prepended to the skill-review prompt only when
+# the host sets skill_review_strict=True. Tightens the bar so the library
+# stops accreting low-value one-shot entries.
+_SKILL_STRICT_BLOCK = """\
+STRICT MODE — the bar for creating or patching a skill is HIGH. Reject and
+return [] unless the session contains a genuinely reusable, non-obvious
+lesson. In particular, in addition to the anti-patterns above:
+
+- Do NOT create a skill that merely re-describes what the agent just did
+  successfully with no correction. Success at the agent's normal job is the
+  baseline, not a lesson.
+- Do NOT create a skill whose name only makes sense for today's task. Names
+  MUST be class-level: no PR numbers, no codenames, no dates, no 'today',
+  no session ids. If you cannot name it so a future unrelated session would
+  pick it up, do not create it.
+- PATCH an existing skill instead of creating a near-duplicate. Two skills
+  covering the same territory is a failure — prefer extending one.
+- When in doubt, prefer [] (nothing) over a speculative entry. A small,
+  sharp library beats a large, noisy one.
 """
 
 _HIERARCHY_BLOCK = """\
@@ -241,6 +270,53 @@ Messages:
 Summary:"""
 
 
+def build_skill_review_prompt(
+    *,
+    strict: bool = False,
+    extra_criteria: str | None = None,
+) -> str:
+    """Compose the skill-review prompt with host-tunable criteria (S5).
+
+    * ``strict`` — prepend ``_SKILL_STRICT_BLOCK`` (a higher bar for create/
+      patch) right after the baseline anti-patterns.
+    * ``extra_criteria`` — host free-text (domain rules) appended verbatim
+      under an explicit heading so the evolver treats them as binding.
+
+    Returns a template still carrying the ``{existing_skills}`` / ``{messages}``
+    placeholders for ``render_prompt``. With both args falsy this returns the
+    baseline ``SKILL_REVIEW_PROMPT`` unchanged — so existing behaviour and any
+    callers using the constant directly are unaffected.
+    """
+    if not strict and not extra_criteria:
+        return SKILL_REVIEW_PROMPT
+
+    sections = [
+        "Review the conversation below and decide whether to update the skill "
+        "library.\nSkills are reusable procedural playbooks the next session "
+        "loads automatically\nwhen its query matches the skill's description. "
+        "Be ACTIVE — most sessions\nwith a real correction or non-trivial "
+        "technique produce at least one update.",
+        _SIGNALS_BLOCK,
+        _ANTI_PATTERNS_BLOCK,
+    ]
+    if strict:
+        sections.append(_SKILL_STRICT_BLOCK)
+    if extra_criteria:
+        sections.append(
+            "ADDITIONAL HOST CRITERIA (binding — follow exactly):\n"
+            + extra_criteria.strip()
+        )
+    sections.append(_SKILL_HIERARCHY_BLOCK)
+    sections.append(_SKILL_OUTPUT_SCHEMA)
+    sections.append(
+        "Skills currently available (consider for PATCH or WRITE_FILE):\n"
+        "{existing_skills}"
+    )
+    sections.append("Conversation:\n{messages}")
+    sections.append("JSON array:")
+    return "\n\n".join(sections)
+
+
 def render_prompt(template: str, **values: str) -> str:
     """Substitute named placeholders in a prompt template via ``str.replace``.
 
@@ -269,5 +345,7 @@ __all__ = [
     "_SIGNALS_BLOCK",
     "_SKILL_HIERARCHY_BLOCK",
     "_SKILL_OUTPUT_SCHEMA",
+    "_SKILL_STRICT_BLOCK",
+    "build_skill_review_prompt",
     "render_prompt",
 ]

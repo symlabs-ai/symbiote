@@ -55,6 +55,9 @@ class EnvironmentManager:
         # Skill self-improvement fields (Sprint 4)
         skill_review_enabled: bool | None = None,
         skill_injection_enabled: bool | None = None,
+        skill_injection_mode: str | None = None,
+        skill_review_strict: bool | None = None,
+        skill_review_extra_criteria: str | None = None,
         skill_nudge_interval: int | None = None,
         max_active_skills: int | None = None,
         max_quarantine_skills: int | None = None,
@@ -162,6 +165,9 @@ class EnvironmentManager:
                 reflection_max_tokens=reflection_max_tokens if reflection_max_tokens is not None else existing.reflection_max_tokens,
                 skill_review_enabled=skill_review_enabled if skill_review_enabled is not None else existing.skill_review_enabled,
                 skill_injection_enabled=skill_injection_enabled if skill_injection_enabled is not None else existing.skill_injection_enabled,
+                skill_injection_mode=skill_injection_mode if skill_injection_mode is not None else existing.skill_injection_mode,
+                skill_review_strict=skill_review_strict if skill_review_strict is not None else existing.skill_review_strict,
+                skill_review_extra_criteria=skill_review_extra_criteria if skill_review_extra_criteria is not None else existing.skill_review_extra_criteria,
                 skill_nudge_interval=skill_nudge_interval if skill_nudge_interval is not None else existing.skill_nudge_interval,
                 max_active_skills=max_active_skills if max_active_skills is not None else existing.max_active_skills,
                 max_quarantine_skills=max_quarantine_skills if max_quarantine_skills is not None else existing.max_quarantine_skills,
@@ -180,6 +186,8 @@ class EnvironmentManager:
                 "dream_mode = ?, dream_max_llm_calls = ?, dream_min_sessions = ?, "
                 "reflection_mode = ?, reflection_max_tokens = ?, "
                 "skill_review_enabled = ?, skill_injection_enabled = ?, "
+                "skill_injection_mode = ?, skill_review_strict = ?, "
+                "skill_review_extra_criteria = ?, "
                 "skill_nudge_interval = ?, max_active_skills = ?, "
                 "max_quarantine_skills = ?, "
                 "skill_auto_promote_threshold = ?, skill_quarantine_timeout_days = ? "
@@ -213,6 +221,9 @@ class EnvironmentManager:
                     cfg.reflection_max_tokens,
                     int(cfg.skill_review_enabled),
                     int(cfg.skill_injection_enabled),
+                    cfg.skill_injection_mode,
+                    int(cfg.skill_review_strict),
+                    cfg.skill_review_extra_criteria,
                     cfg.skill_nudge_interval,
                     cfg.max_active_skills,
                     cfg.max_quarantine_skills,
@@ -255,6 +266,9 @@ class EnvironmentManager:
             reflection_max_tokens=reflection_max_tokens if reflection_max_tokens is not None else 4000,
             skill_review_enabled=skill_review_enabled if skill_review_enabled is not None else False,
             skill_injection_enabled=skill_injection_enabled if skill_injection_enabled is not None else False,
+            skill_injection_mode=skill_injection_mode if skill_injection_mode is not None else "full",
+            skill_review_strict=skill_review_strict if skill_review_strict is not None else False,
+            skill_review_extra_criteria=skill_review_extra_criteria,
             skill_nudge_interval=skill_nudge_interval if skill_nudge_interval is not None else 10,
             max_active_skills=max_active_skills if max_active_skills is not None else 20,
             max_quarantine_skills=max_quarantine_skills if max_quarantine_skills is not None else 10,
@@ -271,10 +285,11 @@ class EnvironmentManager:
             "dream_mode, dream_max_llm_calls, dream_min_sessions, "
             "reflection_mode, reflection_max_tokens, "
             "skill_review_enabled, skill_injection_enabled, "
+            "skill_injection_mode, skill_review_strict, skill_review_extra_criteria, "
             "skill_nudge_interval, max_active_skills, "
             "max_quarantine_skills, "
             "skill_auto_promote_threshold, skill_quarantine_timeout_days) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 cfg.id,
                 cfg.symbiote_id,
@@ -307,6 +322,9 @@ class EnvironmentManager:
                 cfg.reflection_max_tokens,
                 int(cfg.skill_review_enabled),
                 int(cfg.skill_injection_enabled),
+                cfg.skill_injection_mode,
+                int(cfg.skill_review_strict),
+                cfg.skill_review_extra_criteria,
                 cfg.skill_nudge_interval,
                 cfg.max_active_skills,
                 cfg.max_quarantine_skills,
@@ -454,6 +472,31 @@ class EnvironmentManager:
             return False
         return cfg.skill_injection_enabled
 
+    def get_skill_injection_mode(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> str:
+        """Return skill_injection_mode ('full' | 'index'), or 'full' default."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return "full"
+        return cfg.skill_injection_mode
+
+    def get_skill_review_criteria(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> dict:
+        """Return host-tunable skill-review criteria for the evolver prompt.
+
+        ``{'strict': bool, 'extra': str | None}``. Both no-op by default; the
+        baseline review prompt already carries the core anti-patterns.
+        """
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return {"strict": False, "extra": None}
+        return {
+            "strict": cfg.skill_review_strict,
+            "extra": cfg.skill_review_extra_criteria,
+        }
+
     def get_long_run_config(
         self, symbiote_id: str, workspace_id: str | None = None
     ) -> dict:
@@ -561,6 +604,9 @@ class EnvironmentManager:
             reflection_max_tokens=int(row.get("reflection_max_tokens", 4000) or 4000),
             skill_review_enabled=bool(row.get("skill_review_enabled", 0)),
             skill_injection_enabled=bool(row.get("skill_injection_enabled", 0)),
+            skill_injection_mode=row.get("skill_injection_mode") or "full",
+            skill_review_strict=bool(row.get("skill_review_strict", 0)),
+            skill_review_extra_criteria=row.get("skill_review_extra_criteria"),
             skill_nudge_interval=int(row.get("skill_nudge_interval", 10) or 10),
             max_active_skills=int(row.get("max_active_skills", 20) or 20),
             max_quarantine_skills=int(row.get("max_quarantine_skills", 10) or 10),

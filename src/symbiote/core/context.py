@@ -369,12 +369,18 @@ class ContextAssembler:
         loader = self._skills_loader
         if loader is None:
             return None, [], 0
+        injection_mode = "full"
         if self._environment is not None:
             getter = getattr(
                 self._environment, "get_skill_injection_enabled", None,
             )
             if getter is None or not getter(symbiote_id):
                 return None, [], 0
+            mode_getter = getattr(
+                self._environment, "get_skill_injection_mode", None,
+            )
+            if mode_getter is not None:
+                injection_mode = mode_getter(symbiote_id) or "full"
         else:
             # No environment manager → no per-symbiote opt-in signal → off.
             return None, [], 0
@@ -388,8 +394,19 @@ class ContextAssembler:
 
         header = "<available-skills>"
         footer = "</available-skills>"
+        # In index mode, an explicit hint tells the LLM to load bodies on
+        # demand via skill_view. Counted against the budget like the wrapper.
+        index_hint = (
+            "Call skill_view(name) to read a skill's full instructions "
+            "before applying it."
+            if injection_mode == "index"
+            else ""
+        )
         # Fixed wrapper cost counts against the budget up front.
-        wrapper_tokens = self._estimate_tokens(header + "\n" + footer)
+        wrapper_text = header + "\n" + footer
+        if index_hint:
+            wrapper_text += "\n" + index_hint
+        wrapper_tokens = self._estimate_tokens(wrapper_text)
         remaining = self._budget - budget_used - wrapper_tokens
         if remaining <= 0:
             return None, [], 0
@@ -418,6 +435,8 @@ class ContextAssembler:
             return None, [], 0
 
         lines.append(footer)
+        if index_hint:
+            lines.append(index_hint)
         summary = "\n".join(lines)
         return summary, injected, wrapper_tokens + body_tokens
 

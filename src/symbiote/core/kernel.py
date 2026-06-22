@@ -601,10 +601,15 @@ class SymbioteKernel:
         if setter is not None:
             setter(self._skills_loader)
 
-        # Always register the tool — but it stays unauthorized for each
+        # Always register the tools — but they stay unauthorized for each
         # symbiote until the host explicitly opts in via
-        # `kernel.environment.configure(tools=[..., 'skill_manage'])`.
+        # `kernel.environment.configure(tools=[..., 'skill_manage'])` /
+        # `[..., 'skill_view']`. skill_view (read-only) pairs with
+        # skill_injection_mode='index' for progressive disclosure.
         skill_tool_module.register(self._tool_gateway, self._skills_store)
+        register_view = getattr(skill_tool_module, "register_view", None)
+        if register_view is not None:
+            register_view(self._tool_gateway, self._skills_loader)
 
     def _background_review_for(self, symbiote_id: str) -> BackgroundReviewEngine | None:
         """Return the engine used for ``skill_review_enabled`` symbiotes.
@@ -650,6 +655,7 @@ class SymbioteKernel:
                     max_active_skills=cfg.max_active_skills,
                     max_quarantine_skills=cfg.max_quarantine_skills,
                     storage=self._storage,
+                    environment=self._environment,
                 )
         return self._background_review
 

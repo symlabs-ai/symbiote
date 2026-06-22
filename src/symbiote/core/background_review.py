@@ -48,7 +48,11 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from symbiote.core._review_prompts import SKILL_REVIEW_PROMPT, render_prompt
+from symbiote.core._review_prompts import (
+    SKILL_REVIEW_PROMPT,
+    build_skill_review_prompt,
+    render_prompt,
+)
 from symbiote.core.provenance import (
     BACKGROUND_REVIEW,
     reset_current_write_origin,
@@ -94,6 +98,7 @@ class BackgroundReviewEngine:
         max_quarantine_skills: int = 10,
         max_chars: int = _DEFAULT_MAX_CHARS,
         storage: StoragePort | None = None,
+        environment: object | None = None,
     ) -> None:
         self._llm = llm
         self._messages = messages
@@ -102,6 +107,10 @@ class BackgroundReviewEngine:
         self._max_active_skills = max_active_skills
         self._max_quarantine_skills = max_quarantine_skills
         self._max_chars = max_chars
+        # S5 — optional EnvironmentManager. When set, the per-symbiote skill
+        # review criteria (strict mode + extra criteria) are resolved per run
+        # and folded into the evolver prompt. None → baseline prompt.
+        self._environment = environment
         # Sprint 5 — optional audit sink. When provided, every spawn writes
         # a row to ``skill_review_audit`` describing the run (ok/applied/
         # skipped/ops). None disables audit silently — used in tests that
@@ -211,8 +220,9 @@ class BackgroundReviewEngine:
                 result["error"] = "no messages"
                 return result
 
+            template = self._resolve_review_template(symbiote_id)
             prompt = render_prompt(
-                SKILL_REVIEW_PROMPT,
+                template,
                 messages=self._format_messages(messages),
                 existing_skills=self._format_existing_skills(),
             )
@@ -294,6 +304,27 @@ class BackgroundReviewEngine:
             total += len(line)
         lines.reverse()
         return "\n".join(lines)
+
+    def _resolve_review_template(self, symbiote_id: str) -> str:
+        """Pick the review prompt template, applying per-symbiote criteria (S5).
+
+        Falls back to the baseline ``SKILL_REVIEW_PROMPT`` when no environment
+        manager is wired or the symbiote has no criteria set. Never raises —
+        a criteria lookup failure must not break the review.
+        """
+        if self._environment is None:
+            return SKILL_REVIEW_PROMPT
+        getter = getattr(self._environment, "get_skill_review_criteria", None)
+        if getter is None:
+            return SKILL_REVIEW_PROMPT
+        try:
+            crit = getter(symbiote_id) or {}
+        except Exception:
+            return SKILL_REVIEW_PROMPT
+        return build_skill_review_prompt(
+            strict=bool(crit.get("strict", False)),
+            extra_criteria=crit.get("extra"),
+        )
 
     def _format_existing_skills(self) -> str:
         """List active+quarantine skills so the LLM can pick PATCH targets.

@@ -20,6 +20,7 @@ from typing import Any
 
 from symbiote.environment.descriptors import ToolDescriptor
 from symbiote.environment.tools import ToolGateway
+from symbiote.skills import usage
 from symbiote.skills.store import (
     SkillError,
     SkillExistsError,
@@ -33,6 +34,21 @@ _log = logging.getLogger(__name__)
 
 
 SKILL_MANAGE_TOOL_ID = "skill_manage"
+SKILL_VIEW_TOOL_ID = "skill_view"
+
+_SKILL_VIEW_PARAMETERS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": (
+                "Name of the skill to load, exactly as listed in the "
+                "<available-skills> index in your system prompt."
+            ),
+        },
+    },
+    "required": ["name"],
+}
 
 _PARAMETERS_SCHEMA = {
     "type": "object",
@@ -169,6 +185,59 @@ def make_handler(store: SkillsStore):
     return _handler
 
 
+def make_view_handler(loader: Any):
+    """Build a ToolGateway handler that loads a skill body by name.
+
+    Bound to a ``SkillsLoader``. Returns the full SKILL.md body (frontmatter
+    stripped) for ACTIVE skills only — quarantine/archived are refused so the
+    progressive-disclosure surface matches the <available-skills> index, which
+    also lists active skills only. ``loader.get_skill`` is used so loading also
+    bumps usage telemetry / auto-promotion exactly as a real recall would.
+    """
+
+    def _handler(params: dict) -> str:
+        name = params.get("name", "")
+        if not name:
+            return json.dumps(
+                {"success": False, "name": "", "error": "name is required."},
+                ensure_ascii=False,
+            )
+        get_skill = getattr(loader, "get_skill", None)
+        skill = get_skill(name) if get_skill is not None else None
+        if skill is None:
+            return json.dumps(
+                {
+                    "success": False, "name": name,
+                    "error": f"Skill {name!r} not found.", "kind": "not_found",
+                },
+                ensure_ascii=False,
+            )
+        status = getattr(skill, "status", usage.STATUS_ACTIVE)
+        if status != usage.STATUS_ACTIVE:
+            return json.dumps(
+                {
+                    "success": False, "name": name, "status": status,
+                    "error": (
+                        f"Skill {name!r} is {status}, not active; it is not "
+                        f"available for use."
+                    ),
+                    "kind": "not_active",
+                },
+                ensure_ascii=False,
+            )
+        return json.dumps(
+            {
+                "success": True,
+                "name": name,
+                "description": getattr(skill, "description", "") or "",
+                "content": getattr(skill, "content", "") or "",
+            },
+            ensure_ascii=False,
+        )
+
+    return _handler
+
+
 def register(gateway: ToolGateway, store: SkillsStore) -> None:
     """Register skill_manage on a ToolGateway.
 
@@ -194,8 +263,36 @@ def register(gateway: ToolGateway, store: SkillsStore) -> None:
     gateway.register_descriptor(descriptor, make_handler(store))
 
 
+def register_view(gateway: ToolGateway, loader: Any) -> None:
+    """Register skill_view (read-only skill loader) on a ToolGateway.
+
+    Registered but NOT auto-authorized. Hosts opt in per-symbiote via
+    ``kernel.environment.configure(tools=[..., 'skill_view'])`` — typically
+    paired with ``skill_injection_mode='index'`` so the LLM has a way to load
+    the full body of a skill it sees in the <available-skills> index.
+    Read-only → ``risk_level='low'``.
+    """
+    descriptor = ToolDescriptor(
+        tool_id=SKILL_VIEW_TOOL_ID,
+        name="View Skill",
+        description=(
+            "Load the full instructions of a skill by name. The system prompt "
+            "lists available skills as a one-line index (name + description); "
+            "call this to read a skill's complete body BEFORE applying it. "
+            "Only active skills can be viewed."
+        ),
+        parameters=_SKILL_VIEW_PARAMETERS_SCHEMA,
+        tags=["skills"],
+        risk_level="low",
+    )
+    gateway.register_descriptor(descriptor, make_view_handler(loader))
+
+
 __all__ = [
     "SKILL_MANAGE_TOOL_ID",
+    "SKILL_VIEW_TOOL_ID",
     "make_handler",
+    "make_view_handler",
     "register",
+    "register_view",
 ]
