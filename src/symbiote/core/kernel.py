@@ -257,6 +257,25 @@ class SymbioteKernel:
     def environment(self) -> EnvironmentManager:
         return self._environment
 
+    @property
+    def skills_loader(self) -> SkillsLoader | None:
+        """Read side of the skill library (list/inspect skills).
+
+        ``None`` when skills wiring is disabled (no skills root on disk and
+        none configured). Stable handle so hosts building a skills UI don't
+        reach into ``_skills_loader``.
+        """
+        return self._skills_loader
+
+    @property
+    def skills_store(self) -> SkillsStore | None:
+        """Write side of the skill library (edit/patch/delete skills).
+
+        ``None`` when skills wiring is disabled. Stable handle so hosts don't
+        reach into ``_skills_store``.
+        """
+        return self._skills_store
+
     # ── Public API — thin delegation ──────────────────────────────────────
 
     def create_symbiote(
@@ -572,6 +591,15 @@ class SymbioteKernel:
                 # just renamed.
                 loader_roots.append(r.parent)
         self._skills_loader = SkillsLoader(*loader_roots)
+
+        # Wire the loader into the ContextAssembler so active skills can be
+        # injected into the system prompt — but ONLY for symbiotes that opt in
+        # via environment.configure(skill_injection_enabled=True). The
+        # assembler consults get_skill_injection_enabled() per turn, so merely
+        # attaching the loader does not change behaviour for anyone.
+        setter = getattr(self._context_assembler, "set_skills_loader", None)
+        if setter is not None:
+            setter(self._skills_loader)
 
         # Always register the tool — but it stays unauthorized for each
         # symbiote until the host explicitly opts in via

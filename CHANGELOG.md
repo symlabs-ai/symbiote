@@ -5,6 +5,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.6.15] - 2026-06-22
+
+- feat(skills): injeção nativa de skills aprendidas no system prompt do `ChatRunner` — **opt-in, retrocompatível**. Antes o kernel aprendia skills mas o chat embarcado nunca as usava: `_build_system` não tinha `<available-skills>`, o `ChatRunner` era criado sem `SkillsLoader`, o `AssembledContext` não tinha campo de skills e `build_summary()` nunca era chamado no caminho de mensagem. Agora, quando ligado, as skills **ativas** (status=`active`; quarantine/archived nunca entram) viram um bloco `<available-skills>` no system prompt.
+  - **Opt-in por-symbiote** via `EnvironmentConfig.skill_injection_enabled` (default `False`) — consistente com `skill_review_enabled`/`context_mode`/etc. Ligar num symbiote não afeta outro. Liga-se com `kernel.environment.configure(symbiote_id, skill_injection_enabled=True)`. Nova coluna `environment_configs.skill_injection_enabled` (migração idempotente `ADD COLUMN ... DEFAULT 0`; linhas pré-migração lêem `False`).
+  - **Observabilidade pro host** ("custo de usar"): `AssembledContext.skills_summary: str | None` (o bloco renderizado) e `AssembledContext.injected_skills: list[InjectedSkill]` com `name`/`description`/`tokens` (estimativa chars//4 por skill). Vazios quando desligado.
+  - **Budget-aware**: as skills são adicionadas enquanto cabem em `context_budget`; o que não cabe é descartado, e `total_tokens_estimate` inclui o bloco. Summary renderizado e `injected_skills` nunca divergem.
+  - **API pública nova**: `kernel.skills_loader` / `kernel.skills_store` (properties, antes só `_skills_loader`/`_skills_store`), `EnvironmentManager.get_skill_injection_enabled(...)`, `ContextAssembler(skills_loader=...)` + `ContextAssembler.set_skills_loader(...)`. Nada na API existente quebra; default preserva 100% o comportamento anterior.
+
 ## [v0.6.14] - 2026-06-11
 
 - feat(chat): teto de truncamento de tool result (Layer 1 microcompaction) agora é configurável — `KernelConfig.tool_result_max_chars` (default 2000, comportamento inalterado) plumba até `ChatRunner(tool_result_max_chars=...)`. Antes era constante de módulo: payloads JSON maiores (ex.: árvore de tarefas completa) eram cortados em 2000 chars e o LLM tratava o rabo perdido como inexistente — respondia "não encontrei" para dados que a tool DEVOLVEU (bug observado no ChopChop/Vaigo). `_microcompact_tool_result`/`_format_tool_results` viraram métodos de instância.

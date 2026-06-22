@@ -20,6 +20,19 @@ if TYPE_CHECKING:
 # ── Models ────────────────────────────────────────────────────────────────────
 
 
+class InjectedSkill(BaseModel):
+    """One active skill injected into the system prompt this turn.
+
+    ``tokens`` is the rough chars//4 estimate of this skill's contribution
+    to the ``<available-skills>`` block (its ``<skill ...>`` line), letting
+    the host attribute "cost of use" per skill without re-tokenizing.
+    """
+
+    name: str
+    description: str = ""
+    tokens: int = 0
+
+
 class AssembledContext(BaseModel):
     symbiote_id: str
     session_id: str
@@ -49,6 +62,13 @@ class AssembledContext(BaseModel):
     generation_settings: dict | None = None  # from GenerationSettings.to_config_dict()
     user_input: str
     total_tokens_estimate: int = 0
+    # Skill injection (opt-in per-symbiote via skill_injection_enabled).
+    # ``skills_summary`` is the ``<available-skills>`` block rendered into the
+    # system prompt by the runner; ``injected_skills`` is the per-skill
+    # breakdown for host observability ("cost of use"). Both empty when the
+    # feature is off (the default) — preserving legacy behaviour.
+    skills_summary: str | None = None
+    injected_skills: list[InjectedSkill] = Field(default_factory=list)
 
 
 class ContextInspection(BaseModel):
@@ -81,6 +101,7 @@ class ContextAssembler:
         environment: EnvironmentManager | None = None,
         semantic_llm: LLMPort | None = None,
         harness_versions: object | None = None,
+        skills_loader: object | None = None,
     ) -> None:
         self._identity = identity
         self._memory = memory
@@ -90,6 +111,18 @@ class ContextAssembler:
         self._environment = environment
         self._semantic_llm = semantic_llm
         self._harness_versions = harness_versions
+        # SkillsLoader (or None). Wired by the kernel after skills wiring is
+        # set up. When present AND the symbiote has skill_injection_enabled,
+        # active skills are injected into the assembled context.
+        self._skills_loader = skills_loader
+
+    def set_skills_loader(self, loader: object | None) -> None:
+        """Attach (or replace) the SkillsLoader post-construction.
+
+        The kernel builds the assembler before skills wiring, then calls this
+        once the loader exists. Idempotent; pass None to disable injection.
+        """
+        self._skills_loader = loader
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -255,6 +288,16 @@ class ContextAssembler:
                 stag_override = get_active(symbiote_id, "injection_stagnation", tool_mode)
                 cb_override = get_active(symbiote_id, "injection_circuit_breaker", tool_mode)
 
+        # 9. Skill injection (opt-in, per-symbiote). Off by default — empty
+        #    summary / list, total unchanged. Budget-aware: skills are added
+        #    only while they fit the remaining context budget; the summary is
+        #    trimmed to exactly the skills that fit so the rendered prompt and
+        #    the reported ``injected_skills`` never disagree.
+        skills_summary, injected_skills, skill_tokens = self._assemble_skills(
+            symbiote_id, budget_used=total,
+        )
+        total += skill_tokens
+
         return AssembledContext(
             symbiote_id=symbiote_id,
             session_id=session_id,
@@ -282,6 +325,8 @@ class ContextAssembler:
             user_input=user_input,
             total_tokens_estimate=total,
             generation_settings=gen_settings,
+            skills_summary=skills_summary,
+            injected_skills=injected_skills,
         )
 
     def inspect(self, context: AssembledContext) -> ContextInspection:
@@ -295,6 +340,86 @@ class ContextAssembler:
         )
 
     # ── internal helpers ──────────────────────────────────────────────────
+
+    def _assemble_skills(
+        self,
+        symbiote_id: str,
+        *,
+        budget_used: int,
+    ) -> tuple[str | None, list[InjectedSkill], int]:
+        """Build the ``<available-skills>`` block for the system prompt.
+
+        Returns ``(summary, injected_skills, tokens)``:
+        * ``summary`` — the XML block to render, or ``None`` when disabled /
+          no active skills fit.
+        * ``injected_skills`` — per-skill breakdown (name, description,
+          estimated tokens) for host observability.
+        * ``tokens`` — total estimated tokens the block adds.
+
+        Opt-in: returns ``(None, [], 0)`` unless a SkillsLoader is wired AND
+        the symbiote has ``skill_injection_enabled``. Only ``active`` skills
+        are considered (``listable_skills`` excludes quarantine/archived).
+
+        Budget-aware: skills are added one at a time (loader order) while the
+        running total stays within ``self._budget``; once a skill would
+        overflow, it and the rest are dropped. The header/footer cost is
+        accounted for so an enabled-but-no-room state injects nothing rather
+        than overflowing.
+        """
+        loader = self._skills_loader
+        if loader is None:
+            return None, [], 0
+        if self._environment is not None:
+            getter = getattr(
+                self._environment, "get_skill_injection_enabled", None,
+            )
+            if getter is None or not getter(symbiote_id):
+                return None, [], 0
+        else:
+            # No environment manager → no per-symbiote opt-in signal → off.
+            return None, [], 0
+
+        listable_fn = getattr(loader, "listable_skills", None)
+        if listable_fn is None:
+            return None, [], 0
+        skills = listable_fn()
+        if not skills:
+            return None, [], 0
+
+        header = "<available-skills>"
+        footer = "</available-skills>"
+        # Fixed wrapper cost counts against the budget up front.
+        wrapper_tokens = self._estimate_tokens(header + "\n" + footer)
+        remaining = self._budget - budget_used - wrapper_tokens
+        if remaining <= 0:
+            return None, [], 0
+
+        lines: list[str] = [header]
+        injected: list[InjectedSkill] = []
+        body_tokens = 0
+        for skill in skills:
+            name = getattr(skill, "name", "")
+            description = getattr(skill, "description", "") or ""
+            always = bool(getattr(skill, "always", False))
+            always_attr = ' always="true"' if always else ""
+            line = f'  <skill name="{name}"{always_attr}>{description}</skill>'
+            line_tokens = self._estimate_tokens(line)
+            if body_tokens + line_tokens > remaining:
+                break  # least-recently-discovered skills drop first
+            lines.append(line)
+            body_tokens += line_tokens
+            injected.append(
+                InjectedSkill(
+                    name=name, description=description, tokens=line_tokens,
+                )
+            )
+
+        if not injected:
+            return None, [], 0
+
+        lines.append(footer)
+        summary = "\n".join(lines)
+        return summary, injected, wrapper_tokens + body_tokens
 
     def _resolve_auto_mode(
         self,

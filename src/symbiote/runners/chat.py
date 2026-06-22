@@ -1280,6 +1280,16 @@ class ChatRunner:
                 "Use them when you need historical context or domain knowledge."
             )
 
+        # Learned skills (opt-in via skill_injection_enabled). The assembler
+        # has already budget-trimmed the summary; the runner only renders it.
+        if context.skills_summary:
+            parts.append("## Skills")
+            parts.append(
+                "Skills you have available. Read a skill's full instructions "
+                "by name before applying it."
+            )
+            parts.append(context.skills_summary)
+
         if not parts:
             return "You are a helpful assistant."
 

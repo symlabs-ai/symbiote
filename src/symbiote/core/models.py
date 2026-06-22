@@ -195,6 +195,12 @@ class EnvironmentConfig(BaseModel):
     # creating/patching skills. Requires _evolver_llm (cost guard); fails fast
     # at configure() time when enabled without one.
     skill_review_enabled: bool = False
+    # When True, ACTIVE skills (status='active', never quarantine) are injected
+    # into the ChatRunner system prompt as an <available-skills> summary so the
+    # LLM can use what the kernel has learned. Default False keeps the legacy
+    # behaviour (skills reachable only on-demand by name, never auto-injected).
+    # Per-symbiote so one symbiote opting in never affects another.
+    skill_injection_enabled: bool = False
     skill_nudge_interval: int = Field(default=10, ge=1, le=100)
     # Caps on how many agent-created skills the library may hold. The two
     # buckets exist because conflating them deadlocks the loop: a library

@@ -54,6 +54,7 @@ class EnvironmentManager:
         reflection_max_tokens: int | None = None,
         # Skill self-improvement fields (Sprint 4)
         skill_review_enabled: bool | None = None,
+        skill_injection_enabled: bool | None = None,
         skill_nudge_interval: int | None = None,
         max_active_skills: int | None = None,
         max_quarantine_skills: int | None = None,
@@ -160,6 +161,7 @@ class EnvironmentManager:
                 reflection_mode=reflection_mode if reflection_mode is not None else existing.reflection_mode,
                 reflection_max_tokens=reflection_max_tokens if reflection_max_tokens is not None else existing.reflection_max_tokens,
                 skill_review_enabled=skill_review_enabled if skill_review_enabled is not None else existing.skill_review_enabled,
+                skill_injection_enabled=skill_injection_enabled if skill_injection_enabled is not None else existing.skill_injection_enabled,
                 skill_nudge_interval=skill_nudge_interval if skill_nudge_interval is not None else existing.skill_nudge_interval,
                 max_active_skills=max_active_skills if max_active_skills is not None else existing.max_active_skills,
                 max_quarantine_skills=max_quarantine_skills if max_quarantine_skills is not None else existing.max_quarantine_skills,
@@ -177,7 +179,8 @@ class EnvironmentManager:
                 "context_strategy = ?, max_blocks = ?, "
                 "dream_mode = ?, dream_max_llm_calls = ?, dream_min_sessions = ?, "
                 "reflection_mode = ?, reflection_max_tokens = ?, "
-                "skill_review_enabled = ?, skill_nudge_interval = ?, max_active_skills = ?, "
+                "skill_review_enabled = ?, skill_injection_enabled = ?, "
+                "skill_nudge_interval = ?, max_active_skills = ?, "
                 "max_quarantine_skills = ?, "
                 "skill_auto_promote_threshold = ?, skill_quarantine_timeout_days = ? "
                 "WHERE id = ?",
@@ -209,6 +212,7 @@ class EnvironmentManager:
                     cfg.reflection_mode,
                     cfg.reflection_max_tokens,
                     int(cfg.skill_review_enabled),
+                    int(cfg.skill_injection_enabled),
                     cfg.skill_nudge_interval,
                     cfg.max_active_skills,
                     cfg.max_quarantine_skills,
@@ -250,6 +254,7 @@ class EnvironmentManager:
             reflection_mode=reflection_mode or "keyword",
             reflection_max_tokens=reflection_max_tokens if reflection_max_tokens is not None else 4000,
             skill_review_enabled=skill_review_enabled if skill_review_enabled is not None else False,
+            skill_injection_enabled=skill_injection_enabled if skill_injection_enabled is not None else False,
             skill_nudge_interval=skill_nudge_interval if skill_nudge_interval is not None else 10,
             max_active_skills=max_active_skills if max_active_skills is not None else 20,
             max_quarantine_skills=max_quarantine_skills if max_quarantine_skills is not None else 10,
@@ -265,10 +270,11 @@ class EnvironmentManager:
             "planner_prompt, evaluator_prompt, evaluator_criteria_json, context_strategy, max_blocks, "
             "dream_mode, dream_max_llm_calls, dream_min_sessions, "
             "reflection_mode, reflection_max_tokens, "
-            "skill_review_enabled, skill_nudge_interval, max_active_skills, "
+            "skill_review_enabled, skill_injection_enabled, "
+            "skill_nudge_interval, max_active_skills, "
             "max_quarantine_skills, "
             "skill_auto_promote_threshold, skill_quarantine_timeout_days) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 cfg.id,
                 cfg.symbiote_id,
@@ -300,6 +306,7 @@ class EnvironmentManager:
                 cfg.reflection_mode,
                 cfg.reflection_max_tokens,
                 int(cfg.skill_review_enabled),
+                int(cfg.skill_injection_enabled),
                 cfg.skill_nudge_interval,
                 cfg.max_active_skills,
                 cfg.max_quarantine_skills,
@@ -434,6 +441,19 @@ class EnvironmentManager:
             return "packed"
         return cfg.context_mode
 
+    def get_skill_injection_enabled(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> bool:
+        """Return skill_injection_enabled from config, or False if no config.
+
+        When True, ContextAssembler injects active skills into the system
+        prompt. Default False preserves the legacy no-injection behaviour.
+        """
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return False
+        return cfg.skill_injection_enabled
+
     def get_long_run_config(
         self, symbiote_id: str, workspace_id: str | None = None
     ) -> dict:
@@ -540,6 +560,7 @@ class EnvironmentManager:
             reflection_mode=row.get("reflection_mode") or "keyword",
             reflection_max_tokens=int(row.get("reflection_max_tokens", 4000) or 4000),
             skill_review_enabled=bool(row.get("skill_review_enabled", 0)),
+            skill_injection_enabled=bool(row.get("skill_injection_enabled", 0)),
             skill_nudge_interval=int(row.get("skill_nudge_interval", 10) or 10),
             max_active_skills=int(row.get("max_active_skills", 20) or 20),
             max_quarantine_skills=int(row.get("max_quarantine_skills", 10) or 10),
