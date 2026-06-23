@@ -111,18 +111,39 @@ class ContextAssembler:
         self._environment = environment
         self._semantic_llm = semantic_llm
         self._harness_versions = harness_versions
-        # SkillsLoader (or None). Wired by the kernel after skills wiring is
-        # set up. When present AND the symbiote has skill_injection_enabled,
-        # active skills are injected into the assembled context.
+        # SkillsLoader (or None) for GLOBAL skill scope. Wired by the kernel
+        # after skills wiring. When present AND the symbiote has
+        # skill_injection_enabled, active skills are injected.
         self._skills_loader = skills_loader
+        # Optional resolver for PER-SYMBIOTE scope: callable(symbiote_id) ->
+        # SkillsLoader | None. When set it takes precedence over the single
+        # loader so each turn injects only the active symbiote's skills.
+        self._skills_loader_resolver = None
 
     def set_skills_loader(self, loader: object | None) -> None:
-        """Attach (or replace) the SkillsLoader post-construction.
+        """Attach (or replace) the single (global) SkillsLoader.
 
         The kernel builds the assembler before skills wiring, then calls this
         once the loader exists. Idempotent; pass None to disable injection.
         """
         self._skills_loader = loader
+
+    def set_skills_loader_resolver(self, resolver) -> None:
+        """Attach a per-symbiote loader resolver (per_symbiote scope).
+
+        ``resolver(symbiote_id) -> SkillsLoader | None``. Takes precedence over
+        the single loader. Pass None to clear.
+        """
+        self._skills_loader_resolver = resolver
+
+    def _loader_for(self, symbiote_id: str):
+        """Resolve the SkillsLoader to use for this symbiote (scope-aware)."""
+        if self._skills_loader_resolver is not None:
+            try:
+                return self._skills_loader_resolver(symbiote_id)
+            except Exception:
+                return None
+        return self._skills_loader
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -366,7 +387,7 @@ class ContextAssembler:
         accounted for so an enabled-but-no-room state injects nothing rather
         than overflowing.
         """
-        loader = self._skills_loader
+        loader = self._loader_for(symbiote_id)
         if loader is None:
             return None, [], 0
         injection_mode = "full"

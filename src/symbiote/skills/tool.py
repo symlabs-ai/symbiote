@@ -119,12 +119,31 @@ def _to_json(success: bool, action: str, name: str, **extra: Any) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-def make_handler(store: SkillsStore):
-    """Build a ToolGateway handler bound to a specific SkillsStore."""
+def make_handler(store: SkillsStore | None = None, *, store_provider=None):
+    """Build a ToolGateway handler for skill_manage.
+
+    Pass ``store`` for a fixed SkillsStore (global mode) OR ``store_provider``
+    (a zero-arg callable returning the SkillsStore for the active symbiote) for
+    per-symbiote mode. The provider is resolved on every call, so it reads the
+    active-symbiote ContextVar set for the current turn.
+    """
+    if store_provider is None:
+        if store is None:
+            raise ValueError("make_handler needs either store or store_provider.")
+        _fixed = store
+
+        def store_provider():  # noqa: ANN202 — local shim
+            return _fixed
 
     def _handler(params: dict) -> str:
         action = params.get("action")
         name = params.get("name", "")
+        store = store_provider()
+        if store is None:
+            return _to_json(
+                False, str(action or ""), name,
+                error="No skill store for the active symbiote.", kind="no_scope",
+            )
         try:
             if action == "create":
                 result = store.create(name=name, content=params.get("content", ""))
@@ -185,21 +204,40 @@ def make_handler(store: SkillsStore):
     return _handler
 
 
-def make_view_handler(loader: Any):
+def make_view_handler(loader: Any = None, *, loader_provider=None):
     """Build a ToolGateway handler that loads a skill body by name.
 
-    Bound to a ``SkillsLoader``. Returns the full SKILL.md body (frontmatter
+    Pass ``loader`` for a fixed ``SkillsLoader`` (global mode) OR
+    ``loader_provider`` (zero-arg callable returning the loader for the active
+    symbiote) for per-symbiote mode. Returns the full SKILL.md body (frontmatter
     stripped) for ACTIVE skills only — quarantine/archived are refused so the
     progressive-disclosure surface matches the <available-skills> index, which
     also lists active skills only. ``loader.get_skill`` is used so loading also
     bumps usage telemetry / auto-promotion exactly as a real recall would.
     """
+    if loader_provider is None:
+        if loader is None:
+            raise ValueError("make_view_handler needs loader or loader_provider.")
+        _fixed = loader
+
+        def loader_provider():  # noqa: ANN202 — local shim
+            return _fixed
 
     def _handler(params: dict) -> str:
         name = params.get("name", "")
         if not name:
             return json.dumps(
                 {"success": False, "name": "", "error": "name is required."},
+                ensure_ascii=False,
+            )
+        loader = loader_provider()
+        if loader is None:
+            return json.dumps(
+                {
+                    "success": False, "name": name,
+                    "error": "No skill loader for the active symbiote.",
+                    "kind": "no_scope",
+                },
                 ensure_ascii=False,
             )
         get_skill = getattr(loader, "get_skill", None)
@@ -238,14 +276,8 @@ def make_view_handler(loader: Any):
     return _handler
 
 
-def register(gateway: ToolGateway, store: SkillsStore) -> None:
-    """Register skill_manage on a ToolGateway.
-
-    The tool is registered (so the gateway can dispatch it) but NOT
-    auto-authorized for any symbiote. Hosts opt in symbiote-by-symbiote
-    via ``kernel.environment.configure(tools=[..., 'skill_manage'])``.
-    """
-    descriptor = ToolDescriptor(
+def _manage_descriptor() -> ToolDescriptor:
+    return ToolDescriptor(
         tool_id=SKILL_MANAGE_TOOL_ID,
         name="Manage Skills",
         description=(
@@ -260,19 +292,10 @@ def register(gateway: ToolGateway, store: SkillsStore) -> None:
         tags=["skills", "self_improvement"],
         risk_level="medium",
     )
-    gateway.register_descriptor(descriptor, make_handler(store))
 
 
-def register_view(gateway: ToolGateway, loader: Any) -> None:
-    """Register skill_view (read-only skill loader) on a ToolGateway.
-
-    Registered but NOT auto-authorized. Hosts opt in per-symbiote via
-    ``kernel.environment.configure(tools=[..., 'skill_view'])`` — typically
-    paired with ``skill_injection_mode='index'`` so the LLM has a way to load
-    the full body of a skill it sees in the <available-skills> index.
-    Read-only → ``risk_level='low'``.
-    """
-    descriptor = ToolDescriptor(
+def _view_descriptor() -> ToolDescriptor:
+    return ToolDescriptor(
         tool_id=SKILL_VIEW_TOOL_ID,
         name="View Skill",
         description=(
@@ -285,7 +308,50 @@ def register_view(gateway: ToolGateway, loader: Any) -> None:
         tags=["skills"],
         risk_level="low",
     )
-    gateway.register_descriptor(descriptor, make_view_handler(loader))
+
+
+def register(gateway: ToolGateway, store: SkillsStore) -> None:
+    """Register skill_manage bound to a fixed SkillsStore (global mode).
+
+    The tool is registered (so the gateway can dispatch it) but NOT
+    auto-authorized for any symbiote. Hosts opt in symbiote-by-symbiote
+    via ``kernel.environment.configure(tools=[..., 'skill_manage'])``.
+    """
+    gateway.register_descriptor(_manage_descriptor(), make_handler(store))
+
+
+def register_resolved(gateway: ToolGateway, store_provider) -> None:
+    """Register skill_manage resolving the SkillsStore per call (per-symbiote).
+
+    ``store_provider`` is a zero-arg callable returning the store for the
+    active symbiote (typically reading the active-symbiote ContextVar).
+    """
+    gateway.register_descriptor(
+        _manage_descriptor(), make_handler(store_provider=store_provider)
+    )
+
+
+def register_view(gateway: ToolGateway, loader: Any) -> None:
+    """Register skill_view bound to a fixed SkillsLoader (global mode).
+
+    Registered but NOT auto-authorized. Hosts opt in per-symbiote via
+    ``kernel.environment.configure(tools=[..., 'skill_view'])`` — typically
+    paired with ``skill_injection_mode='index'`` so the LLM has a way to load
+    the full body of a skill it sees in the <available-skills> index.
+    Read-only → ``risk_level='low'``.
+    """
+    gateway.register_descriptor(_view_descriptor(), make_view_handler(loader))
+
+
+def register_view_resolved(gateway: ToolGateway, loader_provider) -> None:
+    """Register skill_view resolving the SkillsLoader per call (per-symbiote).
+
+    ``loader_provider`` is a zero-arg callable returning the loader for the
+    active symbiote.
+    """
+    gateway.register_descriptor(
+        _view_descriptor(), make_view_handler(loader_provider=loader_provider)
+    )
 
 
 __all__ = [
@@ -294,5 +360,7 @@ __all__ = [
     "make_handler",
     "make_view_handler",
     "register",
+    "register_resolved",
     "register_view",
+    "register_view_resolved",
 ]

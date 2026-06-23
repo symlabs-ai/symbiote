@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 
 import yaml
 from pydantic import BaseModel, field_validator
@@ -33,6 +33,17 @@ class KernelConfig(BaseModel):
     skills_root: Path | None = None
     skills_extra_roots: list[Path] = []
     skills_protected_roots: list[Path] = []
+    # How the skill library is partitioned across symbiotes:
+    #   "global"       — ONE SkillsStore/SkillsLoader for the whole kernel,
+    #                    rooted at skills_root (legacy/default behaviour). All
+    #                    symbiotes share one pool. Correct for single-symbiote
+    #                    hosts (CLI) and trusted multi-symbiote setups.
+    #   "per_symbiote" — each symbiote gets its OWN read-write root at
+    #                    {skills_root}/<symbiote_id>/skills/... plus the shared
+    #                    read-only catalogue in skills_protected_roots. No
+    #                    symbiote can see or write another's skills. Required
+    #                    for multi-tenant hosts (one kernel, N users). Opt-in.
+    skill_scope: Literal["global", "per_symbiote"] = "global"
     # Host-controlled ceiling for per-symbiote ``max_tool_iterations``. The
     # embedding application owns this policy; ``EnvironmentManager.configure()``
     # rejects per-symbiote values above it. Default 50 preserves the historical

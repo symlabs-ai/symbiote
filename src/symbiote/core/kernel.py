@@ -39,6 +39,12 @@ from symbiote.runners.process import ProcessRunner
 from symbiote.runners.subagent import SubagentManager
 from symbiote.skills import tool as skill_tool_module
 from symbiote.skills.loader import SkillsLoader
+from symbiote.skills.scope import (
+    reset_active_symbiote as _reset_active_symbiote,
+)
+from symbiote.skills.scope import (
+    set_active_symbiote as _set_active_symbiote,
+)
 from symbiote.skills.store import SkillsStore
 from symbiote.workspace.manager import WorkspaceManager
 
@@ -149,6 +155,14 @@ class SymbioteKernel:
         # on disk still works (you_news pattern: host owns the layout).
         self._skills_store: SkillsStore | None = None
         self._skills_loader: SkillsLoader | None = None
+        # Per-symbiote scope (Option A). Non-None only when
+        # config.skill_scope == "per_symbiote"; then _skills_store /
+        # _skills_loader stay None and all access goes through this manager.
+        self._skill_scope_mgr: object | None = None
+        # In per_symbiote mode the review engine is cached per-symbiote (each
+        # symbiote sees only its own store/loader). In global mode the single
+        # _background_review is reused.
+        self._background_review_by_symbiote: dict[str, BackgroundReviewEngine] = {}
         self._background_review: BackgroundReviewEngine | None = None
         # Guards the lazy construction of _background_review against the
         # race where ChatRunner (mid-session nudge) and close_session
@@ -259,21 +273,44 @@ class SymbioteKernel:
 
     @property
     def skills_loader(self) -> SkillsLoader | None:
-        """Read side of the skill library (list/inspect skills).
+        """Read side of the GLOBAL skill library (list/inspect skills).
 
-        ``None`` when skills wiring is disabled (no skills root on disk and
-        none configured). Stable handle so hosts building a skills UI don't
-        reach into ``_skills_loader``.
+        ``None`` when skills wiring is disabled OR when ``skill_scope ==
+        'per_symbiote'`` — in that mode there is no single library; use
+        ``skills_loader_for(symbiote_id)`` instead.
         """
         return self._skills_loader
 
     @property
     def skills_store(self) -> SkillsStore | None:
-        """Write side of the skill library (edit/patch/delete skills).
+        """Write side of the GLOBAL skill library (edit/patch/delete skills).
 
-        ``None`` when skills wiring is disabled. Stable handle so hosts don't
-        reach into ``_skills_store``.
+        ``None`` when skills wiring is disabled OR when ``skill_scope ==
+        'per_symbiote'`` — use ``skills_store_for(symbiote_id)`` instead.
         """
+        return self._skills_store
+
+    def skills_loader_for(self, symbiote_id: str) -> SkillsLoader | None:
+        """Read side of a SPECIFIC symbiote's skill library.
+
+        In ``per_symbiote`` scope, returns that symbiote's own loader (built
+        lazily). In ``global`` scope, returns the single shared loader (the
+        ``symbiote_id`` is ignored) so hosts can use one call path regardless
+        of scope. ``None`` when skills wiring is disabled.
+        """
+        if self._skill_scope_mgr is not None:
+            return self._skill_scope_mgr.loader_for(symbiote_id)
+        return self._skills_loader
+
+    def skills_store_for(self, symbiote_id: str) -> SkillsStore | None:
+        """Write side of a SPECIFIC symbiote's skill library.
+
+        In ``per_symbiote`` scope, returns that symbiote's own store. In
+        ``global`` scope, returns the single shared store (``symbiote_id``
+        ignored). ``None`` when skills wiring is disabled.
+        """
+        if self._skill_scope_mgr is not None:
+            return self._skill_scope_mgr.store_for(symbiote_id)
         return self._skills_store
 
     # ── Public API — thin delegation ──────────────────────────────────────
@@ -361,40 +398,47 @@ class SymbioteKernel:
             raise EntityNotFoundError("Session", session_id)
         symbiote_id = row["symbiote_id"]
 
-        # S-01: Inject previous handoff on session start (first message only)
-        extra_context = self._inject_handoff_if_resuming(
-            session_id, symbiote_id, extra_context
-        )
+        # Bind the active symbiote so per-symbiote skill tools (skill_manage /
+        # skill_view) resolve the right store/loader. The gateway's parallel
+        # tool path copies contextvars into worker threads, so this propagates.
+        _scope_token = _set_active_symbiote(symbiote_id)
+        try:
+            # S-01: Inject previous handoff on session start (first message only)
+            extra_context = self._inject_handoff_if_resuming(
+                session_id, symbiote_id, extra_context
+            )
 
-        self._sessions.add_message(session_id, "user", content)
+            self._sessions.add_message(session_id, "user", content)
 
-        response = self._capabilities.chat(
-            symbiote_id, session_id, content,
-            extra_context=extra_context,
-            llm_config=llm_config,
-        )
+            response = self._capabilities.chat(
+                symbiote_id, session_id, content,
+                extra_context=extra_context,
+                llm_config=llm_config,
+            )
 
-        if isinstance(response, dict):
-            text = response.get("text", str(response))
-        else:
-            text = response
+            if isinstance(response, dict):
+                text = response.get("text", str(response))
+            else:
+                text = response
 
-        self._sessions.add_message(session_id, "assistant", text)
+            self._sessions.add_message(session_id, "assistant", text)
 
-        # Capture loop trace from last RunResult for close_session()
-        trace = self._capabilities.last_loop_trace
-        if trace is not None:
-            self._last_trace = trace
-            self._last_trace_session = session_id
-            self._persist_trace(session_id, symbiote_id, trace)
+            # Capture loop trace from last RunResult for close_session()
+            trace = self._capabilities.last_loop_trace
+            if trace is not None:
+                self._last_trace = trace
+                self._last_trace_session = session_id
+                self._persist_trace(session_id, symbiote_id, trace)
 
-        # Capture handoff data from last RunResult for close_session()
-        handoff = self._capabilities.last_handoff_data
-        if handoff is not None:
-            self._last_handoff = handoff
-            self._last_handoff_session = session_id
+            # Capture handoff data from last RunResult for close_session()
+            handoff = self._capabilities.last_handoff_data
+            if handoff is not None:
+                self._last_handoff = handoff
+                self._last_handoff_session = session_id
 
-        return response
+            return response
+        finally:
+            _reset_active_symbiote(_scope_token)
 
     async def message_async(
         self,
@@ -431,43 +475,47 @@ class SymbioteKernel:
             raise EntityNotFoundError("Session", session_id)
         symbiote_id = row["symbiote_id"]
 
-        # S-01: Inject previous handoff on session start (first message only)
-        extra_context = self._inject_handoff_if_resuming(
-            session_id, symbiote_id, extra_context
-        )
+        _scope_token = _set_active_symbiote(symbiote_id)
+        try:
+            # S-01: Inject previous handoff on session start (first message only)
+            extra_context = self._inject_handoff_if_resuming(
+                session_id, symbiote_id, extra_context
+            )
 
-        self._sessions.add_message(session_id, "user", content)
+            self._sessions.add_message(session_id, "user", content)
 
-        response = await self._capabilities.chat_async(
-            symbiote_id,
-            session_id,
-            content,
-            extra_context=extra_context,
-            on_token=on_token,
-            llm_config=llm_config,
-        )
+            response = await self._capabilities.chat_async(
+                symbiote_id,
+                session_id,
+                content,
+                extra_context=extra_context,
+                on_token=on_token,
+                llm_config=llm_config,
+            )
 
-        if isinstance(response, dict):
-            text = response.get("text", str(response))
-        else:
-            text = response
+            if isinstance(response, dict):
+                text = response.get("text", str(response))
+            else:
+                text = response
 
-        self._sessions.add_message(session_id, "assistant", text)
+            self._sessions.add_message(session_id, "assistant", text)
 
-        # Capture loop trace from last RunResult for close_session()
-        trace = self._capabilities.last_loop_trace
-        if trace is not None:
-            self._last_trace = trace
-            self._last_trace_session = session_id
-            self._persist_trace(session_id, symbiote_id, trace)
+            # Capture loop trace from last RunResult for close_session()
+            trace = self._capabilities.last_loop_trace
+            if trace is not None:
+                self._last_trace = trace
+                self._last_trace_session = session_id
+                self._persist_trace(session_id, symbiote_id, trace)
 
-        # Capture handoff data from last RunResult for close_session()
-        handoff = self._capabilities.last_handoff_data
-        if handoff is not None:
-            self._last_handoff = handoff
-            self._last_handoff_session = session_id
+            # Capture handoff data from last RunResult for close_session()
+            handoff = self._capabilities.last_handoff_data
+            if handoff is not None:
+                self._last_handoff = handoff
+                self._last_handoff_session = session_id
 
-        return response
+            return response
+        finally:
+            _reset_active_symbiote(_scope_token)
 
     def close_session(self, session_id: str) -> Session:
         """Run reflection, compute score, persist failure memory, then close."""
@@ -548,6 +596,16 @@ class SymbioteKernel:
         # provides the distinction, so we don't need a physical subfolder.
         host_requested_skills = cfg.skills_root is not None
         agent_root = cfg.skills_root or (Path(cfg.db_path).parent / "skills")
+
+        # Per-symbiote scope (Option A): no single store/loader. Build a
+        # SkillScopeManager that lazily produces a per-symbiote store/loader
+        # rooted at {base}/<symbiote_id>/skills, plus the shared read-only
+        # catalogue (skills_protected_roots). Tools resolve the active
+        # symbiote's store/loader per call via the active-symbiote ContextVar.
+        if getattr(cfg, "skill_scope", "global") == "per_symbiote":
+            self._setup_skills_wiring_per_symbiote(agent_root, cfg)
+            return
+
         roots: list[Path] = [agent_root, *cfg.skills_extra_roots]
         protected = list(cfg.skills_protected_roots)
 
@@ -611,6 +669,58 @@ class SymbioteKernel:
         if register_view is not None:
             register_view(self._tool_gateway, self._skills_loader)
 
+    def _setup_skills_wiring_per_symbiote(self, base_root: Path, cfg) -> None:
+        """Wire skills in per-symbiote scope (Option A).
+
+        Builds a ``SkillScopeManager`` (factory + LRU cache of per-symbiote
+        store/loader) and registers ``skill_manage`` / ``skill_view`` with
+        resolver closures that read the active-symbiote ContextVar. The single
+        ``_skills_store`` / ``_skills_loader`` stay None — every access is
+        per-symbiote. The shared read-only catalogue is
+        ``skills_protected_roots`` (may be empty).
+        """
+        from symbiote.skills.scope import SkillScopeManager, get_active_symbiote
+
+        try:
+            mgr = SkillScopeManager(
+                base_root=base_root,
+                protected_roots=list(cfg.skills_protected_roots),
+                extra_roots=list(cfg.skills_extra_roots),
+            )
+        except Exception as exc:
+            if cfg.skills_root is not None:
+                raise
+            import logging
+            logging.getLogger(__name__).warning(
+                "Per-symbiote skills wiring disabled at %s (%s).", base_root, exc,
+            )
+            return
+
+        self._skill_scope_mgr = mgr
+
+        def _store_provider():
+            sid = get_active_symbiote()
+            return mgr.store_for(sid) if sid else None
+
+        def _loader_provider():
+            sid = get_active_symbiote()
+            return mgr.loader_for(sid) if sid else None
+
+        # ContextAssembler resolves the active symbiote's loader per turn.
+        setter = getattr(
+            self._context_assembler, "set_skills_loader_resolver", None,
+        )
+        if setter is not None:
+            setter(lambda symbiote_id: mgr.loader_for(symbiote_id) if symbiote_id else None)
+
+        # Tools resolve the active symbiote's store/loader per call.
+        reg_resolved = getattr(skill_tool_module, "register_resolved", None)
+        reg_view_resolved = getattr(skill_tool_module, "register_view_resolved", None)
+        if reg_resolved is not None:
+            reg_resolved(self._tool_gateway, _store_provider)
+        if reg_view_resolved is not None:
+            reg_view_resolved(self._tool_gateway, _loader_provider)
+
     def _background_review_for(self, symbiote_id: str) -> BackgroundReviewEngine | None:
         """Return the engine used for ``skill_review_enabled`` symbiotes.
 
@@ -632,13 +742,39 @@ class SymbioteKernel:
             # EnvironmentManager.configure() guards against this, but defend
             # in depth: a row inserted directly into the DB could bypass it.
             return None
-        if self._skills_store is None or self._skills_loader is None:
+
+        # Resolve the store/loader for this symbiote (scope-aware).
+        if self._skill_scope_mgr is not None:
+            store = self._skill_scope_mgr.store_for(symbiote_id)
+            loader = self._skill_scope_mgr.loader_for(symbiote_id)
+        else:
+            store = self._skills_store
+            loader = self._skills_loader
+        if store is None or loader is None:
             return None
         # Keep the loader's auto-promote threshold in sync with cfg on each
         # call. Cheap (just sets an int) and idempotent.
-        self._skills_loader.set_auto_promote_threshold(
-            cfg.skill_auto_promote_threshold
-        )
+        loader.set_auto_promote_threshold(cfg.skill_auto_promote_threshold)
+
+        # Per-symbiote scope: one engine per symbiote (each sees only its own
+        # store/loader). Global scope: a single shared engine.
+        if self._skill_scope_mgr is not None:
+            with self._background_review_lock:
+                eng = self._background_review_by_symbiote.get(symbiote_id)
+                if eng is None:
+                    eng = BackgroundReviewEngine(
+                        llm=self._evolver_llm,
+                        messages=self._message_repo,
+                        store=store,
+                        loader=loader,
+                        max_active_skills=cfg.max_active_skills,
+                        max_quarantine_skills=cfg.max_quarantine_skills,
+                        storage=self._storage,
+                        environment=self._environment,
+                    )
+                    self._background_review_by_symbiote[symbiote_id] = eng
+            return eng
+
         # Hot path: engine already built — return immediately, no lock.
         if self._background_review is not None:
             return self._background_review
@@ -746,7 +882,29 @@ class SymbioteKernel:
 
     # ── Dream Mode ─────────────────────────────────────────────────────
 
-    def _get_or_create_dream_engine(self, cfg) -> DreamEngine:
+    def _skills_loader_for(self, symbiote_id: str):
+        """Resolve the SkillsLoader for a symbiote (scope-aware).
+
+        Per-symbiote scope → the symbiote's own loader; global scope → the
+        single shared loader (may be None when skills wiring is disabled).
+        """
+        if self._skill_scope_mgr is not None:
+            return self._skill_scope_mgr.loader_for(symbiote_id)
+        return self._skills_loader
+
+    def _get_or_create_dream_engine(self, cfg, symbiote_id: str) -> DreamEngine:
+        # In per-symbiote scope the GC must walk only this symbiote's skills,
+        # so the engine is built per-symbiote (not cached as a singleton).
+        if self._skill_scope_mgr is not None:
+            return DreamEngine(
+                storage=self._storage,
+                memory=self._memory,
+                llm=self._evolver_llm or self._llm,
+                max_llm_calls=cfg.dream_max_llm_calls,
+                min_sessions=cfg.dream_min_sessions,
+                skills_loader=self._skills_loader_for(symbiote_id),
+                skill_quarantine_timeout_days=cfg.skill_quarantine_timeout_days,
+            )
         if self._dream_engine is None:
             self._dream_engine = DreamEngine(
                 storage=self._storage,
@@ -764,7 +922,7 @@ class SymbioteKernel:
         cfg = self._environment.get_config(symbiote_id)
         if cfg is None or cfg.dream_mode == "off":
             return
-        engine = self._get_or_create_dream_engine(cfg)
+        engine = self._get_or_create_dream_engine(cfg, symbiote_id)
         if engine.should_dream(symbiote_id, cfg.dream_mode):
             engine.dream_async(symbiote_id, cfg.dream_mode)
 
@@ -780,7 +938,7 @@ class SymbioteKernel:
             max_llm_calls=cfg.dream_max_llm_calls if cfg else 10,
             min_sessions=1,  # manual trigger ignores min_sessions
             dry_run=dry_run,
-            skills_loader=self._skills_loader,
+            skills_loader=self._skills_loader_for(symbiote_id),
             skill_quarantine_timeout_days=(
                 cfg.skill_quarantine_timeout_days if cfg else None
             ),
