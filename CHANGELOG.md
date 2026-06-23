@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.7.1] - 2026-06-23
+
+- fix(api): blindagem multi-tenant do escopo de skills no entrypoint HTTP. O `_resolve_config()` da API agora lê de ENV: `SYMBIOTE_SKILL_SCOPE` (`global` | `per_symbiote`), `SYMBIOTE_SKILLS_ROOT` e `SYMBIOTE_SKILLS_PROTECTED_ROOTS` (lista por `,` ou `os.pathsep`), e plumba para o `KernelConfig`. **A API agora assume `per_symbiote` por DEFAULT** (o `KernelConfig` em si segue `global` — CLI/embarcados intactos), porque a API é multi-tenant (um kernel servindo vários tenants via `/symbiotes/{id}`) e o pool global vazaria skills entre contas. Quando o scope não vem por ENV, a API loga um WARNING no boot explicando o default e como reverter.
+  - **MIGRAÇÃO:** deploys de API que dependiam de um pool GLOBAL de skills passam a não enxergá-las sob o novo default (modo M3 — arquivos antigos ficam no disco, só não são lidos). Set `SYMBIOTE_SKILL_SCOPE=global` para manter o comportamento anterior. Ver `docs/ROLLOUT.md` (seção "Escopo de skills no deploy da API").
+  - Não altera comportamento de CLI nem de hosts embarcados (ChopChop) — só o entrypoint da API HTTP.
+
 ## [v0.7.0] - 2026-06-23
 
 - feat(skills): **isolamento de skills por symbiote** (Opção A) — novo `KernelConfig.skill_scope = "global" | "per_symbiote"` (default `"global"` = comportamento atual, retrocompatível; CLI e hosts single-symbiote não mudam). Em `"per_symbiote"`, cada symbiote tem seu root read-write próprio em `{skills_root}/<symbiote_id>/skills/...` MAIS um catálogo "de fábrica" read-only compartilhado (via `skills_protected_roots`, pode começar vazio). Nenhum symbiote vê/edita/usa skill de outro — isolamento **físico** (não por filtragem). Resolve o vazamento cross-tenant no modelo 1-kernel-N-symbiotes (ChopChop/Vaigo).

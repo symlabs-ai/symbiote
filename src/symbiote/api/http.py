@@ -365,6 +365,18 @@ def _resolve_llm() -> LLMPort | None:
     return ForgeLLMAdapter(provider=provider, model=model)
 
 
+def _env_path_list(name: str) -> list[Path]:
+    """Parse an env var holding paths split by os.pathsep or ',' into Paths."""
+    raw = os.environ.get(name)
+    if not raw:
+        return []
+    # Accept both the platform separator (':' / ';') and comma.
+    parts: list[str] = []
+    for chunk in raw.split(os.pathsep):
+        parts.extend(chunk.split(","))
+    return [Path(p.strip()) for p in parts if p.strip()]
+
+
 def _resolve_config() -> KernelConfig:
     """Build the kernel config from env.
 
@@ -373,13 +385,55 @@ def _resolve_config() -> KernelConfig:
     Symbiote instance — e.g. one embedded in a host app like SymTalk —
     without having to run the server from that app's working directory.
 
+    Skill scoping (multi-tenant safety):
+      ``SYMBIOTE_SKILL_SCOPE``            "global" | "per_symbiote"
+      ``SYMBIOTE_SKILLS_ROOT``            optional skill library root
+      ``SYMBIOTE_SKILLS_PROTECTED_ROOTS`` optional shared read-only catalogue
+                                          roots (split by os.pathsep or ',')
+
+    The API is a multi-tenant entrypoint: one kernel singleton serves many
+    symbiotes/tenants via ``/symbiotes/{symbiote_id}``. With global skill
+    scope, learned skills are a shared pool → cross-tenant leakage. So the
+    API DEFAULTS to ``per_symbiote`` (unlike ``KernelConfig`` itself, which
+    stays ``global`` to preserve CLI / embedded single-symbiote behaviour).
+    When the scope was NOT set explicitly via env, we log a WARNING describing
+    the default and how to override — so an operator with a pre-existing
+    global skill pool (now invisible under per_symbiote, see ROLLOUT.md)
+    knows exactly why and how to restore it (``SYMBIOTE_SKILL_SCOPE=global``).
+
     Both ``get_adapter()`` and ``get_kernel()`` route through here so they
     always open the *same* file.
     """
+    kwargs: dict[str, Any] = {}
+
     db_path = os.environ.get("SYMBIOTE_DB_PATH")
     if db_path:
-        return KernelConfig(db_path=Path(db_path))
-    return KernelConfig()
+        kwargs["db_path"] = Path(db_path)
+
+    skills_root = os.environ.get("SYMBIOTE_SKILLS_ROOT")
+    if skills_root:
+        kwargs["skills_root"] = Path(skills_root)
+
+    protected = _env_path_list("SYMBIOTE_SKILLS_PROTECTED_ROOTS")
+    if protected:
+        kwargs["skills_protected_roots"] = protected
+
+    scope_env = os.environ.get("SYMBIOTE_SKILL_SCOPE")
+    if scope_env:
+        kwargs["skill_scope"] = scope_env.strip()
+    else:
+        # Secure default for the multi-tenant API; loud about it so a legacy
+        # global pool isn't silently hidden.
+        kwargs["skill_scope"] = "per_symbiote"
+        logging.getLogger(__name__).warning(
+            "SYMBIOTE_SKILL_SCOPE not set; defaulting the API to "
+            "'per_symbiote' so learned skills are isolated per tenant "
+            "(no cross-tenant leakage). If this deployment relied on a "
+            "shared GLOBAL skill pool, those skills are now invisible — set "
+            "SYMBIOTE_SKILL_SCOPE=global to restore (see docs/ROLLOUT.md)."
+        )
+
+    return KernelConfig(**kwargs)
 
 
 def get_adapter() -> SQLiteAdapter:

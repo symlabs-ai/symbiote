@@ -14,6 +14,22 @@ Plano operacional para ativar gradualmente o loop de self-improvement (Sprints 1
 
 ---
 
+## Escopo de skills no deploy da API (multi-tenant) — v0.7.0+
+
+A API HTTP (`symbiote.api.http`) é um entrypoint **multi-tenant**: um kernel singleton serve vários symbiotes/tenants via `/symbiotes/{symbiote_id}`. Por isso o `_resolve_config()` da API lê o escopo de skills de ENV e **assume `per_symbiote` por default** (diferente do `KernelConfig`, que segue `global` para não quebrar CLI/embarcados):
+
+| ENV | Valores | Default na API |
+|-----|---------|----------------|
+| `SYMBIOTE_SKILL_SCOPE` | `global` \| `per_symbiote` | `per_symbiote` |
+| `SYMBIOTE_SKILLS_ROOT` | caminho | (default do KernelConfig) |
+| `SYMBIOTE_SKILLS_PROTECTED_ROOTS` | lista (`,` ou `os.pathsep`) | vazio |
+
+- **Por que `per_symbiote` por default:** em `global`, skills aprendidas viram um pool compartilhado → **vazamento cross-tenant** (contas/clientes diferentes veriam skills uns dos outros). `per_symbiote` isola fisicamente em `{skills_root}/<symbiote_id>/skills/...`.
+- **MIGRAÇÃO (atenção):** se um deploy de API existente dependia de um pool GLOBAL de skills, ligar `per_symbiote` (default novo) torna essas skills **invisíveis** (modo M3 — arquivos antigos ficam no disco, só não são lidos). Para manter o comportamento antigo, set `SYMBIOTE_SKILL_SCOPE=global` explicitamente. Quando o scope não é setado por ENV, a API loga um WARNING no boot explicando isso.
+- **Catálogo comum read-only:** `SYMBIOTE_SKILLS_PROTECTED_ROOTS` aponta raízes de skills "de fábrica" visíveis a todos os tenants mas não graváveis.
+
+---
+
 ## Pré-requisitos (uma vez só)
 
 Antes de qualquer estágio:

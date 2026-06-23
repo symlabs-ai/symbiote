@@ -66,6 +66,13 @@ class TestLocalAdminMode:
         assert active[0].id != stale.id
 
 
+_SKILL_ENV = (
+    "SYMBIOTE_SKILL_SCOPE",
+    "SYMBIOTE_SKILLS_ROOT",
+    "SYMBIOTE_SKILLS_PROTECTED_ROOTS",
+)
+
+
 class TestResolveConfig:
     def test_defaults_when_env_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("SYMBIOTE_DB_PATH", raising=False)
@@ -74,6 +81,117 @@ class TestResolveConfig:
     def test_db_path_overridden_by_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SYMBIOTE_DB_PATH", "/tmp/embedded/symbiote.db")
         assert _resolve_config().db_path == Path("/tmp/embedded/symbiote.db")
+
+    # ── skill scope (multi-tenant safety) ──────────────────────────────
+
+    def test_api_defaults_to_per_symbiote(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # API entrypoint is multi-tenant → secure default, unlike KernelConfig.
+        for e in _SKILL_ENV:
+            monkeypatch.delenv(e, raising=False)
+        assert _resolve_config().skill_scope == "per_symbiote"
+
+    def test_kernel_config_default_still_global(self) -> None:
+        # The model default itself is unchanged (CLI / embedded untouched).
+        from symbiote.config.models import KernelConfig
+        assert KernelConfig().skill_scope == "global"
+
+    def test_scope_env_global_honored(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SYMBIOTE_SKILL_SCOPE", "global")
+        assert _resolve_config().skill_scope == "global"
+
+    def test_scope_env_per_symbiote_honored(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SYMBIOTE_SKILL_SCOPE", "per_symbiote")
+        assert _resolve_config().skill_scope == "per_symbiote"
+
+    def test_skills_root_from_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SYMBIOTE_SKILLS_ROOT", "/data/skills")
+        assert _resolve_config().skills_root == Path("/data/skills")
+
+    def test_protected_roots_comma_separated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(
+            "SYMBIOTE_SKILLS_PROTECTED_ROOTS", "/a/skills,/b/skills"
+        )
+        assert _resolve_config().skills_protected_roots == [
+            Path("/a/skills"), Path("/b/skills")
+        ]
+
+    def test_protected_roots_pathsep_separated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import os
+        monkeypatch.setenv(
+            "SYMBIOTE_SKILLS_PROTECTED_ROOTS",
+            f"/a/skills{os.pathsep}/b/skills",
+        )
+        assert _resolve_config().skills_protected_roots == [
+            Path("/a/skills"), Path("/b/skills")
+        ]
+
+    def test_default_emits_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        for e in _SKILL_ENV:
+            monkeypatch.delenv(e, raising=False)
+        import logging
+        with caplog.at_level(logging.WARNING):
+            _resolve_config()
+        assert any("SYMBIOTE_SKILL_SCOPE" in r.message for r in caplog.records)
+
+    def test_explicit_scope_no_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setenv("SYMBIOTE_SKILL_SCOPE", "per_symbiote")
+        import logging
+        with caplog.at_level(logging.WARNING):
+            _resolve_config()
+        assert not any(
+            "SYMBIOTE_SKILL_SCOPE not set" in r.message for r in caplog.records
+        )
+
+    def test_api_config_yields_tenant_isolated_kernel(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # End-to-end: a kernel built from the API's resolved config (default
+        # per_symbiote) isolates skills across tenants.
+        from symbiote.core.kernel import SymbioteKernel
+        from symbiote.skills import usage
+
+        for e in _SKILL_ENV:
+            monkeypatch.delenv(e, raising=False)
+        monkeypatch.setenv("SYMBIOTE_DB_PATH", str(tmp_path / "api.db"))
+        monkeypatch.setenv("SYMBIOTE_SKILLS_ROOT", str(tmp_path / "skills"))
+
+        cfg = _resolve_config()
+        assert cfg.skill_scope == "per_symbiote"
+        kernel = SymbioteKernel(cfg, llm=None)
+        try:
+            t1 = kernel.create_symbiote(name="Tenant1", role="a").id
+            t2 = kernel.create_symbiote(name="Tenant2", role="a").id
+            kernel.skills_store_for(t1).create(
+                "t1-skill", "---\nname: t1-skill\ndescription: x\n---\nbody"
+            )
+            kernel.skills_loader_for(t1).refresh()
+            kernel.skills_loader_for(t2).refresh()
+            assert "t1-skill" in {
+                s.name for s in kernel.skills_loader_for(t1).list_skills()
+            }
+            assert "t1-skill" not in {
+                s.name for s in kernel.skills_loader_for(t2).list_skills()
+            }
+            # single (global) handle is None in scoped mode
+            assert kernel.skills_loader is None
+        finally:
+            kernel.shutdown()
 
 
 @pytest.fixture()
