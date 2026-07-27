@@ -25,6 +25,10 @@ class TestKernelConfigDefaults:
         cfg = KernelConfig()
         assert cfg.llm_provider == "forge"
 
+    def test_default_agent_protocol_is_rollback_safe(self):
+        cfg = KernelConfig()
+        assert cfg.agent_protocol == "legacy_text_v1"
+
     def test_default_log_level(self):
         cfg = KernelConfig()
         assert cfg.log_level == "INFO"
@@ -69,6 +73,15 @@ class TestKernelConfigValidation:
         with pytest.raises(ValueError):
             KernelConfig(llm_provider="   ")
 
+    def test_agent_protocol_is_stripped(self):
+        cfg = KernelConfig(agent_protocol="  poolside_laguna_v1  ")
+        assert cfg.agent_protocol == "poolside_laguna_v1"
+
+    @pytest.mark.parametrize("value", ["", "   "])
+    def test_agent_protocol_rejects_empty(self, value):
+        with pytest.raises(ValueError, match="agent_protocol"):
+            KernelConfig(agent_protocol=value)
+
 
 # ── YAML loading ──────────────────────────────────────────────────────
 
@@ -84,6 +97,7 @@ class TestKernelConfigFromYaml:
                     "db_path": "/data/symbiote.db",
                     "context_budget": 8000,
                     "llm_provider": "openrouter",
+                    "agent_protocol": "poolside_laguna_v1",
                     "log_level": "WARNING",
                 }
             )
@@ -92,6 +106,7 @@ class TestKernelConfigFromYaml:
         assert cfg.db_path == Path("/data/symbiote.db")
         assert cfg.context_budget == 8000
         assert cfg.llm_provider == "openrouter"
+        assert cfg.agent_protocol == "poolside_laguna_v1"
         assert cfg.log_level == "WARNING"
 
     def test_from_yaml_partial_uses_defaults(self, tmp_path):

@@ -9,6 +9,11 @@ from pathlib import Path
 from symbiote.adapters.export.markdown import ExportService
 from symbiote.adapters.storage.message_repository import MessageRepository
 from symbiote.adapters.storage.sqlite import SQLiteAdapter
+from symbiote.agent_protocols import (
+    AgentProtocol,
+    AgentProtocolRegistry,
+    create_default_protocol_registry,
+)
 from symbiote.config.models import KernelConfig
 from symbiote.core.background_review import BackgroundReviewEngine
 from symbiote.core.capabilities import CapabilitySurface
@@ -52,7 +57,28 @@ from symbiote.workspace.manager import WorkspaceManager
 class SymbioteKernel:
     """Central orchestrator — composes all kernel components and exposes a thin public API."""
 
-    def __init__(self, config: KernelConfig, llm: LLMPort | None = None) -> None:
+    def __init__(
+        self,
+        config: KernelConfig,
+        llm: LLMPort | None = None,
+        *,
+        agent_protocol: str | AgentProtocol | None = None,
+        protocol_registry: AgentProtocolRegistry | None = None,
+    ) -> None:
+        active_protocol_registry = (
+            protocol_registry or create_default_protocol_registry()
+        )
+        selected_protocol = (
+            config.agent_protocol
+            if agent_protocol is None
+            else agent_protocol
+        )
+        # Validate the exact configured ID before storage or request-serving
+        # components are initialized. A non-None constructor override wins.
+        resolved_agent_protocol = active_protocol_registry.resolve(
+            selected_protocol
+        )
+
         self._config = config
         self._llm = llm
 
@@ -103,6 +129,8 @@ class SymbioteKernel:
                     # returns the engine (or None) for the symbiote driving
                     # the current turn.
                     background_review=self._background_review_for,
+                    agent_protocol=resolved_agent_protocol,
+                    protocol_registry=active_protocol_registry,
                 )
             )
 
@@ -266,6 +294,29 @@ class SymbioteKernel:
                 "(kernel was constructed without an LLM)."
             )
         runner._native_tools = enabled  # type: ignore[attr-defined]
+
+    def set_agent_protocol(
+        self,
+        protocol: str | AgentProtocol | None,
+    ) -> None:
+        """Select the exact model-facing protocol on the chat runner.
+
+        ``None`` restores the registry's backward-compatible legacy default.
+        Model names are never inspected or guessed.
+        Prefer constructor injection. This setter mutates the shared runner
+        and is intended for setup before serving traffic; it is not
+        thread-safe with concurrent active runs.
+
+        Raises:
+            RuntimeError: if the kernel was constructed without an LLM.
+        """
+        runner = self._runner_registry.select("chat")
+        if runner is None or not hasattr(runner, "set_agent_protocol"):
+            raise RuntimeError(
+                "No chat runner available to set agent_protocol "
+                "(kernel was constructed without an LLM)."
+            )
+        runner.set_agent_protocol(protocol)  # type: ignore[attr-defined]
 
     @property
     def environment(self) -> EnvironmentManager:

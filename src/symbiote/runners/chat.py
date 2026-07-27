@@ -6,8 +6,22 @@ import json
 import logging
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
+from symbiote.agent_protocols import (
+    AgentProtocol,
+    AgentProtocolError,
+    AgentProtocolRegistry,
+    PreparedTurn,
+    ProtocolState,
+    create_default_protocol_registry,
+)
+from symbiote.agent_protocols.base import (
+    compact_tool_result,
+    format_legacy_assistant,
+    format_legacy_tool_results,
+)
 from symbiote.core.context import AssembledContext
 from symbiote.core.models import Message
 from symbiote.core.ports import LLMPort
@@ -15,7 +29,12 @@ from symbiote.environment.descriptors import LLMResponse, ToolCall, ToolCallResu
 from symbiote.environment.parser import parse_tool_calls
 from symbiote.environment.runtime_context import inject_runtime_context
 from symbiote.memory.working import WorkingMemory
-from symbiote.runners.base import LoopStep, LoopTrace, RunResult
+from symbiote.runners.base import (
+    AgentProtocolAudit,
+    LoopStep,
+    LoopTrace,
+    RunResult,
+)
 from symbiote.runners.loop_control import LoopController
 from symbiote.runners.response_validator import (
     fallback_text,
@@ -105,6 +124,8 @@ class ChatRunner:
         # instantiate ChatRunner directly.
         background_review: object | None = None,
         skill_nudge_interval: int = 10,
+        agent_protocol: str | AgentProtocol | None = None,
+        protocol_registry: AgentProtocolRegistry | None = None,
     ) -> None:
         self._llm = llm
         self._working_memory = working_memory
@@ -120,9 +141,122 @@ class ChatRunner:
         self._background_review = background_review
         self._skill_nudge_interval = max(1, int(skill_nudge_interval))
         self._iters_since_skill_review = 0
+        self._protocol_registry = (
+            protocol_registry or create_default_protocol_registry()
+        )
+        self._agent_protocol = self._protocol_registry.resolve(agent_protocol)
 
     def can_handle(self, intent: str) -> bool:
         return intent in _HANDLED_INTENTS
+
+    @property
+    def agent_protocol_id(self) -> str:
+        """Return the exact protocol ID selected for subsequent turns."""
+        return self._agent_protocol.protocol_id
+
+    def set_agent_protocol(
+        self,
+        protocol: str | AgentProtocol | None,
+    ) -> None:
+        """Select an explicit protocol, with ``None`` restoring legacy.
+
+        Prefer constructor injection. This mutates the shared runner and is
+        intended for setup before serving traffic, not concurrent active runs.
+        """
+        self._agent_protocol = self._protocol_registry.resolve(protocol)
+
+    def _effective_native_tools(self) -> bool:
+        """Return whether the selected protocol requires native tool wiring."""
+        protocol = getattr(self, "_agent_protocol", None)
+        return (
+            self._native_tools
+            or (
+                protocol is not None
+                and protocol.capabilities.native_tools_required
+            )
+        )
+
+    def _prepare_protocol_turn(
+        self,
+        context: AssembledContext,
+        llm_config: dict | None,
+    ) -> PreparedTurn:
+        """Prepare one isolated protocol state for the whole runner call."""
+        state = self._agent_protocol.create_state()
+        try:
+            return self._agent_protocol.prepare_turn(
+                context,
+                host_overrides=llm_config,
+                native_tools=self._native_tools,
+                state=state,
+            )
+        except AgentProtocolError:
+            self._log_protocol_failure(
+                code="prepare_failed",
+                protocol_id=state.protocol_id,
+            )
+            raise
+
+    def _validate_protocol_response(
+        self,
+        response: str | LLMResponse,
+        calls: list[ToolCall],
+        state: ProtocolState,
+    ) -> None:
+        """Validate a model response before any tool or callback side effect."""
+        try:
+            self._agent_protocol.validate_response(response, calls, state)
+        except AgentProtocolError:
+            self._log_protocol_failure(
+                code="response_rejected",
+                protocol_id=state.protocol_id,
+            )
+            raise
+
+    @staticmethod
+    def _protocol_audit(prepared: PreparedTurn) -> AgentProtocolAudit:
+        """Project ephemeral protocol state into a safe audit envelope."""
+        schema_strategy = prepared.state.metadata.get("schema_strategy")
+        return AgentProtocolAudit(
+            protocol_id=prepared.protocol_id,
+            profile=prepared.state.profile,
+            schema_strategy=(
+                schema_strategy
+                if isinstance(schema_strategy, str)
+                else None
+            ),
+            native_tools=prepared.native_tools,
+            exchange_count=prepared.state.exchange_count,
+        )
+
+    @classmethod
+    def _complete_protocol_run(
+        cls,
+        result: RunResult,
+        prepared: PreparedTurn,
+    ) -> RunResult:
+        """Attach and log only the canonical, non-sensitive audit envelope."""
+        audit = cls._protocol_audit(prepared)
+        result.agent_protocol = audit
+        logger.info(
+            "agent_protocol_completed protocol_id=%s profile=%s "
+            "schema_strategy=%s native_tools=%s exchange_count=%d",
+            audit.protocol_id,
+            audit.profile,
+            audit.schema_strategy,
+            audit.native_tools,
+            audit.exchange_count,
+        )
+        return result
+
+    @staticmethod
+    def _log_protocol_failure(*, code: str, protocol_id: str) -> None:
+        """Log a fail-closed protocol error without response payloads."""
+        logger.warning(
+            "agent_protocol_failed code=%s protocol_id=%s",
+            code,
+            protocol_id,
+        )
 
     def run(
         self,
@@ -162,21 +296,42 @@ class ChatRunner:
         Keeps: LLM retry, tool execution, approval gate, response
         validation, on_stream, on_token.
         """
-        messages = self._build_messages(context)
-        kwargs = self._build_llm_kwargs(context, llm_config=llm_config)
+        prepared = self._prepare_protocol_turn(context, llm_config)
+        protocol_state = prepared.state
+        messages = self._build_messages(
+            context,
+            native_tools=prepared.native_tools,
+        )
+        kwargs = prepared.to_llm_kwargs()
         loop_start = time.monotonic()
 
         # Single LLM call with retry
         try:
             response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
         except Exception as exc:
-            return RunResult(success=False, error=str(exc), runner_type=self.runner_type)
+            return self._complete_protocol_run(
+                RunResult(
+                    success=False,
+                    error=str(exc),
+                    runner_type=self.runner_type,
+                ),
+                prepared,
+            )
 
         clean_text, tool_calls = self._parse_response(response)
+        self._validate_protocol_response(
+            response,
+            tool_calls,
+            protocol_state,
+        )
 
         if not tool_calls:
             clean_text, buffered_chunks = self._validate_and_fix(
-                clean_text, buffered_chunks, messages, kwargs
+                clean_text,
+                buffered_chunks,
+                messages,
+                kwargs,
+                protocol_state=protocol_state,
             )
 
         # Emit via on_stream
@@ -189,9 +344,8 @@ class ChatRunner:
         if tool_calls and self._tool_gateway is not None:
             # Approval gate (kept — a single tool call can still be high-risk)
             approved_calls, denial_results = self._check_approval(tool_calls)
-            all_tool_results.extend(denial_results)
 
-            gateway_results: list[ToolCallResult] = list(denial_results)
+            gateway_results: list[ToolCallResult] = []
             if approved_calls:
                 exec_results = self._tool_gateway.execute_tool_calls(
                     symbiote_id=context.symbiote_id,
@@ -199,13 +353,23 @@ class ChatRunner:
                     calls=approved_calls,
                     timeout=context.tool_call_timeout,
                 )
+                exec_results = self._correlate_tool_results(
+                    approved_calls,
+                    exec_results,
+                )
                 gateway_results.extend(exec_results)
-                all_tool_results.extend(exec_results)
+
+            results = self._merge_tool_results(
+                tool_calls,
+                denial_results,
+                gateway_results,
+            )
+            all_tool_results.extend(results)
 
             # Hook: let the caller decide whether tool results end the loop.
             hook_text: str | None = None
             if self._on_after_tool_result is not None:
-                hook_text = self._on_after_tool_result(tool_calls, all_tool_results)
+                hook_text = self._on_after_tool_result(tool_calls, results)
 
             if hook_text is not None:
                 clean_text = hook_text
@@ -215,15 +379,26 @@ class ChatRunner:
                     clean_text = "Pronto."
             else:
                 # Feed results back for a final LLM response only on failure
-                messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
-                results = self._merge_tool_results(tool_calls, {}, gateway_results)
-                messages.append({"role": "user", "content": self._format_tool_results(results)})
+                self._append_tool_exchange(
+                    messages,
+                    response,
+                    clean_text,
+                    tool_calls,
+                    results,
+                    protocol_state=protocol_state,
+                )
 
                 try:
                     final_response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
-                    clean_text, _ = self._parse_response(final_response)
                 except Exception:
                     pass  # keep the tool-call text as final
+                else:
+                    clean_text, final_calls = self._parse_response(final_response)
+                    self._validate_protocol_response(
+                        final_response,
+                        final_calls,
+                        protocol_state,
+                    )
 
         # Release tokens — no suppression since there's no next iteration
         if on_token is not None:
@@ -267,7 +442,15 @@ class ChatRunner:
         if all_tool_results:
             output = {"text": clean_text, "tool_results": [r.model_dump() for r in all_tool_results]}
 
-        return RunResult(success=True, output=output, runner_type=self.runner_type, loop_trace=trace)
+        return self._complete_protocol_run(
+            RunResult(
+                success=True,
+                output=output,
+                runner_type=self.runner_type,
+                loop_trace=trace,
+            ),
+            prepared,
+        )
 
     def _run_loop(
         self,
@@ -276,8 +459,13 @@ class ChatRunner:
         llm_config: dict | None = None,
     ) -> RunResult:
         """Full loop execution for brief/continuous modes."""
-        messages = self._build_messages(context)
-        kwargs = self._build_llm_kwargs(context, llm_config=llm_config)
+        prepared = self._prepare_protocol_turn(context, llm_config)
+        protocol_state = prepared.state
+        messages = self._build_messages(
+            context,
+            native_tools=prepared.native_tools,
+        )
+        kwargs = prepared.to_llm_kwargs()
         max_iters = self._resolve_max_iters(context)
         initial_msg_count = len(messages)
         controller = LoopController(
@@ -308,16 +496,33 @@ class ChatRunner:
             try:
                 response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
             except Exception as exc:
-                return RunResult(success=False, error=str(exc), runner_type=self.runner_type, loop_trace=trace)
+                return self._complete_protocol_run(
+                    RunResult(
+                        success=False,
+                        error=str(exc),
+                        runner_type=self.runner_type,
+                        loop_trace=trace,
+                    ),
+                    prepared,
+                )
 
             clean_text, tool_calls = self._parse_response(response)
+            self._validate_protocol_response(
+                response,
+                tool_calls,
+                protocol_state,
+            )
 
             # ── Response validation ───────────────────────────────────────
             # Only validate when there are no tool calls (a tool-call
             # response is intentionally structured and not meant for the user).
             if not tool_calls:
                 clean_text, buffered_chunks = self._validate_and_fix(
-                    clean_text, buffered_chunks, messages, kwargs
+                    clean_text,
+                    buffered_chunks,
+                    messages,
+                    kwargs,
+                    protocol_state=protocol_state,
                 )
 
             final_text = clean_text
@@ -346,17 +551,15 @@ class ChatRunner:
             cached_results, remaining_calls = self._split_cached_schema_calls(
                 tool_calls, schema_cache, context.tool_loading,
             )
-            all_tool_results.extend(cached_results.values())
 
             # Approval gate: check high-risk tools before execution
             approved_calls, denial_results = self._check_approval(remaining_calls)
-            all_tool_results.extend(denial_results)
 
             if self._on_progress is not None:
                 self._on_progress("tool_start", iteration + 1, max_iters)
 
             step_start = time.monotonic()
-            gateway_results: list[ToolCallResult] = list(denial_results)
+            gateway_results: list[ToolCallResult] = []
             if approved_calls:
                 exec_results = self._tool_gateway.execute_tool_calls(
                     symbiote_id=context.symbiote_id,
@@ -364,18 +567,36 @@ class ChatRunner:
                     calls=approved_calls,
                     timeout=context.tool_call_timeout,
                 )
+                exec_results = self._correlate_tool_results(
+                    approved_calls,
+                    exec_results,
+                )
                 gateway_results.extend(exec_results)
-                all_tool_results.extend(exec_results)
             step_elapsed = int((time.monotonic() - step_start) * 1000)
 
             if self._on_progress is not None:
                 self._on_progress("tool_end", iteration + 1, max_iters)
 
+            remaining_results = self._merge_tool_results(
+                remaining_calls,
+                denial_results,
+                gateway_results,
+            )
+
             # Update schema cache with new results
-            self._update_schema_cache(remaining_calls, gateway_results, schema_cache)
+            self._update_schema_cache(
+                remaining_calls,
+                remaining_results,
+                schema_cache,
+            )
 
             # Merge cached + gateway results in original order
-            results = self._merge_tool_results(tool_calls, cached_results, gateway_results)
+            results = self._merge_tool_results(
+                tool_calls,
+                cached_results,
+                remaining_results,
+            )
+            all_tool_results.extend(results)
 
             # Record each tool call in trace and loop controller
             for tc, tr in zip(tool_calls, results, strict=False):
@@ -411,8 +632,14 @@ class ChatRunner:
                 trace.stop_reason = stop_reason
                 injection = controller.get_injection_message()
                 if injection:
-                    messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
-                    messages.append({"role": "user", "content": self._format_tool_results(results)})
+                    self._append_tool_exchange(
+                        messages,
+                        response,
+                        clean_text,
+                        tool_calls,
+                        results,
+                        protocol_state=protocol_state,
+                    )
                     messages.append({"role": "user", "content": injection})
                     # Drop ``tools`` from kwargs for the injection call so
                     # the LLM is forced to emit assistant text rather than
@@ -427,7 +654,15 @@ class ChatRunner:
                     inj_kwargs.pop("tools", None)
                     try:
                         inj_response, inj_chunks = self._call_llm_sync(messages, inj_kwargs, on_token)
-                        inj_text, _ = self._parse_response(inj_response)
+                    except Exception:
+                        pass  # keep the last final_text
+                    else:
+                        inj_text, inj_calls = self._parse_response(inj_response)
+                        self._validate_protocol_response(
+                            inj_response,
+                            inj_calls,
+                            protocol_state,
+                        )
                         final_text = inj_text
                         if on_token is not None:
                             if inj_chunks is not None:
@@ -435,13 +670,17 @@ class ChatRunner:
                                     on_token(chunk)
                             else:
                                 on_token(inj_text)
-                    except Exception:
-                        pass  # keep the last final_text
                 break
 
             # Feed results back for the next iteration
-            messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
-            messages.append({"role": "user", "content": self._format_tool_results(results)})
+            self._append_tool_exchange(
+                messages,
+                response,
+                clean_text,
+                tool_calls,
+                results,
+                protocol_state=protocol_state,
+            )
 
             # Layer 2: compact old loop messages to prevent context growth
             self._compact_loop_messages(messages, initial_msg_count)
@@ -481,9 +720,14 @@ class ChatRunner:
                 trace.total_iterations, trace.total_tool_calls, trace.total_elapsed_ms,
             )
 
-        return RunResult(
-            success=True, output=output, runner_type=self.runner_type,
-            loop_trace=trace if trace.steps else None,
+        return self._complete_protocol_run(
+            RunResult(
+                success=True,
+                output=output,
+                runner_type=self.runner_type,
+                loop_trace=trace if trace.steps else None,
+            ),
+            prepared,
         )
 
     async def run_async(
@@ -497,8 +741,13 @@ class ChatRunner:
         # for a single call) — avoids duplicating the instant logic.
         if context.tool_mode == "instant":
             return self._run_instant(context, on_token, llm_config=llm_config)
-        messages = self._build_messages(context)
-        kwargs = self._build_llm_kwargs(context, llm_config=llm_config)
+        prepared = self._prepare_protocol_turn(context, llm_config)
+        protocol_state = prepared.state
+        messages = self._build_messages(
+            context,
+            native_tools=prepared.native_tools,
+        )
+        kwargs = prepared.to_llm_kwargs()
         max_iters = self._resolve_max_iters(context)
         initial_msg_count = len(messages)
         controller = LoopController(
@@ -527,14 +776,31 @@ class ChatRunner:
             try:
                 response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
             except Exception as exc:
-                return RunResult(success=False, error=str(exc), runner_type=self.runner_type, loop_trace=trace)
+                return self._complete_protocol_run(
+                    RunResult(
+                        success=False,
+                        error=str(exc),
+                        runner_type=self.runner_type,
+                        loop_trace=trace,
+                    ),
+                    prepared,
+                )
 
             clean_text, tool_calls = self._parse_response(response)
+            self._validate_protocol_response(
+                response,
+                tool_calls,
+                protocol_state,
+            )
 
             # ── Response validation ───────────────────────────────────────
             if not tool_calls:
                 clean_text, buffered_chunks = self._validate_and_fix(
-                    clean_text, buffered_chunks, messages, kwargs
+                    clean_text,
+                    buffered_chunks,
+                    messages,
+                    kwargs,
+                    protocol_state=protocol_state,
                 )
 
             final_text = clean_text
@@ -560,17 +826,15 @@ class ChatRunner:
             cached_results, remaining_calls = self._split_cached_schema_calls(
                 tool_calls, schema_cache, context.tool_loading,
             )
-            all_tool_results.extend(cached_results.values())
 
             # Approval gate: check high-risk tools before execution
             approved_calls, denial_results = self._check_approval(remaining_calls)
-            all_tool_results.extend(denial_results)
 
             if self._on_progress is not None:
                 self._on_progress("tool_start", iteration + 1, max_iters)
 
             step_start = time.monotonic()
-            gateway_results: list[ToolCallResult] = list(denial_results)
+            gateway_results: list[ToolCallResult] = []
             if approved_calls:
                 exec_results = await self._tool_gateway.execute_tool_calls_async(
                     symbiote_id=context.symbiote_id,
@@ -578,18 +842,36 @@ class ChatRunner:
                     calls=approved_calls,
                     timeout=context.tool_call_timeout,
                 )
+                exec_results = self._correlate_tool_results(
+                    approved_calls,
+                    exec_results,
+                )
                 gateway_results.extend(exec_results)
-                all_tool_results.extend(exec_results)
             step_elapsed = int((time.monotonic() - step_start) * 1000)
 
             if self._on_progress is not None:
                 self._on_progress("tool_end", iteration + 1, max_iters)
 
+            remaining_results = self._merge_tool_results(
+                remaining_calls,
+                denial_results,
+                gateway_results,
+            )
+
             # Update schema cache with new results
-            self._update_schema_cache(remaining_calls, gateway_results, schema_cache)
+            self._update_schema_cache(
+                remaining_calls,
+                remaining_results,
+                schema_cache,
+            )
 
             # Merge cached + gateway results in original order
-            results = self._merge_tool_results(tool_calls, cached_results, gateway_results)
+            results = self._merge_tool_results(
+                tool_calls,
+                cached_results,
+                remaining_results,
+            )
+            all_tool_results.extend(results)
 
             # Record trace for each tool call
             for tc, tr in zip(tool_calls, results, strict=False):
@@ -616,8 +898,14 @@ class ChatRunner:
                 trace.stop_reason = stop_reason
                 injection = controller.get_injection_message()
                 if injection:
-                    messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
-                    messages.append({"role": "user", "content": self._format_tool_results(results)})
+                    self._append_tool_exchange(
+                        messages,
+                        response,
+                        clean_text,
+                        tool_calls,
+                        results,
+                        protocol_state=protocol_state,
+                    )
                     messages.append({"role": "user", "content": injection})
                     # Drop ``tools`` from kwargs for the injection call so
                     # the LLM is forced to emit assistant text rather than
@@ -632,7 +920,15 @@ class ChatRunner:
                     inj_kwargs.pop("tools", None)
                     try:
                         inj_response, inj_chunks = self._call_llm_sync(messages, inj_kwargs, on_token)
-                        inj_text, _ = self._parse_response(inj_response)
+                    except Exception:
+                        pass  # keep the last final_text
+                    else:
+                        inj_text, inj_calls = self._parse_response(inj_response)
+                        self._validate_protocol_response(
+                            inj_response,
+                            inj_calls,
+                            protocol_state,
+                        )
                         final_text = inj_text
                         if on_token is not None:
                             if inj_chunks is not None:
@@ -640,12 +936,16 @@ class ChatRunner:
                                     on_token(chunk)
                             else:
                                 on_token(inj_text)
-                    except Exception:
-                        pass  # keep the last final_text
                 break
 
-            messages.append({"role": "assistant", "content": self._format_assistant_with_calls(clean_text, tool_calls)})
-            messages.append({"role": "user", "content": self._format_tool_results(results)})
+            self._append_tool_exchange(
+                messages,
+                response,
+                clean_text,
+                tool_calls,
+                results,
+                protocol_state=protocol_state,
+            )
 
             # Layer 2: compact old loop messages to prevent context growth
             self._compact_loop_messages(messages, initial_msg_count)
@@ -683,36 +983,42 @@ class ChatRunner:
                 trace.total_iterations, trace.total_tool_calls, trace.total_elapsed_ms,
             )
 
-        return RunResult(
-            success=True, output=output, runner_type=self.runner_type,
-            loop_trace=trace if trace.steps else None,
+        return self._complete_protocol_run(
+            RunResult(
+                success=True,
+                output=output,
+                runner_type=self.runner_type,
+                loop_trace=trace if trace.steps else None,
+            ),
+            prepared,
         )
 
     def _check_approval(
         self,
         calls: list[ToolCall],
-    ) -> tuple[list[ToolCall], list[ToolCallResult]]:
+    ) -> tuple[list[ToolCall], dict[int, ToolCallResult]]:
         """Check approval for tool calls based on risk_level.
 
-        Returns a tuple of (approved_calls, denial_results).
+        Returns a tuple of (approved_calls, denial_results_by_index).
         High-risk tools require approval via the on_before_tool_call callback.
         If the callback is None, all tools are auto-approved (backward compat).
         """
         if self._on_before_tool_call is None or self._tool_gateway is None:
-            return calls, []
+            return calls, {}
 
         approved: list[ToolCall] = []
-        denied: list[ToolCallResult] = []
+        denied: dict[int, ToolCallResult] = {}
 
-        for call in calls:
+        for idx, call in enumerate(calls):
             risk = self._tool_gateway.get_risk_level(call.tool_id)
             if risk == "high" and not self._on_before_tool_call(call.tool_id, call.params, risk):
-                denied.append(ToolCallResult(
+                denied[idx] = ToolCallResult(
+                    call_id=call.call_id,
                     tool_id=call.tool_id,
                     success=False,
                     error="Tool call denied by approval callback",
                     risk_level=risk,
-                ))
+                )
                 continue
             approved.append(call)
 
@@ -761,6 +1067,7 @@ class ChatRunner:
                 lookup_id = call.params.get("tool_id", "")
                 if lookup_id in schema_cache:
                     cached[idx] = ToolCallResult(
+                        call_id=call.call_id,
                         tool_id="get_tool_schema",
                         success=True,
                         output=schema_cache[lookup_id],
@@ -777,7 +1084,7 @@ class ChatRunner:
         schema_cache: dict[str, dict],
     ) -> None:
         """Cache successful get_tool_schema results from the gateway."""
-        for call, result in zip(remaining_calls, gateway_results, strict=False):
+        for call, result in zip(remaining_calls, gateway_results, strict=True):
             if call.tool_id == "get_tool_schema" and result.success:
                 lookup_id = call.params.get("tool_id", "")
                 if lookup_id:
@@ -789,18 +1096,58 @@ class ChatRunner:
         cached: dict[int, ToolCallResult],
         gateway_results: list[ToolCallResult],
     ) -> list[ToolCallResult]:
-        """Merge cached and gateway results in the original call order."""
-        if not cached:
-            return list(gateway_results)
-
+        """Merge results in call order and preserve native correlation IDs."""
+        expected_gateway_results = len(original_calls) - len(cached)
+        if len(gateway_results) != expected_gateway_results:
+            raise ValueError(
+                "tool result cardinality mismatch while merging: "
+                f"expected {expected_gateway_results} gateway results for "
+                f"{len(original_calls)} calls, got {len(gateway_results)}"
+            )
         merged: list[ToolCallResult] = []
         gw_iter = iter(gateway_results)
-        for idx in range(len(original_calls)):
-            if idx in cached:
-                merged.append(cached[idx])
-            else:
-                merged.append(next(gw_iter))
+        for idx, call in enumerate(original_calls):
+            result = cached[idx] if idx in cached else next(gw_iter)
+            if (
+                result.call_id is not None
+                and result.call_id != call.call_id
+            ):
+                raise ValueError(
+                    "tool result correlation mismatch while merging: "
+                    f"call_id={call.call_id!r}, "
+                    f"result.call_id={result.call_id!r}"
+                )
+            if result.call_id is None and call.call_id is not None:
+                result = result.model_copy(update={"call_id": call.call_id})
+            merged.append(result)
         return merged
+
+    @staticmethod
+    def _correlate_tool_results(
+        calls: list[ToolCall],
+        results: list[ToolCallResult],
+    ) -> list[ToolCallResult]:
+        """Attach each call's ID to gateway results without mutating them."""
+        if len(calls) != len(results):
+            raise ValueError(
+                "tool result cardinality mismatch from gateway: "
+                f"{len(calls)} calls but {len(results)} results"
+            )
+        correlated: list[ToolCallResult] = []
+        for call, result in zip(calls, results, strict=True):
+            if (
+                result.call_id is not None
+                and result.call_id != call.call_id
+            ):
+                raise ValueError(
+                    "tool result correlation mismatch from gateway: "
+                    f"call_id={call.call_id!r}, "
+                    f"result.call_id={result.call_id!r}"
+                )
+            if result.call_id is None and call.call_id is not None:
+                result = result.model_copy(update={"call_id": call.call_id})
+            correlated.append(result)
+        return correlated
 
     # ── internal ─────────────────────────────────────────────────────────
 
@@ -809,28 +1156,15 @@ class ChatRunner:
         context: AssembledContext,
         llm_config: dict | None = None,
     ) -> dict:
-        """Build kwargs dict for the LLM call (config + native tools).
+        """Build protocol-prepared kwargs for compatibility with callers.
 
-        ``llm_config`` is merged on top of ``context.generation_settings``
-        so per-call overrides (e.g. ``{"mode": "high"}``) win over the
-        session's default config without mutating the assembled context.
-        Empty / None ``llm_config`` is a no-op.
+        Runner execution prepares once and reuses the resulting state. This
+        helper remains available to existing tests/hosts that inspect kwargs.
         """
-        native_tool_defs: list[dict] | None = None
-        if self._native_tools and context.available_tools:
-            from symbiote.environment.descriptors import ToolDescriptor
-
-            native_tool_defs = [
-                ToolDescriptor(**t).to_openai_schema() for t in context.available_tools
-            ]
-        # Copy to avoid mutating context.generation_settings (shared state).
-        config = dict(context.generation_settings or {})
-        if llm_config:
-            config.update(llm_config)
-        kwargs: dict = {"config": config}
-        if native_tool_defs is not None:
-            kwargs["tools"] = native_tool_defs
-        return kwargs
+        return self._prepare_protocol_turn(
+            context,
+            llm_config,
+        ).to_llm_kwargs()
 
     def _call_llm_sync(
         self, messages: list[dict], kwargs: dict,
@@ -901,10 +1235,20 @@ class ChatRunner:
         raise last_exc  # type: ignore[misc]
 
     @staticmethod
-    def _parse_response(response: str | LLMResponse) -> tuple[str, list]:
+    def _parse_response(
+        response: str | LLMResponse,
+    ) -> tuple[str, list[ToolCall]]:
         """Extract clean text and tool calls from LLM response."""
         if isinstance(response, LLMResponse):
-            return response.content, [tc.to_tool_call() for tc in response.tool_calls]
+            calls: list[ToolCall] = []
+            for native_call in response.tool_calls:
+                call = native_call.to_tool_call()
+                if call.call_id is None:
+                    call = call.model_copy(
+                        update={"call_id": f"call_{uuid4().hex}"}
+                    )
+                calls.append(call)
+            return response.content, calls
         return parse_tool_calls(response)
 
     def _validate_and_fix(
@@ -913,6 +1257,8 @@ class ChatRunner:
         buffered_chunks: list[str] | None,
         messages: list[dict],
         kwargs: dict,
+        *,
+        protocol_state: ProtocolState | None = None,
     ) -> tuple[str, list[str] | None]:
         """Validate *clean_text* and retry up to ``_MAX_VALIDATION_RETRIES`` times.
 
@@ -934,7 +1280,13 @@ class ChatRunner:
                 retry_response, retry_chunks = self._call_llm_sync(retry_messages, kwargs, None)
             except Exception:
                 break
-            clean_text, _ = self._parse_response(retry_response)
+            clean_text, retry_calls = self._parse_response(retry_response)
+            if protocol_state is not None:
+                self._validate_protocol_response(
+                    retry_response,
+                    retry_calls,
+                    protocol_state,
+                )
             if is_valid_response(clean_text):
                 # Return single-chunk buffer matching the validated text
                 return clean_text, [clean_text] if buffered_chunks is not None else None
@@ -947,55 +1299,67 @@ class ChatRunner:
     def _compact_loop_messages(
         messages: list[dict], initial_count: int
     ) -> None:
-        """Replace old tool-loop message pairs with a compact summary.
+        """Replace old tool exchanges with a compact summary.
 
         Only compacts messages added during the tool loop (after
-        ``initial_count``).  Keeps the most recent pair intact so the LLM
-        sees the latest tool result.  Older pairs are replaced by a single
-        summary message.
+        ``initial_count``). Keeps the most recent complete exchange intact so
+        native ``assistant`` + one-or-more ``tool`` messages never become
+        orphaned. Legacy assistant/user pairs retain their previous shape.
 
         Modifies *messages* in-place.
         """
         loop_messages = messages[initial_count:]
-        # Each iteration adds 2 messages (assistant + user/tool_result)
-        # Keep the last pair, compact the rest
-        if len(loop_messages) < _COMPACTION_THRESHOLD * 2:
-            return  # not enough to compact
-
-        pairs_to_compact = loop_messages[:-2]  # all except last pair
-        if not pairs_to_compact:
+        assistant_positions = [
+            idx
+            for idx, message in enumerate(loop_messages)
+            if message.get("role") == "assistant"
+        ]
+        if len(assistant_positions) < _COMPACTION_THRESHOLD:
             return
 
-        # Build compact summary from the pairs
+        last_exchange_start = assistant_positions[-1]
+        messages_to_compact = loop_messages[:last_exchange_start]
+        last_exchange = loop_messages[last_exchange_start:]
+        if not messages_to_compact:
+            return
+
         steps: list[str] = []
-        for step_num, i in enumerate(range(0, len(pairs_to_compact), 2), 1):
-            tool_result_msg = pairs_to_compact[i + 1]["content"] if i + 1 < len(pairs_to_compact) else ""
+        for message in messages_to_compact:
+            role = message.get("role")
+            content = message.get("content")
+            result_text = content if isinstance(content, str) else ""
 
-            # Extract tool_id from tool_result format "[Tool result: xxx]"
-            tool_id = "unknown"
-            if "[Tool result: " in tool_result_msg:
-                tool_id = tool_result_msg.split("[Tool result: ")[1].split("]")[0]
-            elif "[Tool error: " in tool_result_msg:
-                tool_id = tool_result_msg.split("[Tool error: ")[1].split("]")[0]
+            if role == "tool":
+                tool_id = (
+                    message.get("name")
+                    or message.get("tool_call_id")
+                    or "unknown"
+                )
+            elif role == "user" and "[Tool result: " in result_text:
+                tool_id = result_text.split("[Tool result: ")[1].split("]")[0]
+            elif role == "user" and "[Tool error: " in result_text:
+                tool_id = result_text.split("[Tool error: ")[1].split("]")[0]
+            else:
+                continue
 
-            # Truncate large results
-            result_preview = tool_result_msg[:200]
-            if len(tool_result_msg) > 200:
+            result_preview = result_text[:200]
+            if len(result_text) > 200:
                 result_preview += "... (truncated)"
-
-            steps.append(f"{step_num}) {tool_id} → {result_preview}")
+            steps.append(
+                f"{len(steps) + 1}) {tool_id} → {result_preview}"
+            )
 
         summary = (
             "[Context compacted — previous tool loop steps summarized]\n"
-            "Steps completed so far:\n" + "\n".join(steps) + "\n"
+            "Steps completed so far:\n"
+            + ("\n".join(steps) if steps else "Earlier tool exchanges compacted.")
+            + "\n"
             "Continue from here."
         )
 
-        # Replace compacted pairs with single summary message
-        last_pair = messages[-2:]
         del messages[initial_count:]
         messages.append({"role": "user", "content": summary})
-        messages.extend(last_pair)
+        messages.extend(last_exchange)
 
     def _microcompact_tool_result(self, result_text: str) -> str:
         """Truncate a single tool result if it exceeds the size threshold.
@@ -1006,13 +1370,10 @@ class ChatRunner:
         threshold is per-runner (``tool_result_max_chars``, plumbed from
         ``KernelConfig``) so hosts with large tool payloads can raise it.
         """
-        limit = self._tool_result_max_chars
-        if len(result_text) <= limit:
-            return result_text
-        # Keep first portion + tail marker
-        truncated = result_text[:limit]
-        remaining = len(result_text) - limit
-        return f"{truncated}\n... ({remaining} chars truncated)"
+        return compact_tool_result(
+            result_text,
+            self._tool_result_max_chars,
+        )
 
     def _autocompact_if_needed(
         self, messages: list[dict], initial_count: int
@@ -1026,7 +1387,23 @@ class ChatRunner:
 
         Returns True if compaction was performed.
         """
-        total_chars = sum(len(m.get("content", "")) for m in messages)
+        total_chars = 0
+        for message in messages:
+            for key in (
+                "content",
+                "tool_calls",
+                "reasoning_content",
+                "reasoning_state",
+            ):
+                value = message.get(key)
+                if value is None:
+                    continue
+                if isinstance(value, str):
+                    total_chars += len(value)
+                else:
+                    total_chars += len(
+                        json.dumps(value, default=str, ensure_ascii=False)
+                    )
         estimated_tokens = total_chars // _CHARS_PER_TOKEN
         threshold = int(self._context_budget * _AUTOCOMPACT_THRESHOLD)
 
@@ -1042,25 +1419,39 @@ class ChatRunner:
             estimated_tokens, threshold, len(loop_messages),
         )
 
-        # Build aggressive summary — keep only tool_id and success/error
         steps: list[str] = []
-        for step_num, i in enumerate(range(0, len(loop_messages), 2), 1):
-            tool_result_msg = loop_messages[i + 1]["content"] if i + 1 < len(loop_messages) else ""
+        for message in loop_messages:
+            role = message.get("role")
+            content = message.get("content")
+            result_text = content if isinstance(content, str) else ""
 
-            tool_id = "unknown"
-            status = "ok"
-            if "[Tool result: " in tool_result_msg:
-                tool_id = tool_result_msg.split("[Tool result: ")[1].split("]")[0]
-            elif "[Tool error: " in tool_result_msg:
-                tool_id = tool_result_msg.split("[Tool error: ")[1].split("]")[0]
+            if role == "tool":
+                tool_id = (
+                    message.get("name")
+                    or message.get("tool_call_id")
+                    or "unknown"
+                )
+                status = (
+                    "error"
+                    if '"success":false' in result_text.replace(" ", "").lower()
+                    else "ok"
+                )
+            elif role == "user" and "[Tool result: " in result_text:
+                tool_id = result_text.split("[Tool result: ")[1].split("]")[0]
+                status = "ok"
+            elif role == "user" and "[Tool error: " in result_text:
+                tool_id = result_text.split("[Tool error: ")[1].split("]")[0]
                 status = "error"
+            else:
+                continue
 
-            # Ultra-compact: just tool_id and status, no content
-            steps.append(f"{step_num}) {tool_id} → {status}")
+            steps.append(f"{len(steps) + 1}) {tool_id} → {status}")
 
         summary = (
             "[Autocompact — context budget pressure, all loop steps summarized]\n"
-            "Steps completed:\n" + "\n".join(steps) + "\n"
+            "Steps completed:\n"
+            + ("\n".join(steps) if steps else "Tool exchanges compacted.")
+            + "\n"
             "Continue from here. Do not repeat completed steps."
         )
 
@@ -1071,13 +1462,29 @@ class ChatRunner:
     @staticmethod
     def _format_assistant_with_calls(text: str, calls: list[ToolCall]) -> str:
         """Format assistant message including tool_call blocks for the loop context."""
-        parts = []
-        if text:
-            parts.append(text)
-        for call in calls:
-            block = json.dumps({"tool": call.tool_id, "params": call.params}, ensure_ascii=False)
-            parts.append(f"```tool_call\n{block}\n```")
-        return "\n".join(parts)
+        return format_legacy_assistant(text, calls)
+
+    def _append_tool_exchange(
+        self,
+        messages: list[dict[str, Any]],
+        response: str | LLMResponse,
+        text: str,
+        calls: list[ToolCall],
+        results: list[ToolCallResult],
+        *,
+        protocol_state: ProtocolState | None = None,
+    ) -> None:
+        """Append one exchange exclusively through the selected protocol."""
+        state = protocol_state or self._agent_protocol.create_state()
+        exchange = self._agent_protocol.serialize_exchange(
+            response,
+            text,
+            calls,
+            results,
+            tool_result_max_chars=self._tool_result_max_chars,
+            state=state,
+        )
+        messages.extend(exchange)
 
     def _maybe_nudge_skill_review(self, context: AssembledContext) -> None:
         """Fire skill review every ``skill_nudge_interval`` tool iterations.
@@ -1122,20 +1529,27 @@ class ChatRunner:
 
         Applies Layer 1 microcompaction to each individual result.
         """
-        parts = []
-        for r in results:
-            if r.success:
-                raw = f"[Tool result: {r.tool_id}]\n{json.dumps(r.output, default=str, ensure_ascii=False)}"
-            else:
-                raw = f"[Tool error: {r.tool_id}]\n{r.error}"
-            parts.append(self._microcompact_tool_result(raw))
-        return "\n\n".join(parts)
+        return format_legacy_tool_results(
+            results,
+            max_chars=self._tool_result_max_chars,
+        )
 
-    def _build_messages(self, context: AssembledContext) -> list[dict]:
+    def _build_messages(
+        self,
+        context: AssembledContext,
+        *,
+        native_tools: bool | None = None,
+    ) -> list[dict]:
         messages: list[dict] = []
 
         # 1. System message
-        messages.append({"role": "system", "content": self._build_system(context)})
+        messages.append({
+            "role": "system",
+            "content": self._build_system(
+                context,
+                native_tools=native_tools,
+            ),
+        })
 
         # 2. Conversation history from working memory
         if self._working_memory is not None:
@@ -1204,8 +1618,15 @@ class ChatRunner:
 
         return messages
 
-    def _build_system(self, context: AssembledContext) -> str:
+    def _build_system(
+        self,
+        context: AssembledContext,
+        *,
+        native_tools: bool | None = None,
+    ) -> str:
         parts: list[str] = []
+        if native_tools is None:
+            native_tools = self._effective_native_tools()
 
         # Persona
         if context.persona:
@@ -1213,7 +1634,7 @@ class ChatRunner:
             parts.append(self._render_persona(context.persona))
 
         # Available tools (text-based instructions only when NOT using native tools)
-        if context.available_tools and not self._native_tools:
+        if context.available_tools and not native_tools:
             effective_tool_instructions = context.tool_instructions_override or _TOOL_INSTRUCTIONS
             if context.tool_loading == "index":
                 parts.append("## Available Tools (Index)")

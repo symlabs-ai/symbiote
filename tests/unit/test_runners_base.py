@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 
 from symbiote.core.context import AssembledContext
-from symbiote.runners.base import EchoRunner, RunnerRegistry, RunResult
+from symbiote.runners.base import (
+    AgentProtocolAudit,
+    EchoRunner,
+    RunnerRegistry,
+    RunResult,
+)
 
 # ── RunResult defaults ────────────────────────────────────────────────────────
 
@@ -17,6 +22,7 @@ class TestRunResult:
         assert r.output is None
         assert r.error is None
         assert r.runner_type == ""
+        assert r.agent_protocol is None
 
     def test_with_values(self):
         r = RunResult(success=False, output={"k": "v"}, error="boom", runner_type="test")
@@ -24,6 +30,23 @@ class TestRunResult:
         assert r.output == {"k": "v"}
         assert r.error == "boom"
         assert r.runner_type == "test"
+
+    def test_agent_protocol_audit_is_small_and_canonical(self):
+        audit = AgentProtocolAudit(
+            protocol_id="poolside_laguna_v1",
+            profile="complex",
+            schema_strategy="full",
+            native_tools=True,
+            exchange_count=2,
+        )
+
+        assert audit.model_dump() == {
+            "protocol_id": "poolside_laguna_v1",
+            "profile": "complex",
+            "schema_strategy": "full",
+            "native_tools": True,
+            "exchange_count": 2,
+        }
 
 
 # ── RunnerRegistry ───────────────────────────────────────────────────────────

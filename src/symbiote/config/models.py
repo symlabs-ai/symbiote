@@ -25,6 +25,7 @@ class KernelConfig(BaseModel):
     # not cut mid-payload — the LLM treats the missing tail as nonexistent.
     tool_result_max_chars: int = 2000
     llm_provider: str = "forge"
+    agent_protocol: str = "legacy_text_v1"
     log_level: str = "INFO"
     # Optional skill library roots. If None, the kernel derives
     # ``{db_path.parent}/skills/agent`` as the agent write root and (if it
@@ -92,6 +93,14 @@ class KernelConfig(BaseModel):
         v = v.strip()
         if not v:
             raise ValueError("llm_provider must not be empty")
+        return v
+
+    @field_validator("agent_protocol")
+    @classmethod
+    def _strip_agent_protocol(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("agent_protocol must not be empty")
         return v
 
     # ── class methods ─────────────────────────────────────────────────

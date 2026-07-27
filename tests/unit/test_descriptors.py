@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from symbiote.environment.descriptors import (
     HttpToolConfig,
+    LLMModelIdentity,
     LLMResponse,
+    LLMTokenUsage,
     NativeToolCall,
     ToolCall,
     ToolCallResult,
@@ -124,6 +126,7 @@ class TestNativeToolCall:
         )
         converted = tc.to_tool_call()
         assert isinstance(converted, ToolCall)
+        assert converted.call_id == "call_xyz"
         assert converted.tool_id == "search"
         assert converted.params == {"q": "news"}
 
@@ -151,6 +154,47 @@ class TestLLMResponse:
         )
         assert r.content == ""
         assert len(r.tool_calls) == 1
+
+    def test_canonical_native_response_metadata(self) -> None:
+        r = LLMResponse(
+            content="done",
+            reasoning_content="private chain",
+            reasoning_state={"signature": "opaque-state"},
+            finish_reason="tool_calls",
+            model_identity=LLMModelIdentity(
+                provider="openai-compatible",
+                model="model-a",
+            ),
+            usage=LLMTokenUsage(
+                prompt_tokens=10,
+                completion_tokens=4,
+                total_tokens=14,
+                metadata={"cached_tokens": 2},
+            ),
+            metadata={"request_id": "req-1"},
+        )
+
+        assert r.reasoning_content == "private chain"
+        assert r.reasoning_state == {"signature": "opaque-state"}
+        assert r.finish_reason == "tool_calls"
+        assert r.model_identity is not None
+        assert r.model_identity.model == "model-a"
+        assert r.usage is not None
+        assert r.usage.total_tokens == 14
+        assert r.metadata == {"request_id": "req-1"}
+
+    def test_reasoning_is_excluded_from_repr_and_serialization(self) -> None:
+        r = LLMResponse(
+            reasoning_content="do-not-persist",
+            reasoning_state={"secret": "do-not-persist-either"},
+        )
+
+        dumped = r.model_dump()
+        rendered = repr(r)
+
+        assert "reasoning_content" not in dumped
+        assert "reasoning_state" not in dumped
+        assert "do-not-persist" not in rendered
 
 
 class TestToolDescriptorOpenAISchema:

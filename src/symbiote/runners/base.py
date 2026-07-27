@@ -33,6 +33,16 @@ class LoopTrace(BaseModel):
     tool_mode: str = "brief"
 
 
+class AgentProtocolAudit(BaseModel):
+    """Safe, canonical audit envelope for one model-facing protocol run."""
+
+    protocol_id: str
+    profile: str | None = None
+    schema_strategy: str | None = None
+    native_tools: bool
+    exchange_count: int = 0
+
+
 class BlockResult(BaseModel):
     """Result of a single block of work in long-run mode."""
 
@@ -64,6 +74,7 @@ class RunResult(BaseModel):
     error: str | None = None
     runner_type: str = ""
     loop_trace: LoopTrace | None = None
+    agent_protocol: AgentProtocolAudit | None = None
     # Long-run mode extras
     plan: LongRunPlan | None = None
     block_results: list[BlockResult] | None = None

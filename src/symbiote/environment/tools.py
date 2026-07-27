@@ -246,6 +246,7 @@ class ToolGateway:
                 )
                 results.append(
                     ToolCallResult(
+                        call_id=call.call_id,
                         tool_id=call.tool_id,
                         success=False,
                         output=None,
@@ -261,6 +262,7 @@ class ToolGateway:
                     )
                 results.append(
                     ToolCallResult(
+                        call_id=call.call_id,
                         tool_id=call.tool_id,
                         success=raw.success,
                         output=raw.output,
@@ -330,6 +332,7 @@ class ToolGateway:
                     "[Hint: Analyze the error above and try a different approach.]"
                 )
             return ToolCallResult(
+                call_id=call.call_id,
                 tool_id=call.tool_id,
                 success=result.success,
                 output=result.output,

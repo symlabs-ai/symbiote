@@ -68,8 +68,14 @@ class HttpToolConfig(BaseModel):
 
 
 class ToolCall(BaseModel):
-    """A tool call parsed from LLM response text."""
+    """A tool call ready for gateway execution.
 
+    ``call_id`` is optional for backward compatibility with text-parsed tool
+    calls.  Native adapters preserve the provider-assigned identifier here so
+    the result can be correlated with the assistant turn.
+    """
+
+    call_id: str | None = None
     tool_id: str
     params: dict[str, Any] = Field(default_factory=dict)
 
@@ -77,6 +83,7 @@ class ToolCall(BaseModel):
 class ToolCallResult(BaseModel):
     """Result of executing a parsed tool call."""
 
+    call_id: str | None = None
     tool_id: str
     success: bool
     output: Any = None
@@ -99,8 +106,28 @@ class NativeToolCall(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
     def to_tool_call(self) -> ToolCall:
-        """Convert to a ToolCall for gateway execution."""
-        return ToolCall(tool_id=self.tool_id, params=self.params)
+        """Convert to a ToolCall without losing native correlation state."""
+        return ToolCall(
+            call_id=self.call_id,
+            tool_id=self.tool_id,
+            params=self.params,
+        )
+
+
+class LLMModelIdentity(BaseModel):
+    """Canonical identity of the model that produced a response."""
+
+    provider: str | None = None
+    model: str | None = None
+
+
+class LLMTokenUsage(BaseModel):
+    """Canonical token accounting with room for provider-specific counters."""
+
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict, repr=False)
 
 
 class LLMResponse(BaseModel):
@@ -113,3 +140,17 @@ class LLMResponse(BaseModel):
 
     content: str = ""
     tool_calls: list[NativeToolCall] = Field(default_factory=list)
+    reasoning_content: str | None = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+    )
+    reasoning_state: Any = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+    )
+    finish_reason: str | None = None
+    model_identity: LLMModelIdentity | None = None
+    usage: LLMTokenUsage | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict, repr=False)
