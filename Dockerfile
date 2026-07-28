@@ -16,12 +16,16 @@ WORKDIR /app
 # System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python deps
 COPY pyproject.toml README.md ./
+COPY requirements/ requirements/
 COPY src/ src/
-RUN pip install --no-cache-dir .
+RUN python -m pip install --no-cache-dir -r requirements/bootstrap-linux.lock \
+    && python -m pip install --no-cache-dir --no-build-isolation -r requirements/runtime-linux.lock \
+    && python -m pip install --no-cache-dir --no-build-isolation --no-deps .
 
 # Production stage
 FROM python:3.12-slim
@@ -54,10 +58,12 @@ ENV PYTHONPATH=/app/src
 # CI injects this via `docker build --build-arg GIT_COMMIT=$(git rev-parse --short HEAD)`.
 ARG GIT_COMMIT=unknown
 ENV GIT_COMMIT=${GIT_COMMIT}
+LABEL org.opencontainers.image.revision=${GIT_COMMIT}
+LABEL org.opencontainers.image.source="https://github.com/symlabs-ai/symbiote"
 
 EXPOSE 8008
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8008/health')" || exit 1
 
-CMD ["uvicorn", "symbiote.api.http:app", "--host", "127.0.0.1", "--port", "8008"]
+CMD ["uvicorn", "symbiote.api.http:app", "--host", "0.0.0.0", "--port", "8008"]

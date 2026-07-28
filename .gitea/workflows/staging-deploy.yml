@@ -1,28 +1,150 @@
-name: Deploy to Staging
+name: Validate and Deploy to Staging
 
 on:
   push:
     branches: [main]
 
 jobs:
-  deploy:
+  quality:
     runs-on: linux
     steps:
-      - name: Pull latest code
-        run: |
-          cd ~/staging/repos/symbiote
-          git pull origin main
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Rebuild and deploy
+      - name: Install isolated test environment
         run: |
-          cd ~/staging
-          export SYMBIOTE_GIT_COMMIT=$(git -C ./repos/symbiote rev-parse HEAD)
-          echo "Building symbiote at $SYMBIOTE_GIT_COMMIT"
-          docker compose build --quiet symbiote
-          docker compose up -d symbiote
+          set -euo pipefail
+          python3.12 -m venv --clear .ci-venv
+          .ci-venv/bin/python -m pip install --disable-pip-version-check -r requirements/bootstrap-linux.lock
+          .ci-venv/bin/python -m pip install --disable-pip-version-check --no-build-isolation -r requirements/ci-linux.lock
+          .ci-venv/bin/python -m pip install --disable-pip-version-check --no-build-isolation --no-deps -e .
 
-      - name: Health check
+      - name: Validate
         run: |
-          sleep 10
-          curl -sf http://localhost:8008/health > /dev/null
-          echo "Health check passed"
+          set -euo pipefail
+          .ci-venv/bin/python -m pip check
+          .ci-venv/bin/python -m pytest -q
+          .ci-venv/bin/ruff check .
+          .ci-venv/bin/python - <<'PY'
+          import json
+          from importlib.metadata import distribution, version
+
+          forge = distribution("forge-llm")
+          provenance = json.loads(forge.read_text("direct_url.json"))
+          assert version("forge-llm") == "0.7.16"
+          assert provenance["vcs_info"]["requested_revision"] == "af51be9244c69cd19b817dea9528016dc582cb3f"
+          assert provenance["vcs_info"]["commit_id"] == "af51be9244c69cd19b817dea9528016dc582cb3f"
+          PY
+
+  deploy:
+    needs: quality
+    runs-on: linux
+    env:
+      TARGET_COMMIT: ${{ gitea.sha }}
+    steps:
+      - name: Deploy exact commit with automatic rollback
+        run: |
+          set -euo pipefail
+
+          staging_root=/home/palhano/staging
+          source_repo="${staging_root}/repos/symbiote"
+          service=staging-symbiote
+          image=staging-symbiote:latest
+
+          test -n "${TARGET_COMMIT}"
+          test -z "$(git -C "${source_repo}" status --porcelain)"
+
+          previous_head="$(git -C "${source_repo}" rev-parse HEAD)"
+          previous_image="$(docker inspect "${service}" --format '{{.Image}}')"
+          rollback_image="staging-symbiote:rollback-${previous_head:0:12}"
+          docker image tag "${previous_image}" "${rollback_image}"
+
+          database_path="$(docker exec "${service}" printenv SYMBIOTE_DB_PATH)"
+          case "${database_path}" in
+            /data/*) ;;
+            *)
+              echo "Refusing to back up unexpected database path: ${database_path}"
+              exit 1
+              ;;
+          esac
+          database_backup=none
+          if docker exec "${service}" test -s "${database_path}"; then
+            backup_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+            backup_name="pre-deploy-${backup_stamp}-${TARGET_COMMIT:0:12}.db"
+            container_backup="/data/backups/${backup_name}"
+            host_backup_root="${staging_root}/backups/symbiote"
+            install -d -m 700 "${host_backup_root}"
+            docker exec -e DATABASE_BACKUP="${container_backup}" "${service}" python -c \
+              'import os, pathlib, sqlite3; source=os.environ["SYMBIOTE_DB_PATH"]; target=os.environ["DATABASE_BACKUP"]; pathlib.Path(target).parent.mkdir(parents=True, exist_ok=True, mode=0o700); src=sqlite3.connect(source); dst=sqlite3.connect(target); src.backup(dst); assert dst.execute("PRAGMA integrity_check").fetchone()[0] == "ok"; dst.close(); src.close()'
+            docker cp "${service}:${container_backup}" "${host_backup_root}/${backup_name}"
+            chmod 600 "${host_backup_root}/${backup_name}"
+            database_backup="${host_backup_root}/${backup_name}"
+          fi
+
+          rollback_required=1
+          rollback() {
+            status=$?
+            if (( rollback_required == 1 )); then
+              echo "Deploy failed. Restoring ${previous_head} (${previous_image})."
+              docker image tag "${previous_image}" "${image}"
+              SYMBIOTE_GIT_COMMIT="${previous_head}" \
+                docker compose -f "${staging_root}/docker-compose.yml" \
+                up -d --no-deps --force-recreate --no-build symbiote
+              git -C "${source_repo}" checkout --quiet --detach "${previous_head}"
+              test "$(docker inspect "${service}" --format '{{.Image}}')" = "${previous_image}"
+              rollback_healthy=0
+              for _ in $(seq 1 15); do
+                if [ "$(docker inspect "${service}" --format '{{.State.Health.Status}}')" = "healthy" ]; then
+                  rollback_healthy=1
+                  break
+                fi
+                sleep 2
+              done
+              test "${rollback_healthy}" -eq 1
+            fi
+            exit "${status}"
+          }
+          trap rollback EXIT
+
+          git -C "${source_repo}" fetch --quiet origin main
+          test "$(git -C "${source_repo}" rev-parse origin/main)" = "${TARGET_COMMIT}"
+          git -C "${source_repo}" checkout --quiet --detach "${TARGET_COMMIT}"
+
+          SYMBIOTE_GIT_COMMIT="${TARGET_COMMIT}" \
+            docker compose -f "${staging_root}/docker-compose.yml" build --quiet symbiote
+          candidate_image="$(docker image inspect "${image}" --format '{{.Id}}')"
+
+          SYMBIOTE_GIT_COMMIT="${TARGET_COMMIT}" \
+            docker compose -f "${staging_root}/docker-compose.yml" \
+            up -d --no-deps --force-recreate --no-build symbiote
+
+          healthy=0
+          for _ in $(seq 1 30); do
+            if health="$(curl -fsS --max-time 3 http://127.0.0.1:8008/health)"; then
+              deployed_commit="$(printf '%s' "${health}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("commit", ""))')"
+              if [ "${deployed_commit}" = "${TARGET_COMMIT}" ] \
+                && [ "$(docker inspect "${service}" --format '{{.State.Health.Status}}')" = "healthy" ]; then
+                healthy=1
+                break
+              fi
+            fi
+            sleep 2
+          done
+          test "${healthy}" -eq 1
+          test "$(docker inspect "${service}" --format '{{.Image}}')" = "${candidate_image}"
+          test "$(docker image inspect "${candidate_image}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "${TARGET_COMMIT}"
+          test "$(docker port "${service}" 8008/tcp)" = "127.0.0.1:8008"
+          if docker inspect "${service}" --format '{{range .Mounts}}{{println .Destination}}{{end}}' | grep -qx /app/src; then
+            echo "Mutable /app/src bind mount detected."
+            exit 1
+          fi
+          if docker inspect "${service}" --format '{{json .Config.Cmd}}' | grep -q -- --reload; then
+            echo "Development reload detected in staging."
+            exit 1
+          fi
+          test "$(docker exec "${service}" python -c 'from symbiote.agent_protocols import create_default_protocol_registry; print(",".join(create_default_protocol_registry().list_protocols()))')" = "legacy_text_v1,poolside_laguna_v1"
+          docker exec "${service}" python -c 'import json; from importlib.metadata import distribution, version; forge=distribution("forge-llm"); provenance=json.loads(forge.read_text("direct_url.json")); assert version("forge-llm") == "0.7.16"; assert provenance["vcs_info"]["requested_revision"] == "af51be9244c69cd19b817dea9528016dc582cb3f"; assert provenance["vcs_info"]["commit_id"] == "af51be9244c69cd19b817dea9528016dc582cb3f"'
+          docker exec "${service}" python -c 'from symbiote.adapters.llm.forge import ForgeLLMAdapter'
+
+          rollback_required=0
+          trap - EXIT
+          echo "Staging deployed at ${TARGET_COMMIT}; rollback image ${rollback_image} retained; database backup: ${database_backup}."

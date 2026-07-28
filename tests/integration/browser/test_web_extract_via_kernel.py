@@ -6,6 +6,7 @@ default. Skipable via SKIP_EXTRACT_SMOKE=1.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 
 import pytest
@@ -20,7 +21,13 @@ pytestmark = pytest.mark.skipif(
     reason="extract smoke disabled via SKIP_EXTRACT_SMOKE=1",
 )
 
+_REQUIRES_FORGE_SCRAPER = pytest.mark.skipif(
+    importlib.util.find_spec("forge_scraper") is None,
+    reason="live extraction smoke requires the 'extract' extra",
+)
 
+
+@_REQUIRES_FORGE_SCRAPER
 @pytest.mark.asyncio
 async def test_forge_scraper_extracts_example_com(tmp_path):
     kernel = SymbioteKernel(

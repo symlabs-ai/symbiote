@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 
 import pytest
 
@@ -13,6 +14,11 @@ from symbiote.config.models import KernelConfig
 from symbiote.core.kernel import SymbioteKernel
 
 pytestmark = pytest.mark.integration
+
+_REQUIRES_PLAYWRIGHT = pytest.mark.skipif(
+    importlib.util.find_spec("playwright") is None,
+    reason="Chromium integration requires the 'browser' extra",
+)
 
 
 _BROWSER_TOOLS = [
@@ -73,6 +79,7 @@ async def _run_async(kernel, tool_id: str, params: dict, bot, allow_internal: bo
     )
 
 
+@_REQUIRES_PLAYWRIGHT
 @pytest.mark.asyncio
 async def test_navigate_to_local_site(kernel_with_browser, local_site):
     bot = _bot_with_tools(kernel_with_browser, "nav")
@@ -85,6 +92,7 @@ async def test_navigate_to_local_site(kernel_with_browser, local_site):
     await _run_async(kernel_with_browser, "browser_close", {"task_id": "t1"}, bot)
 
 
+@_REQUIRES_PLAYWRIGHT
 @pytest.mark.asyncio
 async def test_snapshot_returns_text_with_refs(kernel_with_browser, local_site):
     bot = _bot_with_tools(kernel_with_browser, "snap")
@@ -96,6 +104,7 @@ async def test_snapshot_returns_text_with_refs(kernel_with_browser, local_site):
     await _run_async(kernel_with_browser, "browser_close", {"task_id": "t1"}, bot)
 
 
+@_REQUIRES_PLAYWRIGHT
 @pytest.mark.asyncio
 async def test_click_navigates_to_target(kernel_with_browser, local_site):
     bot = _bot_with_tools(kernel_with_browser, "click")
@@ -112,6 +121,7 @@ async def test_click_navigates_to_target(kernel_with_browser, local_site):
     await _run_async(kernel_with_browser, "browser_close", {"task_id": "t2"}, bot)
 
 
+@_REQUIRES_PLAYWRIGHT
 @pytest.mark.asyncio
 async def test_close_releases_session(kernel_with_browser, local_site):
     bot = _bot_with_tools(kernel_with_browser, "cl")
@@ -135,6 +145,7 @@ async def test_ssrf_blocks_localhost_by_default(kernel_with_browser):
     assert "blocked" in err or "ssrf" in err or "private" in err
 
 
+@_REQUIRES_PLAYWRIGHT
 @pytest.mark.asyncio
 async def test_screenshot_returns_png_base64(kernel_with_browser, local_site):
     bot = _bot_with_tools(kernel_with_browser, "shot")
@@ -160,6 +171,7 @@ async def test_screenshot_returns_png_base64(kernel_with_browser, local_site):
     )
 
 
+@_REQUIRES_PLAYWRIGHT
 @pytest.mark.asyncio
 async def test_wait_for_matches_existing_text(kernel_with_browser, local_site):
     bot = _bot_with_tools(kernel_with_browser, "wait")

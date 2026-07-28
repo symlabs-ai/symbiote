@@ -1,0 +1,6 @@
+# Symbiote build bootstrap for Linux / Python 3.12.
+# Update deliberately together with both dependency lock files.
+pip==26.1.2
+poetry-core==2.4.1
+setuptools==83.0.0
+wheel==0.47.0

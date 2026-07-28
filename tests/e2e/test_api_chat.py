@@ -18,8 +18,9 @@ from symbiote.core.kernel import SymbioteKernel
 
 
 @pytest.fixture()
-def setup(tmp_path: Path):
-    """Set up test DB, kernel, and auth."""
+def setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Set up test DB, kernel, and auth with the dev bypass disabled."""
+    monkeypatch.delenv("SYMBIOTE_DEV_MODE", raising=False)
     db = tmp_path / "api_test.db"
     adapter = SQLiteAdapter(db_path=db, check_same_thread=False)
     adapter.init_schema()

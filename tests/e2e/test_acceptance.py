@@ -76,7 +76,12 @@ class TestHTTPHealth:
     def test_health_returns_ok(self, http_client: TestClient) -> None:
         resp = http_client.get("/health")
         assert resp.status_code == 200
-        assert resp.json() == {"status": "ok"}
+        data = resp.json()
+        assert set(data) == {"status", "service", "version", "commit"}
+        assert data["status"] == "ok"
+        assert data["service"] == "symbiote"
+        assert isinstance(data["version"], str) and data["version"]
+        assert isinstance(data["commit"], str) and data["commit"]
 
 
 class TestHTTPCreateSymbiote:

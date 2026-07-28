@@ -1,7 +1,8 @@
 """Integration test: web_search registered on the kernel, real SymGateway call.
 
-This DOES hit production SymGateway and costs ~$0.003 per run. Marked smoke
-so the default `pytest` invocation skips it; CI runs it on demand.
+This DOES hit production SymGateway and costs ~$0.003 per run. It requires
+explicit ``SYMBIOTE_BRAVE_LIVE=1`` opt-in so credentials in a local ``.env``
+never make the default test suite call an external production service.
 """
 
 from __future__ import annotations
@@ -16,9 +17,10 @@ from symbiote.browser import register
 from symbiote.config.models import KernelConfig
 from symbiote.core.kernel import SymbioteKernel
 
-# Load .env if present so SYMGATEWAY_* are visible
+# Load .env credentials only after an explicit live-test opt-in.
+_RUN_LIVE = os.getenv("SYMBIOTE_BRAVE_LIVE") == "1"
 _ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
-if _ENV_FILE.exists():
+if _RUN_LIVE and _ENV_FILE.exists():
     for line in _ENV_FILE.read_text().splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -28,8 +30,15 @@ if _ENV_FILE.exists():
 
 
 pytestmark = pytest.mark.skipif(
-    not os.getenv("SYMGATEWAY_API_KEY"),
-    reason="SYMGATEWAY_API_KEY not set — smoke test skipped",
+    not (
+        _RUN_LIVE
+        and os.getenv("SYMGATEWAY_BASE_URL")
+        and os.getenv("SYMGATEWAY_API_KEY")
+    ),
+    reason=(
+        "live Brave smoke disabled; set SYMBIOTE_BRAVE_LIVE=1 with "
+        "SYMGATEWAY_BASE_URL and SYMGATEWAY_API_KEY"
+    ),
 )
 
 
