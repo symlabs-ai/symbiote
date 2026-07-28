@@ -5,6 +5,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.7.2] - 2026-07-28
+
+- feat(agent-protocols): adiciona camada versionada de protocolos por modelo, com `legacy_text_v1` e `poolside_laguna_v1`, validação estrita de configuração e integração ao runner sem quebrar o contrato legado.
+- feat(llm): preserva o histórico canônico de reasoning e tool calls entre iterações, inclusive na ponte ForgeLLM, evitando perda de contexto em loops agênticos.
+- ci(deps): fixa ForgeLLM `v0.7.16` pelo commit imutável `af51be9`, adiciona locks Linux/Python 3.12 e executa testes e lint no mesmo base image fixado por digest.
+- ops(staging): deploy do commit exato com porta apenas em loopback, runtime sem bind mount/reload, health e provenance obrigatórios, backup online consistente do SQLite e rollback automático de imagem e código.
+
 ## [v0.7.1] - 2026-06-23
 
 - fix(api): blindagem multi-tenant do escopo de skills no entrypoint HTTP. O `_resolve_config()` da API agora lê de ENV: `SYMBIOTE_SKILL_SCOPE` (`global` | `per_symbiote`), `SYMBIOTE_SKILLS_ROOT` e `SYMBIOTE_SKILLS_PROTECTED_ROOTS` (lista por `,` ou `os.pathsep`), e plumba para o `KernelConfig`. **A API agora assume `per_symbiote` por DEFAULT** (o `KernelConfig` em si segue `global` — CLI/embarcados intactos), porque a API é multi-tenant (um kernel servindo vários tenants via `/symbiotes/{id}`) e o pool global vazaria skills entre contas. Quando o scope não vem por ENV, a API loga um WARNING no boot explicando o default e como reverter.
