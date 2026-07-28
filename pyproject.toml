@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "symbiote"
-version = "0.7.2"
+version = "0.7.3"
 description = "Kernel for persistent cognitive entities"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -38,7 +38,8 @@ extract = [
     # Sub-extras [article,transcript,sofascore] are necessary because
     # forge_scraper/__init__.py imports sofascore (curl_cffi) at module load.
     # article=trafilatura (generic markdown extraction), transcript=youtube.
-    "forge-scraper[article,transcript,sofascore] @ git+https://github.com/symlabs-ai/forge_scraper.git",
+    # ForgeScraper v0.12.4 — immutable release commit.
+    "forge-scraper[article,transcript,sofascore] @ git+https://github.com/symlabs-ai/forge_scraper.git@632e4ce5d218bedebad3411df48625f4b34d7f29",
 ]
 browser = [
     "playwright>=1.40.0",

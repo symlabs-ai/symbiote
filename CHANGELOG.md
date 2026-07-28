@@ -5,6 +5,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.7.3] - 2026-07-28
+
+- fix(deps): fixa ForgeScraper `v0.12.4` pelo commit imutável `632e4ce`, eliminando a dependência flutuante do extra `[extract]`.
+- test(release): adiciona contratos para manter a versão esperada e todas as dependências VCS fixadas por SHA completo, preservando ForgeLLM `v0.7.16` em `af51be9`.
+
 ## [v0.7.2] - 2026-07-28
 
 - feat(agent-protocols): adiciona camada versionada de protocolos por modelo, com `legacy_text_v1` e `poolside_laguna_v1`, validação estrita de configuração e integração ao runner sem quebrar o contrato legado.
