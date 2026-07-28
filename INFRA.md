@@ -23,7 +23,7 @@
 - **Health interno:** `ssh linux-ci "curl -fsS http://127.0.0.1:8008/health"`
 - **Trigger:** push na `main` → testes → build da imagem → deploy do commit exato
 - **Runtime:** imagem imutável, sem bind mount de `/app/src` e sem `--reload`
-- **Dependências:** CI e imagem usam locks Linux/Python 3.12 em `requirements/`; nenhum build resolve versões novas implicitamente
+- **Dependências:** CI e imagem usam locks Linux/Python 3.12 em `requirements/`; CI roda no mesmo base image fixado por digest e nenhum build resolve versões novas implicitamente
 - **Rollback:** a imagem e o commit anteriores são restaurados automaticamente se health, versão ou contrato do container falharem
 - **Backup:** SQLite usa backup online consistente antes do recreate; cópia externa ao volume fica em `~/staging/backups/symbiote/`
 - **Restore:** restauração do banco é manual; o deploy não executa downgrade destrutivo de schema

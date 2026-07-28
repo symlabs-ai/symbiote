@@ -1,7 +1,10 @@
 *
 !pyproject.toml
+!ruff.toml
 !README.md
 !requirements/
 !requirements/**
 !src/
 !src/**
+!tests/
+!tests/**

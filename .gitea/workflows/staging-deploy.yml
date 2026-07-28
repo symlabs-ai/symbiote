@@ -10,30 +10,18 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Install isolated test environment
+      - name: Validate in pinned Python 3.12 image
         run: |
           set -euo pipefail
-          python3.12 -m venv --clear .ci-venv
-          .ci-venv/bin/python -m pip install --disable-pip-version-check -r requirements/bootstrap-linux.lock
-          .ci-venv/bin/python -m pip install --disable-pip-version-check --no-build-isolation -r requirements/ci-linux.lock
-          .ci-venv/bin/python -m pip install --disable-pip-version-check --no-build-isolation --no-deps -e .
-
-      - name: Validate
-        run: |
-          set -euo pipefail
-          .ci-venv/bin/python -m pip check
-          .ci-venv/bin/python -m pytest -q
-          .ci-venv/bin/ruff check .
-          .ci-venv/bin/python - <<'PY'
-          import json
-          from importlib.metadata import distribution, version
-
-          forge = distribution("forge-llm")
-          provenance = json.loads(forge.read_text("direct_url.json"))
-          assert version("forge-llm") == "0.7.16"
-          assert provenance["vcs_info"]["requested_revision"] == "af51be9244c69cd19b817dea9528016dc582cb3f"
-          assert provenance["vcs_info"]["commit_id"] == "af51be9244c69cd19b817dea9528016dc582cb3f"
-          PY
+          quality_image="symbiote-quality:${{ gitea.sha }}"
+          cleanup() {
+            docker image rm --force "${quality_image}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker build \
+            --target quality \
+            --tag "${quality_image}" \
+            .
 
   deploy:
     needs: quality

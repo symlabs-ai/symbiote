@@ -9,7 +9,9 @@
 #   SYMGATEWAY_API_KEY    — API key for SymGateway provider
 #   SYMGATEWAY_BASE_URL   — SymGateway base URL
 
-FROM python:3.12-slim AS base
+ARG PYTHON_IMAGE=python:3.12-slim@sha256:9e01bf1ae5db7649a236da7be1e94ffbbbdd7a93f867dd0d8d5720d9e1f89fab
+
+FROM ${PYTHON_IMAGE} AS base
 
 WORKDIR /app
 
@@ -27,8 +29,19 @@ RUN python -m pip install --no-cache-dir -r requirements/bootstrap-linux.lock \
     && python -m pip install --no-cache-dir --no-build-isolation -r requirements/runtime-linux.lock \
     && python -m pip install --no-cache-dir --no-build-isolation --no-deps .
 
+# CI stage. The runner host does not need a matching Python installation.
+FROM base AS quality
+
+RUN python -m pip install --no-cache-dir --no-build-isolation -r requirements/ci-linux.lock \
+    && python -m pip check
+COPY ruff.toml ./
+COPY tests/ tests/
+RUN python -m pytest -q \
+    && ruff check src tests \
+    && python -c 'import json; from importlib.metadata import distribution, version; forge=distribution("forge-llm"); provenance=json.loads(forge.read_text("direct_url.json")); assert version("forge-llm") == "0.7.16"; assert provenance["vcs_info"]["requested_revision"] == "af51be9244c69cd19b817dea9528016dc582cb3f"; assert provenance["vcs_info"]["commit_id"] == "af51be9244c69cd19b817dea9528016dc582cb3f"'
+
 # Production stage
-FROM python:3.12-slim
+FROM ${PYTHON_IMAGE}
 
 WORKDIR /app
 
