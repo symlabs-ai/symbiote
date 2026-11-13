@@ -85,7 +85,10 @@ def test_migration_merges_duplicate_rows(tmp_path: Path) -> None:
     adapter = SQLiteAdapter(db_path=db)
     adapter.init_schema()
     sid = IdentityManager(storage=adapter).create(name="s", role="r").id
+    # Simulate a database from before the unique index (and before schema
+    # versioning, TK-84): no index, user_version 0.
     adapter.execute("DROP INDEX IF EXISTS idx_environment_configs_scope")
+    adapter.execute("PRAGMA user_version = 0")
     for i, tools in enumerate((["a", "b"], ["b", "c"])):
         adapter.execute(
             "INSERT INTO environment_configs (id, symbiote_id, workspace_id, tools_json, "

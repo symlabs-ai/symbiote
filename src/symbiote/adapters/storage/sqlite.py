@@ -34,7 +34,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     summary      TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_sessions_external_key ON sessions(external_key);
 
 CREATE TABLE IF NOT EXISTS messages (
     id          TEXT PRIMARY KEY,
@@ -168,6 +167,17 @@ CREATE INDEX IF NOT EXISTS idx_discovered_tools_symbiote
 """
 
 
+# Numbered migrations, applied in order by init_schema (method names).
+_MIGRATIONS: tuple[str, ...] = (
+    "_migrate_columns",
+    "_migrate_tables",
+    "_ensure_unique_external_key",
+    "_ensure_unique_environment_config",
+    "_ensure_hot_indexes",
+)
+SCHEMA_VERSION = len(_MIGRATIONS)
+
+
 class SQLiteAdapter:
     """Thin wrapper around stdlib ``sqlite3`` with WAL + foreign keys.
 
@@ -205,11 +215,36 @@ class SQLiteAdapter:
     # ── public API ─────────────────────────────────────────────────────
 
     def init_schema(self) -> None:
-        """Create all tables if they don't already exist."""
-        self._conn.executescript(_SCHEMA_SQL)
+        """Create the base tables, then apply the migrations not applied yet.
 
-        # Idempotent migrations for existing databases
+        Migrations are numbered; the last one applied is kept in
+        ``PRAGMA user_version``. Each one is also idempotent, so databases
+        created before versioning (``user_version`` 0) run them all safely.
+        """
+        self._conn.executescript(_SCHEMA_SQL)
+        current = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        for version, name in enumerate(_MIGRATIONS, start=1):
+            if version > current:
+                getattr(self, name)()
+                self._conn.execute(f"PRAGMA user_version = {version}")
+                self._conn.commit()
+        # Skipped when the database had duplicated keys: retried every boot.
+        if not self._index_exists("idx_sessions_symbiote_external_key"):
+            self._ensure_unique_external_key()
+
+    def _index_exists(self, name: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?", (name,)
+        ).fetchone()
+        return row is not None
+
+    # ── migrations (order matters; append new ones at the end) ──────────
+
+    def _migrate_columns(self) -> None:
+        """1: columns added over time (tolerates columns that already exist)."""
         for stmt in (
+            # Databases from the first releases have no sessions.external_key.
+            "ALTER TABLE sessions ADD COLUMN external_key TEXT",
             "ALTER TABLE discovered_tools ADD COLUMN tags_json TEXT DEFAULT '[]'",
             "ALTER TABLE discovered_tools ADD COLUMN risk_level TEXT NOT NULL DEFAULT 'medium'",
             "ALTER TABLE environment_configs ADD COLUMN tool_tags_json TEXT DEFAULT '[]'",
@@ -255,8 +290,13 @@ class SQLiteAdapter:
                 self._conn.commit()
             except sqlite3.OperationalError:
                 pass  # column already exists
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_external_key ON sessions(external_key)"
+        )
+        self._conn.commit()
 
-        # Create new tables (idempotent via IF NOT EXISTS)
+    def _migrate_tables(self) -> None:
+        """2: tables added after the first release, with their indexes."""
         for stmt in (
             """CREATE TABLE IF NOT EXISTS execution_traces (
                 id TEXT PRIMARY KEY,
@@ -344,10 +384,6 @@ class SQLiteAdapter:
                 self._conn.commit()
             except sqlite3.OperationalError:
                 pass  # column already exists
-
-        self._ensure_unique_external_key()
-        self._ensure_unique_environment_config()
-        self._ensure_hot_indexes()
 
     def _ensure_unique_external_key(self) -> None:
         """One session per (symbiote_id, external_key).
