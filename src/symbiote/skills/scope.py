@@ -139,6 +139,7 @@ class SkillScopeManager:
         loader = SkillsLoader(
             *loader_roots, auto_promote_threshold=self._auto_promote_threshold
         )
+        store.on_change = loader.refresh
         return loader, store
 
 

@@ -105,7 +105,10 @@ class TestCreate:
     def test_create_in_background_context_marks_agent_created(self, store, agent_root):
         token = set_current_write_origin(BACKGROUND_REVIEW)
         try:
-            store.create("agent-skill", _VALID_SKILL_MD)
+            # Frontmatter name must match the directory (TK-48).
+            store.create(
+                "agent-skill", _VALID_SKILL_MD.replace("name: my-skill", "name: agent-skill")
+            )
         finally:
             reset_current_write_origin(token)
         meta = usage.read_meta(agent_root / "agent-skill")

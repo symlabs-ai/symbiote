@@ -72,7 +72,14 @@ class SkillsLoader:
         # Sprint 5: when > 0, quarantine skills auto-promote to active after
         # this many ``get_skill()`` loads. 0 keeps promotion strictly manual.
         self._auto_promote_threshold = auto_promote_threshold
+        # 0 = no cap. Otherwise a quarantined skill is not auto-promoted while
+        # this many skills are already active.
+        self._max_active_skills = 0
         self._discover()
+
+    def set_max_active_skills(self, value: int) -> None:
+        """Cap on active skills enforced at auto-promotion (0 = no cap)."""
+        self._max_active_skills = max(0, int(value))
 
     def set_auto_promote_threshold(self, value: int) -> None:
         """Update the auto-promote threshold post-construction.
@@ -116,10 +123,17 @@ class SkillsLoader:
         if skill.content is None:
             skill.content = self._load_content(skill.path)
         # Best-effort usage telemetry + auto-promote. Never fails the load.
+        threshold = self._auto_promote_threshold
+        if (
+            self._max_active_skills
+            and skill.status == usage.STATUS_QUARANTINE
+            and len(self.listable_skills()) >= self._max_active_skills
+        ):
+            threshold = 0  # library full: count the use, do not promote
         with contextlib.suppress(Exception):
             promoted = usage.mark_used(
                 skill.path.parent,
-                auto_promote_threshold=self._auto_promote_threshold,
+                auto_promote_threshold=threshold,
             )
             if promoted:
                 skill.status = usage.STATUS_ACTIVE

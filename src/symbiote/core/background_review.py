@@ -487,6 +487,11 @@ class BackgroundReviewEngine:
         and out of circulation. Active and quarantine are tracked separately
         so a stalled promotion queue can't deadlock new creates.
         """
+        counter = getattr(self._store, "count_by_status", None)
+        if counter is not None:
+            # From disk: skills the loader cannot parse still count.
+            counts = counter()
+            return (counts.get("active", 0), counts.get("quarantine", 0))
         if self._loader is None:
             return (0, 0)
         active = quarantine = 0

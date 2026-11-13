@@ -28,6 +28,7 @@ import os
 import re
 import shutil
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -97,10 +98,35 @@ def _validate_name(name: str) -> None:
         raise SkillValidationError(
             f"Skill name exceeds {MAX_NAME_LENGTH} characters."
         )
-    if not _VALID_NAME_RE.match(name):
+    if not _VALID_NAME_RE.fullmatch(name):
         raise SkillValidationError(
             f"Invalid skill name {name!r}. Use lowercase letters, numbers, "
             f"hyphens, dots, and underscores. Must start with a letter or digit."
+        )
+
+
+_FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
+_FRONTMATTER_NAME_RE = re.compile(r"^name:[ \t]*['\"]?([^'\"\r\n]*?)['\"]?[ \t]*$", re.MULTILINE)
+
+
+def _validate_frontmatter(content: str, name: str) -> None:
+    """SKILL.md must open with frontmatter whose ``name`` is the directory name.
+
+    The loader identifies skills by that ``name``; a mismatch let a new
+    skill shadow an existing one, and missing frontmatter made the skill
+    invisible to the loader (and to the quarantine limits) while it sat on
+    disk.
+    """
+    match = _FRONTMATTER_RE.match(content)
+    if match is None:
+        raise SkillValidationError(
+            "SKILL.md must start with YAML frontmatter (---\\nname: ...\\n---)."
+        )
+    declared = _FRONTMATTER_NAME_RE.search(match.group(1))
+    if declared is None or declared.group(1).strip() != name:
+        found = declared.group(1).strip() if declared else None
+        raise SkillValidationError(
+            f"Frontmatter name {found!r} must equal the skill name {name!r}."
         )
 
 
@@ -188,6 +214,9 @@ class SkillsStore:
     ) -> None:
         if not roots:
             raise ValueError("SkillsStore needs at least one root path.")
+        # Called after every successful write; the kernel points it at the
+        # matching SkillsLoader.refresh so new/edited skills are visible at once.
+        self.on_change: Callable[[], None] | None = None
         # Resolve so containment checks below work even with symlinks.
         self._roots: list[Path] = [Path(r).resolve() for r in roots]
         self._protected_roots: list[Path] = [
@@ -200,6 +229,31 @@ class SkillsStore:
     def agent_root(self) -> Path:
         """First root — where agent-created skills go."""
         return self._roots[0]
+
+    def count_by_status(self) -> dict[str, int]:
+        """Active / quarantine counts of the agent root, read from disk.
+
+        Counts sidecars directly, so a skill the loader cannot parse still
+        counts toward the limits.
+        """
+        counts = {usage.STATUS_ACTIVE: 0, usage.STATUS_QUARANTINE: 0}
+        if not self.agent_root.is_dir():
+            return counts
+        for skill_dir in self.agent_root.iterdir():
+            if not (skill_dir / "SKILL.md").is_file():
+                continue
+            meta = usage.read_meta(skill_dir) or {}
+            status = meta.get("status", usage.STATUS_ACTIVE)
+            if status in counts:
+                counts[status] += 1
+        return counts
+
+    def _notify(self) -> None:
+        if self.on_change is not None:
+            try:
+                self.on_change()
+            except Exception:  # noqa: BLE001 — a refresh failure must not undo the write
+                logging.getLogger(__name__).warning("skill store on_change failed", exc_info=True)
 
     # ── discovery ──────────────────────────────────────────────────────
 
@@ -241,6 +295,7 @@ class SkillsStore:
         if not content:
             raise SkillValidationError("content is required for create().")
         _validate_content_size(content, label="SKILL.md content")
+        _validate_frontmatter(content, name)
 
         if self.find_skill_dir(name) is not None:
             raise SkillExistsError(
@@ -255,6 +310,8 @@ class SkillsStore:
         # Sidecar: agent_created reflects who called us NOW.
         agent_created = is_background_review()
         usage.write_meta(skill_dir, usage.default_meta(agent_created=agent_created))
+
+        self._notify()
 
         return SkillWriteResult(
             success=True,
@@ -280,9 +337,12 @@ class SkillsStore:
             raise SkillProtectedError(
                 f"Skill {name!r} is in a protected root; cannot edit."
             )
+        _validate_frontmatter(content, name)
 
         _atomic_write_text(skill_dir / "SKILL.md", content)
         usage.bump_patch(skill_dir)
+        self._notify()
+
         return SkillWriteResult(
             success=True, action="edit", name=name,
             path=skill_dir / "SKILL.md",
@@ -343,8 +403,12 @@ class SkillsStore:
 
         new_text = text.replace(old_string, new_string)
         _validate_content_size(new_text, label=str(target.name))
+        if target.name == "SKILL.md":
+            _validate_frontmatter(new_text, name)
         _atomic_write_text(target, new_text)
         usage.bump_patch(skill_dir)
+
+        self._notify()
 
         return SkillWriteResult(
             success=True, action="patch", name=name, path=target,
@@ -380,6 +444,8 @@ class SkillsStore:
         _atomic_write_text(target, file_content)
         usage.bump_patch(skill_dir)
 
+        self._notify()
+
         return SkillWriteResult(
             success=True, action="write_file", name=name, path=target,
             message=f"Wrote {file_path} to skill {name!r}.",
@@ -408,6 +474,8 @@ class SkillsStore:
         if parent != skill_dir and parent.is_dir() and not any(parent.iterdir()):
             parent.rmdir()
         usage.bump_patch(skill_dir)
+
+        self._notify()
 
         return SkillWriteResult(
             success=True, action="remove_file", name=name, path=target,
@@ -440,6 +508,8 @@ class SkillsStore:
                     parent.rmdir()
             except OSError:
                 pass
+
+        self._notify()
 
         return SkillWriteResult(
             success=True, action="delete", name=name, path=None,

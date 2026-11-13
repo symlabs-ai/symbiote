@@ -794,6 +794,8 @@ class SymbioteKernel:
                 # just renamed.
                 loader_roots.append(r.parent)
         self._skills_loader = SkillsLoader(*loader_roots)
+        if self._skills_store is not None:
+            self._skills_store.on_change = self._skills_loader.refresh
 
         # Wire the loader into the ContextAssembler so active skills can be
         # injected into the system prompt — but ONLY for symbiotes that opt in
@@ -900,6 +902,7 @@ class SymbioteKernel:
         # Keep the loader's auto-promote threshold in sync with cfg on each
         # call. Cheap (just sets an int) and idempotent.
         loader.set_auto_promote_threshold(cfg.skill_auto_promote_threshold)
+        loader.set_max_active_skills(cfg.max_active_skills)
 
         # Per-symbiote scope: one engine per symbiote (each sees only its own
         # store/loader). Global scope: a single shared engine.
