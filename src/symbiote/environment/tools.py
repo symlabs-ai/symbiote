@@ -555,8 +555,9 @@ class ToolGateway:
         # Collect results and write audit logs (main thread)
         results: list[ToolCallResult] = []
         for idx, call in enumerate(calls):
-            if pre_results[idx] is not None:
-                results.append(_to_call_result(call, pre_results[idx]))
+            pre = pre_results[idx]
+            if pre is not None:
+                results.append(_to_call_result(call, pre))
                 continue
 
             fut = futures[idx]

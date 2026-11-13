@@ -6,7 +6,7 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from symbiote.discovery.models import DiscoveredTool
@@ -376,10 +376,11 @@ _METHOD_RISK: dict[str, str] = {
     "DELETE": "high",
 }
 
+RiskLevel = Literal["low", "medium", "high"]
 _VALID_RISK = {"low", "medium", "high"}
 
 
-def _risk_for_operation(method: str, op: dict[str, Any]) -> str:
+def _risk_for_operation(method: str, op: dict[str, Any]) -> RiskLevel:
     """Determine the risk_level for an OpenAPI operation.
 
     Precedence:
@@ -391,8 +392,8 @@ def _risk_for_operation(method: str, op: dict[str, Any]) -> str:
     """
     raw = op.get("x-risk-level")
     if isinstance(raw, str) and raw.lower() in _VALID_RISK:
-        return raw.lower()
-    return _METHOD_RISK.get(method.upper(), "medium")
+        return cast(RiskLevel, raw.lower())
+    return cast(RiskLevel, _METHOD_RISK.get(method.upper(), "medium"))
 
 
 def _iter_operations(spec: dict, errors: list[str] | None = None):  # noqa: ANN202

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -124,7 +125,7 @@ class DiscoveredToolRepository:
     def classify_by_tags(
         self,
         symbiote_id: str,
-        approve_tags: list[str],
+        approve_tags: builtins.list[str],
         disable_rest: bool = False,
     ) -> dict[str, int]:
         """Approve tools matching tags, optionally disable the rest.

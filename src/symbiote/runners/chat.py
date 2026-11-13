@@ -496,7 +496,7 @@ class ChatRunner:
             tool_mode="instant",
         )
 
-        output = clean_text
+        output: str | dict[str, Any] = clean_text
         if all_tool_results:
             output = {"text": clean_text, "tool_results": [r.model_dump() for r in all_tool_results]}
 
@@ -787,7 +787,7 @@ class ChatRunner:
             if self._consolidator is not None:
                 self._consolidator.consolidate_if_needed(self._working_memory, context.symbiote_id)
 
-        output = final_text
+        output: str | dict[str, Any] = final_text
         if all_tool_results:
             output = {"text": final_text, "tool_results": [r.model_dump() for r in all_tool_results]}
 
@@ -1102,7 +1102,7 @@ class ChatRunner:
             if self._consolidator is not None:
                 self._consolidator.consolidate_if_needed(self._working_memory, context.symbiote_id)
 
-        output = final_text
+        output: str | dict[str, Any] = final_text
         if all_tool_results:
             output = {"text": final_text, "tool_results": [r.model_dump() for r in all_tool_results]}
 
@@ -1781,8 +1781,8 @@ class ChatRunner:
         if self._working_memory is None and context.extra_context:
             history_text = context.extra_context.get("conversation_history")
             if history_text:
-                for msg in self._parse_conversation_history(history_text):
-                    messages.append(msg)
+                for turn in self._parse_conversation_history(history_text):
+                    messages.append(turn)
 
         # 4. Current user input (with ephemeral runtime context for the LLM)
         user_content = inject_runtime_context(

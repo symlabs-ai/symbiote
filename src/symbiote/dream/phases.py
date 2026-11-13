@@ -155,7 +155,7 @@ class PrunePhase:
 
                 current = skill.status
                 target: str | None = None
-                days: float = 0.0
+                days = 0.0
 
                 if current == skill_usage.STATUS_QUARANTINE:
                     # Quarantine has no last_used_at by definition — measure

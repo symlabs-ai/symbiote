@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from typing import Any
 
 from symbiote.core.exceptions import ValidationError
 from symbiote.core.models import EnvironmentConfig
@@ -23,7 +24,7 @@ class EnvironmentManager:
         self._storage = storage
         # Back-reference set by SymbioteKernel after construction so configure()
         # can validate evolver_llm requirements without circular imports.
-        self._kernel = None  # type: ignore[assignment]
+        self._kernel: Any = None
 
     # ── public API ─────────────────────────────────────────────────────
 

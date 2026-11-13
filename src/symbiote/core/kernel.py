@@ -50,6 +50,9 @@ from symbiote.runners.subagent import SubagentManager
 from symbiote.skills import tool as skill_tool_module
 from symbiote.skills.loader import SkillsLoader
 from symbiote.skills.scope import (
+    SkillScopeManager,
+)
+from symbiote.skills.scope import (
     reset_active_symbiote as _reset_active_symbiote,
 )
 from symbiote.skills.scope import (
@@ -232,7 +235,7 @@ class SymbioteKernel:
         # Per-symbiote scope (Option A). Non-None only when
         # config.skill_scope == "per_symbiote"; then _skills_store /
         # _skills_loader stay None and all access goes through this manager.
-        self._skill_scope_mgr: object | None = None
+        self._skill_scope_mgr: SkillScopeManager | None = None
         # In per_symbiote mode the review engine is cached per-symbiote (each
         # symbiote sees only its own store/loader). In global mode the single
         # _background_review is reused.
@@ -904,6 +907,8 @@ class SymbioteKernel:
             return None
 
         # Resolve the store/loader for this symbiote (scope-aware).
+        store: SkillsStore | None
+        loader: SkillsLoader | None
         if self._skill_scope_mgr is not None:
             store = self._skill_scope_mgr.store_for(symbiote_id)
             loader = self._skill_scope_mgr.loader_for(symbiote_id)
@@ -947,8 +952,8 @@ class SymbioteKernel:
                 self._background_review = BackgroundReviewEngine(
                     llm=self._evolver_llm,
                     messages=self._message_repo,
-                    store=self._skills_store,
-                    loader=self._skills_loader,
+                    store=store,  # == self._skills_store in global scope
+                    loader=loader,
                     max_active_skills=cfg.max_active_skills,
                     max_quarantine_skills=cfg.max_quarantine_skills,
                     storage=self._storage,

@@ -39,6 +39,7 @@ COPY tests/ tests/
 # Coverage gate: fails the build below 85% (pyproject [tool.coverage.report]).
 RUN python -m pytest -q --cov=src/symbiote --cov-fail-under=85 \
     && ruff check src tests \
+    && mypy src/symbiote \
     && python -c 'import json; from importlib.metadata import distribution, version; forge=distribution("forge-llm"); provenance=json.loads(forge.read_text("direct_url.json")); assert version("forge-llm") == "0.7.16"; assert provenance["vcs_info"]["requested_revision"] == "af51be9244c69cd19b817dea9528016dc582cb3f"; assert provenance["vcs_info"]["commit_id"] == "af51be9244c69cd19b817dea9528016dc582cb3f"'
 
 # Production stage

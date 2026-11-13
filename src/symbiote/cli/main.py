@@ -10,8 +10,8 @@ import json
 import os
 import sqlite3
 from pathlib import Path
+from typing import Any
 
-import click
 import typer
 from pydantic import ValidationError as PydanticValidationError
 from rich.console import Console
@@ -51,7 +51,7 @@ def _describe(exc: BaseException) -> str:
 class _FriendlyErrors(TyperGroup):
     """Top-level group: input errors from any command end with one line."""
 
-    def invoke(self, ctx: click.Context) -> object:
+    def invoke(self, ctx: Any) -> object:  # click Context (typer vendors its own)
         try:
             return super().invoke(ctx)
         except _INPUT_ERRORS as exc:
@@ -570,7 +570,7 @@ def tools_add(
             parameters=params,
             handler_type="http",
         )
-        http_config = HttpToolConfig(method=method, url_template=url)
+        http_config = HttpToolConfig.model_validate({"method": method.upper(), "url_template": url})
         # Persisted and authorized, so the next process (and the API) sees it.
         kernel.register_http_tool(symbiote_id, descriptor, http_config)
         console.print(f"Registered tool [cyan]{_e(tool_id)}[/cyan] for symbiote {_e(symbiote_id[:8])}")

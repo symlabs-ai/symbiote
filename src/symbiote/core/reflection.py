@@ -30,7 +30,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from symbiote.core._review_prompts import REFLECTION_PROMPT, render_prompt
-from symbiote.core.models import MemoryEntry
+from symbiote.core.models import MemoryEntry, MemoryType
 from symbiote.core.ports import LLMPort, MemoryPort, MessagePort, StoragePort
 
 _log = logging.getLogger(__name__)
@@ -318,7 +318,7 @@ class ReflectionEngine:
 
         persisted = 0
         for fact in facts:
-            mem_type = fact["type"] if fact["type"] in (
+            mem_type: MemoryType = fact["type"] if fact["type"] in (
                 "preference", "constraint", "procedural", "factual", "decision",
             ) else "reflection"
             entry = MemoryEntry(
@@ -419,6 +419,8 @@ class ReflectionEngine:
             existing_memories=existing,
         )
 
+        if self._llm is None:
+            raise RuntimeError("LLM reflection needs an LLM adapter")
         response = self._llm.complete([{"role": "user", "content": prompt}])
         text = response if isinstance(response, str) else getattr(response, "content", "")
         return self._parse_and_guard(text)
@@ -592,7 +594,7 @@ class ReflectionEngine:
         """Persist keyword-extracted facts (legacy shape: type/content/importance)."""
         persisted = 0
         for fact in facts:
-            mem_type = fact["type"] if fact["type"] in (
+            mem_type: MemoryType = fact["type"] if fact["type"] in (
                 "preference", "constraint", "procedural", "factual", "decision",
             ) else "reflection"
             entry = MemoryEntry(
@@ -611,7 +613,7 @@ class ReflectionEngine:
 
     def _apply_llm_facts(
         self, facts: list[dict], symbiote_id: str, session_id: str
-    ) -> int:
+    ) -> tuple[int, int]:
         """Persist LLM-extracted facts honouring action=create|patch.
 
         PATCH path (Sprint 2 first-class):

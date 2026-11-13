@@ -71,14 +71,12 @@ class ChromiumSession:
         return self._last_snapshot
 
     async def click(self, ref: str) -> None:
-        self._require_ref(ref)
-        node = self._last_snapshot.refs[ref]
+        node = self._require_ref(ref)
         locator = self._locator_for(node)
         await locator.click(timeout=self._timeout_ms)
 
     async def fill(self, ref: str, value: str) -> None:
-        self._require_ref(ref)
-        node = self._last_snapshot.refs[ref]
+        node = self._require_ref(ref)
         locator = self._locator_for(node)
         await locator.fill(value, timeout=self._timeout_ms)
 
@@ -95,7 +93,8 @@ class ChromiumSession:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Closing context for %s failed: %s", self.task_id, exc)
 
-    def _require_ref(self, ref: str) -> None:
+    def _require_ref(self, ref: str) -> dict[str, Any]:
+        """The node for *ref* in the last snapshot (raises if there is none)."""
         if self._last_snapshot is None:
             raise RuntimeError(
                 f"No snapshot taken yet for task {self.task_id} — "
@@ -106,6 +105,7 @@ class ChromiumSession:
                 f"Unknown ref {ref!r}. Valid refs from last snapshot: "
                 f"{sorted(self._last_snapshot.refs)[:10]}"
             )
+        return self._last_snapshot.refs[ref]
 
     def _locator_for(self, node: dict[str, Any]) -> Any:
         role = node["role"]

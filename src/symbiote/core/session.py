@@ -6,6 +6,7 @@ import json
 import sqlite3
 import threading
 from datetime import datetime
+from typing import Literal
 
 from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.models import Decision, Message, Session, _utcnow
@@ -168,7 +169,9 @@ class SessionManager:
 
     # ── Messages ───────────────────────────────────────────────────────
 
-    def add_message(self, session_id: str, role: str, content: str) -> Message:
+    def add_message(
+        self, session_id: str, role: Literal["user", "assistant", "system"], content: str
+    ) -> Message:
         """Persist a message linked to the given session."""
         self._assert_session_exists(session_id)
 

@@ -186,9 +186,12 @@ class MessageBus:
 
     async def _dispatch_with_retry(self, msg: InboundMessage) -> None:
         """Dispatch a message to the handler with exponential backoff on failure."""
+        handler = self._handler
+        if handler is None:
+            return
         for attempt in range(self._max_retries + 1):
             try:
-                result = self._handler(msg)
+                result = handler(msg)
                 if asyncio.iscoroutine(result):
                     await result
                 return

@@ -6,7 +6,7 @@ import json
 import logging
 import threading
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, cast
 
 from symbiote.dream.models import BudgetTracker, DreamContext, DreamReport
 from symbiote.dream.phases import (
@@ -20,6 +20,7 @@ from symbiote.dream.phases import (
 if TYPE_CHECKING:
     from symbiote.core.ports import LLMPort, StoragePort
     from symbiote.memory.store import MemoryStore
+    from symbiote.skills.loader import SkillsLoader
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ class DreamEngine:
         max_llm_calls: int = 10,
         min_sessions: int = 5,
         dry_run: bool = False,
-        skills_loader: object | None = None,
+        skills_loader: SkillsLoader | None = None,
         skill_quarantine_timeout_days: int | None = None,
     ) -> None:
         self._storage = storage
@@ -79,9 +80,11 @@ class DreamEngine:
 
     def dream(self, symbiote_id: str, dream_mode: str) -> DreamReport:
         """Run a dream cycle synchronously. Returns the report."""
+        if dream_mode not in ("light", "full"):
+            raise ValueError(f"dream_mode must be 'light' or 'full', got {dream_mode!r}")
         report = DreamReport(
             symbiote_id=symbiote_id,
-            dream_mode=dream_mode,
+            dream_mode=cast(Literal["light", "full"], dream_mode),
             dry_run=self._dry_run,
             max_llm_calls=self._max_llm_calls,
         )

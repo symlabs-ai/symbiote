@@ -275,7 +275,7 @@ class RegisterToolRequest(BaseModel):
     name: str = Field(max_length=MAX_NAME_CHARS)
     description: str = Field(max_length=MAX_TEXT_CHARS)
     parameters: dict = {}
-    http_method: str = "GET"
+    http_method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "GET"
     url_template: str
     headers: dict[str, str] = {}
     timeout: float = 30.0
@@ -1074,6 +1074,8 @@ def update_discovered_tool(
         raise HTTPException(status_code=404, detail="Discovered tool not found")
 
     tool = repo.get(symbiote_id, tool_id)
+    if tool is None:
+        raise HTTPException(status_code=404, detail="Discovered tool not found")
     return _tool_to_response(tool)
 
 
@@ -1722,18 +1724,18 @@ def dashboard_data(
         "JOIN symbiotes sym ON dt.symbiote_id = sym.id "
         "ORDER BY dt.discovered_at DESC"
     )
+    def _count(sql: str) -> int:
+        row = adapter.fetch_one(sql)
+        return int(row["c"]) if row else 0
+
     stats = {
-        "symbiotes": adapter.fetch_one("SELECT COUNT(*) as c FROM symbiotes WHERE status != 'deleted'")["c"],
-        "sessions": adapter.fetch_one("SELECT COUNT(*) as c FROM sessions")["c"],
-        "sessions_active": adapter.fetch_one(
-            "SELECT COUNT(*) as c FROM sessions WHERE status = 'active'"
-        )["c"],
-        "memories": adapter.fetch_one("SELECT COUNT(*) as c FROM memory_entries WHERE is_active = 1")["c"],
-        "api_keys": adapter.fetch_one("SELECT COUNT(*) as c FROM api_keys WHERE is_active = 1")["c"],
-        "discovered_tools": adapter.fetch_one("SELECT COUNT(*) as c FROM discovered_tools")["c"],
-        "pending_tools": adapter.fetch_one(
-            "SELECT COUNT(*) as c FROM discovered_tools WHERE status = 'pending'"
-        )["c"],
+        "symbiotes": _count("SELECT COUNT(*) as c FROM symbiotes WHERE status != 'deleted'"),
+        "sessions": _count("SELECT COUNT(*) as c FROM sessions"),
+        "sessions_active": _count("SELECT COUNT(*) as c FROM sessions WHERE status = 'active'"),
+        "memories": _count("SELECT COUNT(*) as c FROM memory_entries WHERE is_active = 1"),
+        "api_keys": _count("SELECT COUNT(*) as c FROM api_keys WHERE is_active = 1"),
+        "discovered_tools": _count("SELECT COUNT(*) as c FROM discovered_tools"),
+        "pending_tools": _count("SELECT COUNT(*) as c FROM discovered_tools WHERE status = 'pending'"),
     }
     return {
         "symbiotes": [dict(r) for r in symbiotes],

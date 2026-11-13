@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
@@ -282,6 +282,6 @@ class ProcessEngine:
             state=row["state"],
             current_step=row.get("current_step"),
             logs=logs,
-            created_at=created,
-            updated_at=updated,
+            created_at=created or datetime.now(tz=UTC),
+            updated_at=updated or datetime.now(tz=UTC),
         )

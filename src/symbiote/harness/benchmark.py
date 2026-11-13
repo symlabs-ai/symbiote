@@ -11,7 +11,10 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from symbiote.core.kernel import SymbioteKernel
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +68,7 @@ class BenchmarkSuiteResult:
 class BenchmarkRunner:
     """Runs benchmark tasks against a symbiote and grades results."""
 
-    def __init__(self, kernel: object) -> None:  # SymbioteKernel
+    def __init__(self, kernel: SymbioteKernel) -> None:
         self._kernel = kernel
 
     def run_task(self, symbiote_id: str, task: BenchmarkTask) -> BenchmarkResult:

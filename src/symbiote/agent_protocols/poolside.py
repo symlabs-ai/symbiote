@@ -80,13 +80,13 @@ class PoolsideLagunaProtocol(AgentProtocol):
         calls: list[ToolCall],
         state: ProtocolState,
     ) -> None:
-        if calls and not isinstance(response, LLMResponse):
+        if not calls:
+            return
+        if not isinstance(response, LLMResponse):
             raise AgentProtocolError(
                 "poolside_laguna_v1 requires native structured tool calls; "
                 "received a text-parsed tool call"
             )
-        if not calls:
-            return
 
         if len(response.tool_calls) != len(calls):
             raise AgentProtocolError(

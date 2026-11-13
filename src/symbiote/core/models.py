@@ -83,22 +83,25 @@ MEMORY_TYPE_CATEGORY: dict[str, MemoryCategory] = {
 }
 
 
+MemoryType = Literal[
+    "working",
+    "session_summary",
+    "relational",
+    "preference",
+    "constraint",
+    "factual",
+    "procedural",
+    "decision",
+    "reflection",
+    "semantic_note",
+]
+
+
 class MemoryEntry(BaseModel):
     id: str = Field(default_factory=_uuid)
     symbiote_id: str
     session_id: str | None = None
-    type: Literal[
-        "working",
-        "session_summary",
-        "relational",
-        "preference",
-        "constraint",
-        "factual",
-        "procedural",
-        "decision",
-        "reflection",
-        "semantic_note",
-    ]
+    type: MemoryType
     category: MemoryCategory | None = None
     scope: Literal["global", "user", "project", "workspace", "session"]
     content: str

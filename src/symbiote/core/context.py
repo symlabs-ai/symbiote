@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
@@ -551,7 +551,7 @@ class ContextAssembler:
             # Include get_tool_schema descriptor in the list (with full params)
             index_desc = self._tool_gateway.get_descriptor("get_tool_schema")
 
-            tool_dicts = [
+            tool_dicts: list[dict[str, Any]] = [
                 {
                     "tool_id": d.tool_id,
                     "name": d.name,

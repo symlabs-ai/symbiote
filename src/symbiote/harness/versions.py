@@ -138,6 +138,8 @@ class HarnessVersionRepository:
         if row is None:
             # Session ran with the built-in default text: score the baseline.
             row = self._baseline(symbiote_id, component, create=True)
+        if row is None:  # create=True always returns the row
+            return
 
         old_avg = row["avg_score"] or 0.0
         count = row["session_count"] or 0

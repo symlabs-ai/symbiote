@@ -95,9 +95,11 @@ class MessagePort(Protocol):
     """Structural interface for message retrieval (isolates SQL from consumers)."""
 
     def get_messages(
-        self, session_id: str, limit: int = 50
+        self, session_id: str, limit: int = 50, *, since: str | None = None
     ) -> list[dict]:
-        """Return messages for a session as dicts with 'role' and 'content', chronological order."""
+        """Return messages for a session as dicts with 'role' and 'content', chronological order.
+
+        With *since*, only messages created after that ISO timestamp."""
         ...
 
 
