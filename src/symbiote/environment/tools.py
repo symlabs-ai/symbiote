@@ -648,15 +648,24 @@ def _wrap_external_content(content: Any) -> Any:
 
 def _build_url(url_template: str, params: dict, optional_params: list[str]) -> str:
     """Render *url_template* with *params*, stripping optional placeholders that
-    are absent or empty rather than raising KeyError.
+    are absent (``None``) or empty strings rather than raising KeyError.
+
+    Every value is percent-encoded as a single path segment / query value, so
+    a value coming from the LLM can never add path segments (``../``), query
+    parameters (``?``, ``&``) or a fragment. The one exception is a template
+    that *starts* with a placeholder (``{base_url}/items/{id}`` or a bare
+    ``{url}``): that first placeholder carries a URL prefix and is inserted
+    verbatim.
 
     Handles both query-string segments (``?key={param}`` / ``&key={param}``) and
     bare path placeholders (``/{param}/``).
     """
     import re
+    from string import Formatter
+    from urllib.parse import quote
 
     for name in optional_params:
-        if not params.get(name):
+        if params.get(name) is None or params.get(name) == "":
             # Remove ``?key={name}`` or ``&key={name}`` (query-string style)
             url_template = re.sub(
                 rf"[?&][^?&=]+=\{{{re.escape(name)}\}}",
@@ -672,8 +681,18 @@ def _build_url(url_template: str, params: dict, optional_params: list[str]) -> s
     # Remove trailing ``?`` when all query params were stripped
     url_template = re.sub(r"\?$", "", url_template)
 
+    leading_field: str | None = None
+    for literal, field, _spec, _conv in Formatter().parse(url_template):
+        if field is not None:
+            leading_field = field if literal == "" else None
+        break
+
     # Only pass params that are actually referenced in the (possibly trimmed) template
-    format_params = {k: v for k, v in params.items() if f"{{{k}}}" in url_template}
+    format_params = {
+        k: (v if k == leading_field else quote(str(v), safe=""))
+        for k, v in params.items()
+        if f"{{{k}}}" in url_template
+    }
     return url_template.format(**format_params)
 
 

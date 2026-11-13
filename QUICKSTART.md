@@ -206,6 +206,11 @@ kernel.tool_gateway.register(
 kernel.environment.configure(symbiote_id=sym.id, tools=["get_weather"])
 ```
 
+Placeholder values are percent-encoded, so `city="São Paulo"` becomes
+`S%C3%A3o%20Paulo` and a value can never add path segments or query parameters.
+Only a placeholder at the very start of the template (`{base_url}/items/{id}`)
+is inserted as-is.
+
 ### Loading MCP Tools
 
 ```python

@@ -13,6 +13,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - fix(api): entrada inválida devolve 4xx em vez de 500 (A-1). `role` de mensagem e de chave de API viram `Literal`; erros de validação dos modelos de domínio (`EnvironmentConfig`, `Message`) devolvem 422; `sqlite3.IntegrityError` devolve 409; o teto de `max_tool_iterations` e o papel inválido de chave levantam `symbiote.core.exceptions.ValidationError`, que agora também é `ValueError`.
 - fix(api): limites de tamanho (S-10). Corpo de requisição limitado a 5 MB por um middleware ASGI (vale para `Content-Length` e corpo chunked; responde 413); mensagens a 1 milhão de caracteres; nomes, papéis e ids a 200; resposta de HTTP tool a 5 MB, acima disso vira erro da tool em vez de ser lida inteira. Os valores ficam em `symbiote.api.limits` e `environment.tools.MAX_HTTP_TOOL_RESPONSE_BYTES`. Respostas de HTTP tool que não são UTF-8 deixam de levantar `UnicodeDecodeError`.
 - fix(security): a validação de SSRF bloqueia IPv6 mapeado para IPv4 (`::ffff:127.0.0.1`, `::ffff:169.254.169.254`), o prefixo NAT64 e qualquer endereço que não seja global e unicast (`::`, multicast, reservados, faixas de benchmark), inclusive em destinos de redirect (S-3).
+- fix(tools): os valores dos placeholders de `url_template` passam a ser codificados (`quote(safe="")`), então um valor vindo do LLM não acrescenta segmentos de path, parâmetros de query nem fragmento, e valores com espaço ou acento funcionam. Placeholders opcionais com valor `False` ou `0` deixam de ser removidos (S-7).
+  - **MIGRAÇÃO:** valores com `/`, `?` ou `&` em placeholders deixam de alterar a URL. Exceção: um placeholder no início do template (`{base_url}/...` ou `{url}`) é inserido sem codificação.
 
 ## [v0.7.3] - 2026-07-28
 
