@@ -29,7 +29,9 @@ from symbiote.core.exceptions import is_transient_llm_error
 from symbiote.core.models import Message
 from symbiote.core.ports import LLMPort
 from symbiote.environment.descriptors import LLMResponse, ToolCall, ToolCallResult
+from symbiote.environment.exec_context import tool_exec_context
 from symbiote.environment.parser import parse_tool_calls
+from symbiote.environment.policies import error_with_hint
 from symbiote.environment.runtime_context import inject_runtime_context
 from symbiote.memory.working import WorkingMemory
 from symbiote.runners.base import (
@@ -424,7 +426,7 @@ class ChatRunner:
         # Execute tool calls if any (at most 1 iteration worth)
         if tool_calls and self._tool_gateway is not None:
             # Approval gate (kept — a single tool call can still be high-risk)
-            approved_calls, denial_results = self._check_approval(tool_calls)
+            approved_calls, denial_results = self._check_approval(tool_calls, context)
 
             gateway_results: list[ToolCallResult] = []
             if approved_calls:
@@ -643,7 +645,9 @@ class ChatRunner:
             )
 
             # Approval gate: check high-risk tools before execution
-            approved_calls, denial_results = self._check_approval(remaining_calls)
+            approved_calls, denial_results = self._check_approval(
+                remaining_calls, context
+            )
 
             if self._on_progress is not None:
                 self._on_progress("tool_start", iteration + 1, max_iters)
@@ -958,10 +962,12 @@ class ChatRunner:
             # a worker thread instead of blocking this event loop.
             if self._on_before_tool_call is not None:
                 approved_calls, denial_results = await asyncio.to_thread(
-                    self._check_approval, remaining_calls
+                    self._check_approval, remaining_calls, context
                 )
             else:
-                approved_calls, denial_results = self._check_approval(remaining_calls)
+                approved_calls, denial_results = self._check_approval(
+                    remaining_calls, context
+                )
 
             if self._on_progress is not None:
                 self._on_progress("tool_start", iteration + 1, max_iters)
@@ -1158,12 +1164,19 @@ class ChatRunner:
     def _check_approval(
         self,
         calls: list[ToolCall],
+        context: AssembledContext | None = None,
     ) -> tuple[list[ToolCall], dict[int, ToolCallResult]]:
         """Check approval for tool calls based on risk_level.
 
         Returns a tuple of (approved_calls, denial_results_by_index).
         High-risk tools require approval via the on_before_tool_call callback.
         If the callback is None, all tools are auto-approved (backward compat).
+
+        With ``context`` (every call made by the loops), a high-risk call is
+        first checked against policy and the host's tool guard
+        (``ToolGateway.authorize``): nobody is asked to approve a call that
+        would be refused anyway. The callback then runs inside the call's
+        ``ToolExecContext``, so ``current_tool_context()`` works in it.
         """
         approved: list[ToolCall] = []
         denied: dict[int, ToolCallResult] = {}
@@ -1186,7 +1199,27 @@ class ChatRunner:
                 approved.append(call)
                 continue
             risk = self._tool_gateway.get_risk_level(call.tool_id)
-            if risk == "high" and not self._on_before_tool_call(call.tool_id, call.params, risk):
+            if risk != "high":
+                approved.append(call)
+                continue
+            authorize = getattr(self._tool_gateway, "authorize", None)
+            if context is not None and authorize is not None:
+                refusal = authorize(context.symbiote_id, context.session_id, call)
+                if refusal is not None:
+                    denied[idx] = ToolCallResult(
+                        call_id=call.call_id,
+                        tool_id=call.tool_id,
+                        success=False,
+                        error=error_with_hint(refusal.error or "Tool call refused"),
+                        risk_level=risk,
+                    )
+                    continue
+            if context is not None:
+                with tool_exec_context(context.symbiote_id, context.session_id):
+                    allowed = self._on_before_tool_call(call.tool_id, call.params, risk)
+            else:
+                allowed = self._on_before_tool_call(call.tool_id, call.params, risk)
+            if not allowed:
                 denied[idx] = ToolCallResult(
                     call_id=call.call_id,
                     tool_id=call.tool_id,

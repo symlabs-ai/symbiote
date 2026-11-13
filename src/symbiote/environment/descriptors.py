@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 
 class ToolDescriptor(BaseModel):
@@ -82,6 +82,11 @@ class ToolCall(BaseModel):
     # (truncated JSON, a list, ...). Such a call is never executed; the error
     # is returned to the model instead.
     arguments_error: str | None = Field(default=None, exclude=True)
+    # Set by ``ToolGateway.authorize`` once policy and the host's tool guard
+    # have accepted this call, so the gateway does not ask the guard a second
+    # time when it executes it. A private attribute: it cannot be set through
+    # the constructor, i.e. not by anything parsed from the model's output.
+    _guard_checked: bool = PrivateAttr(default=False)
 
 
 class ToolCallResult(BaseModel):

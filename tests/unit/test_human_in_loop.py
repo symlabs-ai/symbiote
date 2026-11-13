@@ -62,6 +62,12 @@ def tool_gateway(adapter: SQLiteAdapter) -> ToolGateway:
     return ToolGateway(policy_gate=gate)
 
 
+def _authorize(tool_gateway: ToolGateway, symbiote_id: str, tool_id: str) -> None:
+    """Allow ``tool_id`` by policy: approval is only asked for calls that
+    policy (and the host's tool guard) would let through."""
+    tool_gateway._gate._env.add_tools(symbiote_id, [tool_id])
+
+
 def _make_context(
     symbiote_id: str,
     user_input: str,
@@ -162,6 +168,7 @@ class TestApprovalCallback:
             },
         )
         tool_gateway.register_descriptor(desc, lambda params: "email sent")
+        _authorize(tool_gateway, symbiote_id, "send_email")
 
         # LLM: first call produces tool_call, second call is final response
         llm = MockLLM([
@@ -202,6 +209,7 @@ class TestApprovalCallback:
             parameters={"type": "object", "properties": {}},
         )
         tool_gateway.register_descriptor(desc, lambda params: "deleted")
+        _authorize(tool_gateway, symbiote_id, "delete_all")
 
         llm = MockLLM([
             '```tool_call\n{"tool": "delete_all", "params": {}}\n```',
@@ -350,6 +358,7 @@ class TestApprovalCallback:
             parameters={"type": "object", "properties": {}},
         )
         tool_gateway.register_descriptor(desc, lambda params: "boom")
+        _authorize(tool_gateway, symbiote_id, "nuke")
 
         received_messages: list[list[dict]] = []
 

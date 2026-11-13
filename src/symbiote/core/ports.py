@@ -9,7 +9,15 @@ if TYPE_CHECKING:
 
 
 class StoragePort(Protocol):
-    """Structural interface every storage adapter must satisfy."""
+    """Structural interface every storage adapter must satisfy.
+
+    An adapter can be injected with ``SymbioteKernel(config, storage=...)``.
+    The SQL it receives is still SQLite dialect with ``?`` placeholders.
+    """
+
+    def init_schema(self) -> None:
+        """Create or migrate the schema. Idempotent; the kernel calls it once."""
+        ...
 
     def execute(self, sql: str, params: tuple | None = None) -> Any: ...
 

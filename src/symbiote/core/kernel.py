@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import Any
 
 from symbiote.adapters.export.markdown import ExportService
 from symbiote.adapters.storage.message_repository import MessageRepository
@@ -25,7 +26,7 @@ from symbiote.core.hooks import CompositeHook
 from symbiote.core.identity import IdentityManager
 from symbiote.core.inspector import KernelInspector
 from symbiote.core.models import Session, Symbiote
-from symbiote.core.ports import LLMPort, SessionRecallPort
+from symbiote.core.ports import LLMPort, SessionRecallPort, StoragePort
 from symbiote.core.reflection import ReflectionEngine
 from symbiote.core.scoring import compute_auto_score, compute_final_score
 from symbiote.core.session import SessionManager
@@ -35,10 +36,15 @@ from symbiote.discovery.repository import DiscoveredToolRepository
 from symbiote.dream.engine import DreamEngine
 from symbiote.dream.models import DreamReport
 from symbiote.environment.descriptors import HttpToolConfig, ToolDescriptor
+from symbiote.environment.exec_context import (
+    bind_host_context,
+    current_tool_context,
+    reset_host_context,
+)
 from symbiote.environment.http_tool_store import HttpToolRepository
 from symbiote.environment.manager import EnvironmentManager
 from symbiote.environment.policies import PolicyGate
-from symbiote.environment.tools import ToolGateway
+from symbiote.environment.tools import ToolGateway, ToolGuard
 from symbiote.harness.versions import HarnessVersionRepository
 from symbiote.knowledge.service import KnowledgeService
 from symbiote.memory.store import MemoryStore
@@ -96,9 +102,18 @@ class SymbioteKernel:
         config: KernelConfig,
         llm: LLMPort | None = None,
         *,
+        storage: StoragePort | None = None,
         agent_protocol: str | AgentProtocol | None = None,
         protocol_registry: AgentProtocolRegistry | None = None,
     ) -> None:
+        """Compose the kernel.
+
+        ``storage`` injects the storage adapter; by default the kernel opens
+        the SQLite file at ``config.db_path``. An injected adapter belongs to
+        the host: the kernel calls its ``init_schema()`` once and never closes
+        it. It must accept the SQL the kernel sends today (SQLite dialect,
+        ``?`` placeholders).
+        """
         active_protocol_registry = (
             protocol_registry or create_default_protocol_registry()
         )
@@ -116,8 +131,13 @@ class SymbioteKernel:
         self._config = config
         self._llm = llm
 
-        # Storage
-        self._storage = SQLiteAdapter(config.db_path, check_same_thread=False)
+        # Storage: the host's adapter, or the default SQLite file.
+        self._owns_storage = storage is None
+        self._storage: StoragePort = (
+            storage
+            if storage is not None
+            else SQLiteAdapter(config.db_path, check_same_thread=False)
+        )
         self._storage.init_schema()
 
         # Managers
@@ -333,7 +353,9 @@ class SymbioteKernel:
 
     def set_approval_callback(
         self,
-        callback: Callable[[str, dict, str], bool] | None,
+        callback: Callable[..., bool] | None,
+        *,
+        pass_context: bool = False,
     ) -> None:
         """Install a human-in-the-loop approval gate on the chat runner.
 
@@ -345,6 +367,11 @@ class SymbioteKernel:
         The callback receives ``(tool_id, params, risk_level)`` and returns
         ``True`` to allow or ``False`` to deny. It is invoked **only** for
         tools whose ``risk_level == "high"`` (see ``ChatRunner._check_approval``).
+        With ``pass_context=True`` it receives a fourth argument, the
+        ``ToolExecContext`` of the call (symbiote, session and the turn's
+        ``host_context``); either way ``current_tool_context()`` returns it
+        while the callback runs. The callback is consulted only after policy
+        and the tool guard (``set_tool_guard``) have accepted the call.
         Pass ``None`` to remove a previously installed gate. The gate also
         applies to the blocks of ``tool_mode="long_run"``. In
         ``message_async`` the callback runs in a worker thread, so it may
@@ -360,10 +387,26 @@ class SymbioteKernel:
                 "No chat runner available to attach an approval callback "
                 "(kernel was constructed without an LLM)."
             )
-        runner.set_approval_callback(callback)
+        gate = callback
+        if callback is not None and pass_context:
+
+            def gate(tool_id: str, params: dict, risk_level: str) -> bool:
+                return callback(tool_id, params, risk_level, current_tool_context())
+
+        runner.set_approval_callback(gate)
         long_run = self._runner_registry.get("long_run")
         if isinstance(long_run, LongRunRunner):
-            long_run.set_approval_callback(callback)
+            long_run.set_approval_callback(gate)
+
+    def set_tool_guard(self, guard: ToolGuard | None) -> None:
+        """Install (or remove, with ``None``) the host's veto over tool calls.
+
+        ``guard(tool_id, params, context)`` returns ``ToolDecision.allow()``
+        or ``ToolDecision.deny(reason)`` for every tool call that policy
+        allows, whatever its risk level, before the approval callback and
+        before the handler. See ``ToolGateway.set_tool_guard``.
+        """
+        self._tool_gateway.set_tool_guard(guard)
 
     def set_progress_callbacks(
         self,
@@ -579,6 +622,8 @@ class SymbioteKernel:
         content: str,
         extra_context: dict | None = None,
         llm_config: dict | None = None,
+        *,
+        host_context: Mapping[str, Any] | None = None,
     ) -> str:
         """Add user message, run chat capability, add assistant message, return response.
 
@@ -592,11 +637,23 @@ class SymbioteKernel:
                 so a single message can use a different effort / model /
                 temperature than the session's default — without
                 affecting other sessions that share the same adapter.
+            host_context: Opaque host data for this turn only (the caller's
+                identity, a credential, a request id). Never rendered into
+                the prompt, persisted or logged, unlike ``extra_context``.
+                Tool handlers, the approval callback and the tool guard get
+                it as ``ToolExecContext.host``; anything running in the turn
+                (the LLM adapter, hooks) reads it with
+                ``current_host_context()``. Concurrent turns never see each
+                other's.
         """
-        with self._session_lock.acquire(session_id):
-            return self._message_inner(
-                session_id, content, extra_context, llm_config=llm_config
-            )
+        host_token = bind_host_context(host_context)
+        try:
+            with self._session_lock.acquire(session_id):
+                return self._message_inner(
+                    session_id, content, extra_context, llm_config=llm_config
+                )
+        finally:
+            reset_host_context(host_token)
 
     def _message_inner(
         self,
@@ -656,18 +713,25 @@ class SymbioteKernel:
         extra_context: dict | None = None,
         on_token: Callable[[str], None] | None = None,
         llm_config: dict | None = None,
+        *,
+        host_context: Mapping[str, Any] | None = None,
     ) -> str:
         """Async variant of message() — supports async tool handlers and on_token streaming.
 
         Uses per-session async locking: concurrent requests on the same session
         are serialized, while different sessions process in parallel.
 
-        ``llm_config`` mirrors the sync ``message()`` semantics.
+        ``llm_config`` and ``host_context`` mirror the sync ``message()``
+        semantics.
         """
-        async with self._session_lock.acquire_async(session_id):
-            return await self._message_async_inner(
-                session_id, content, extra_context, on_token, llm_config=llm_config
-            )
+        host_token = bind_host_context(host_context)
+        try:
+            async with self._session_lock.acquire_async(session_id):
+                return await self._message_async_inner(
+                    session_id, content, extra_context, on_token, llm_config=llm_config
+                )
+        finally:
+            reset_host_context(host_token)
 
     async def _message_async_inner(
         self,
@@ -1658,6 +1722,8 @@ class SymbioteKernel:
     def shutdown(self, timeout: float = 10.0) -> None:
         """Wait for background work, then stop the tool loop and close storage.
 
+        A storage adapter injected by the host is left open: the host owns it.
+
         Skill reviews and dream cycles run in daemon threads that write to
         the database. They get up to ``timeout`` seconds in total to finish;
         closing the storage under them lost their results (or, in a short
@@ -1675,7 +1741,8 @@ class SymbioteKernel:
                 ", ".join(still_running),
             )
         self._tool_gateway.close()
-        self._storage.close()
+        if self._owns_storage:
+            self._storage.close()
 
     def _background_threads(self) -> list[threading.Thread]:
         with self._dream_lock:

@@ -24,15 +24,61 @@ from symbiote.environment.descriptors import (
     ToolCallResult,
     ToolDescriptor,
 )
-from symbiote.environment.exec_context import current_tool_context, tool_exec_context
+from symbiote.environment.exec_context import (
+    ToolExecContext,
+    current_host_context,
+    current_tool_context,
+    tool_exec_context,
+)
 from symbiote.environment.policies import (
     PolicyGate,
+    ToolDecision,
     ToolResult,
+    error_with_hint,
     log_tool_timeout,
     run_in_daemon_thread,
 )
 
 logger = logging.getLogger(__name__)
+
+# Host veto: ``guard(tool_id, params, context)`` returns a ``ToolDecision``
+# (or a bool). It may be a coroutine function.
+ToolGuard = Callable[[str, dict, ToolExecContext], Any]
+
+_AUDIT_REASON_CHARS = 200
+
+
+def _bind_context(handler: Callable[..., Any]) -> Callable[[dict], Any]:
+    """Adapt a ``handler(params, context)`` to the registry's ``fn(params)``.
+
+    The context is read when the handler runs, on whichever thread or task
+    runs it (see ``exec_context`` for the propagation guarantee).
+    """
+    if inspect.iscoroutinefunction(handler):
+
+        @functools.wraps(handler)
+        async def acall(params: dict) -> Any:
+            return await handler(params, current_tool_context())
+
+        return acall
+
+    @functools.wraps(handler)
+    def call(params: dict) -> Any:
+        return handler(params, current_tool_context())
+
+    return call
+
+
+def _as_decision(value: Any) -> ToolDecision:
+    if isinstance(value, ToolDecision):
+        return value
+    if isinstance(value, bool):
+        return ToolDecision(allowed=value, reason="" if value else "denied by host")
+    # Anything else (a forgotten ``return``, a string) is a host bug: refuse.
+    return ToolDecision.deny(
+        f"tool guard returned {type(value).__name__}, expected ToolDecision"
+    )
+
 
 # Largest HTTP-tool response read into memory. Bigger responses become a
 # tool error instead of being loaded whole (and then sent to the LLM).
@@ -194,6 +240,8 @@ class ToolGateway:
         # Lifecycle hooks (``kernel.hooks``); set by the kernel. before_tool /
         # after_tool fire around every execution of a registered tool.
         self.hooks: Any = None
+        # Host veto, consulted after policy and before approval / execution.
+        self._guard: ToolGuard | None = None
         self._registry: dict[str, Callable[[dict], Any]] = {}
         self._descriptors: dict[str, ToolDescriptor] = {}
         self._http_configs: dict[str, HttpToolConfig] = {}
@@ -262,6 +310,140 @@ class ToolGateway:
         if self._has_hooks():
             await getattr(self.hooks, event)(**kwargs)
 
+    # ── host veto ─────────────────────────────────────────────────────────
+
+    def set_tool_guard(self, guard: ToolGuard | None) -> None:
+        """Install (or remove, with ``None``) the host's veto over tool calls.
+
+        ``guard(tool_id, params, context)`` runs for every call that policy
+        allows, before the approval callback and before the handler, and
+        returns ``ToolDecision.allow()`` or ``ToolDecision.deny(reason)``
+        (a bool is accepted too). A denied call does not execute: ``reason``
+        goes back to the model as the tool result and is recorded in the audit
+        log (``action='denied'``) and in the execution trace.
+
+        Fail-closed: a guard that raises, or returns anything else, denies the
+        call. The guard runs exactly once per call. It may be a coroutine
+        function; a plain function is called from a worker thread on the async
+        path, so it may block.
+        """
+        self._guard = guard
+
+    def _refusal(
+        self, symbiote_id: str, session_id: str | None, tool_id: str,
+        params: dict, decision: ToolDecision,
+    ) -> ToolResult | None:
+        if decision.allowed:
+            return None
+        reason = decision.reason or "denied by host"
+        self._gate._write_audit(
+            symbiote_id=symbiote_id, session_id=session_id, tool_id=tool_id,
+            action="denied", params=params,
+            result=f"denied:{reason[:_AUDIT_REASON_CHARS]}",
+        )
+        return ToolResult(
+            success=False, tool_id=tool_id,
+            error=f"Tool '{tool_id}' denied by host: {reason}",
+        )
+
+    @staticmethod
+    def _call_context(symbiote_id: str, session_id: str | None) -> ToolExecContext:
+        return current_tool_context() or ToolExecContext(
+            symbiote_id=symbiote_id,
+            session_id=session_id,
+            host=current_host_context(),
+        )
+
+    @staticmethod
+    def _guard_failed(tool_id: str) -> ToolDecision:
+        logger.exception("Tool guard failed for %s; call denied", tool_id)
+        return ToolDecision.deny("the host's tool guard failed")
+
+    def _ask_guard(
+        self, symbiote_id: str, session_id: str | None, tool_id: str, params: dict
+    ) -> ToolResult | None:
+        """Consult the guard (sync paths). ``None`` means the call may run."""
+        guard = self._guard
+        if guard is None:
+            return None
+        try:
+            value = guard(tool_id, params, self._call_context(symbiote_id, session_id))
+            if inspect.isawaitable(value):
+                value = self._run_awaitable(value, contextvars.copy_context())
+            decision = _as_decision(value)
+        except Exception:
+            decision = self._guard_failed(tool_id)
+        return self._refusal(symbiote_id, session_id, tool_id, params, decision)
+
+    async def _ask_guard_async(
+        self, symbiote_id: str, session_id: str | None, tool_id: str, params: dict
+    ) -> ToolResult | None:
+        guard = self._guard
+        if guard is None:
+            return None
+        try:
+            ctx = self._call_context(symbiote_id, session_id)
+            if inspect.iscoroutinefunction(guard):
+                value = await guard(tool_id, params, ctx)
+            else:
+                value = await asyncio.to_thread(guard, tool_id, params, ctx)
+                if inspect.isawaitable(value):
+                    value = await value
+            decision = _as_decision(value)
+        except Exception:
+            decision = self._guard_failed(tool_id)
+        return self._refusal(symbiote_id, session_id, tool_id, params, decision)
+
+    def _guard_applies(
+        self, symbiote_id: str, tool_id: str, workspace_id: str | None
+    ) -> bool:
+        """True when a guard is installed and policy allows the call.
+
+        A call that policy blocks is left to the policy gate, which refuses
+        and audits it: the host is never asked about it.
+        """
+        return (
+            self._guard is not None
+            and self._gate.check(symbiote_id, tool_id, workspace_id).allowed
+        )
+
+    def authorize(
+        self,
+        symbiote_id: str,
+        session_id: str | None,
+        call: Any,
+        workspace_id: str | None = None,
+    ) -> ToolResult | None:
+        """Check policy, then the host guard, for ``call`` without running it.
+
+        Returns ``None`` when the call may proceed, or the failed
+        ``ToolResult`` (already audited) that refuses it. Runners call this
+        before asking a person to approve a high-risk call, so nobody is asked
+        about a call that would be refused anyway. An accepted call is marked
+        so that executing it does not consult the guard again; policy is still
+        re-checked at execution.
+        """
+        tool_id, params = call.tool_id, call.params
+        if tool_id not in self._registry:
+            return None  # execution reports "Tool not registered"
+        with tool_exec_context(symbiote_id, session_id):
+            policy = self._gate.check(symbiote_id, tool_id, workspace_id)
+            if not policy.allowed:
+                self._gate._write_audit(
+                    symbiote_id=symbiote_id, session_id=session_id,
+                    tool_id=tool_id, action="blocked",
+                    params=params, result="blocked",
+                )
+                return ToolResult(
+                    success=False, tool_id=tool_id,
+                    error=f"Tool '{tool_id}' blocked: {policy.reason}",
+                )
+            refusal = self._ask_guard(symbiote_id, session_id, tool_id, params)
+        if refusal is None:
+            with contextlib.suppress(AttributeError, TypeError, ValueError):
+                call._guard_checked = True
+        return refusal
+
     def close(self) -> None:
         """Stop the loop used for async handlers (idempotent)."""
         with self._async_lock:
@@ -277,18 +459,36 @@ class ToolGateway:
 
     # ── public API ────────────────────────────────────────────────────────
 
-    def register_tool(self, tool_id: str, handler: Callable[[dict], Any]) -> None:
-        """Register a tool handler (no descriptor)."""
-        self._registry[tool_id] = handler
+    def register_tool(
+        self,
+        tool_id: str,
+        handler: Callable[..., Any],
+        *,
+        pass_context: bool = False,
+    ) -> None:
+        """Register a tool handler (no descriptor).
+
+        ``handler(params)`` by default. With ``pass_context=True`` it is
+        called as ``handler(params, context)``, ``context`` being the
+        ``ToolExecContext`` of the call (symbiote, session, host data).
+        """
+        self._registry[tool_id] = _bind_context(handler) if pass_context else handler
 
     def register_descriptor(
         self,
         descriptor: ToolDescriptor,
-        handler: Callable[[dict], Any],
+        handler: Callable[..., Any],
+        *,
+        pass_context: bool = False,
     ) -> None:
-        """Register a tool with its descriptor and handler."""
+        """Register a tool with its descriptor and handler.
+
+        ``pass_context`` as in ``register_tool``.
+        """
         self._descriptors[descriptor.tool_id] = descriptor
-        self._registry[descriptor.tool_id] = handler
+        self._registry[descriptor.tool_id] = (
+            _bind_context(handler) if pass_context else handler
+        )
 
     def register_http_tool(
         self,
@@ -309,6 +509,8 @@ class ToolGateway:
         params: dict,
         workspace_id: str | None = None,
         timeout: float = 30.0,
+        *,
+        _guard_checked: bool = False,
     ) -> ToolResult:
         """Async variant of execute() — awaits coroutine handlers via the policy gate."""
         if tool_id not in self._registry:
@@ -321,15 +523,23 @@ class ToolGateway:
             )
         with tool_exec_context(symbiote_id, session_id):
             await self._fire_hook_async("before_tool", tool_id=tool_id, params=params)
-            result = await self._gate.execute_with_policy_async(
-                symbiote_id=symbiote_id,
-                session_id=session_id,
-                tool_id=tool_id,
-                params=params,
-                action_fn=self._registry[tool_id],
-                workspace_id=workspace_id,
-                timeout=timeout,
-            )
+            result = None
+            if not _guard_checked and self._guard_applies(
+                symbiote_id, tool_id, workspace_id
+            ):
+                result = await self._ask_guard_async(
+                    symbiote_id, session_id, tool_id, params
+                )
+            if result is None:
+                result = await self._gate.execute_with_policy_async(
+                    symbiote_id=symbiote_id,
+                    session_id=session_id,
+                    tool_id=tool_id,
+                    params=params,
+                    action_fn=self._registry[tool_id],
+                    workspace_id=workspace_id,
+                    timeout=timeout,
+                )
             await self._fire_hook_async(
                 "after_tool", tool_id=tool_id, params=params, result=result
             )
@@ -355,6 +565,7 @@ class ToolGateway:
                 params=call.params,
                 workspace_id=workspace_id,
                 timeout=timeout,
+                _guard_checked=getattr(call, "_guard_checked", False),
             )
             for call in calls
         ]
@@ -363,10 +574,7 @@ class ToolGateway:
         results: list[ToolCallResult] = []
         for call, raw in zip(calls, raw_results, strict=False):
             if isinstance(raw, BaseException):
-                error_msg = (
-                    f"{type(raw).__name__}: {raw}\n"
-                    "[Hint: Analyze the error above and try a different approach.]"
-                )
+                error_msg = error_with_hint(f"{type(raw).__name__}: {raw}")
                 results.append(
                     ToolCallResult(
                         call_id=call.call_id,
@@ -377,19 +585,17 @@ class ToolGateway:
                     )
                 )
             else:
-                error_with_hint = raw.error
-                if not raw.success and raw.error:
-                    error_with_hint = (
-                        f"{raw.error}\n"
-                        "[Hint: Analyze the error above and try a different approach.]"
-                    )
                 results.append(
                     ToolCallResult(
                         call_id=call.call_id,
                         tool_id=call.tool_id,
                         success=raw.success,
                         output=raw.output,
-                        error=error_with_hint,
+                        error=(
+                            error_with_hint(raw.error)
+                            if not raw.success and raw.error
+                            else raw.error
+                        ),
                     )
                 )
         return results
@@ -410,6 +616,8 @@ class ToolGateway:
         params: dict,
         workspace_id: str | None = None,
         timeout: float = 30.0,
+        *,
+        _guard_checked: bool = False,
     ) -> ToolResult:
         """Execute a tool through the policy gate."""
         if tool_id not in self._registry:
@@ -421,15 +629,21 @@ class ToolGateway:
 
         with tool_exec_context(symbiote_id, session_id):
             self._fire_hook_sync("before_tool", tool_id=tool_id, params=params)
-            result = self._gate.execute_with_policy(
-                symbiote_id=symbiote_id,
-                session_id=session_id,
-                tool_id=tool_id,
-                params=params,
-                action_fn=self._sync_callable(self._registry[tool_id]),
-                workspace_id=workspace_id,
-                timeout=timeout,
-            )
+            result = None
+            if not _guard_checked and self._guard_applies(
+                symbiote_id, tool_id, workspace_id
+            ):
+                result = self._ask_guard(symbiote_id, session_id, tool_id, params)
+            if result is None:
+                result = self._gate.execute_with_policy(
+                    symbiote_id=symbiote_id,
+                    session_id=session_id,
+                    tool_id=tool_id,
+                    params=params,
+                    action_fn=self._sync_callable(self._registry[tool_id]),
+                    workspace_id=workspace_id,
+                    timeout=timeout,
+                )
             self._fire_hook_sync(
                 "after_tool", tool_id=tool_id, params=params, result=result
             )
@@ -472,18 +686,16 @@ class ToolGateway:
             return []
 
         def _to_call_result(call, result: ToolResult) -> ToolCallResult:  # noqa: ANN001
-            error_with_hint = result.error
-            if not result.success and result.error:
-                error_with_hint = (
-                    f"{result.error}\n"
-                    "[Hint: Analyze the error above and try a different approach.]"
-                )
             return ToolCallResult(
                 call_id=call.call_id,
                 tool_id=call.tool_id,
                 success=result.success,
                 output=result.output,
-                error=error_with_hint,
+                error=(
+                    error_with_hint(result.error)
+                    if not result.success and result.error
+                    else result.error
+                ),
             )
 
         # Single call: run entirely on the calling thread
@@ -495,6 +707,7 @@ class ToolGateway:
                 params=calls[0].params,
                 workspace_id=workspace_id,
                 timeout=timeout,
+                _guard_checked=getattr(calls[0], "_guard_checked", False),
             )
             return [_to_call_result(calls[0], result)]
 
@@ -527,6 +740,15 @@ class ToolGateway:
                         error=f"Tool '{call.tool_id}' blocked: {policy.reason}",
                     ),
                 )
+                handler_fns.append(None)
+                continue
+            refusal = (
+                None
+                if getattr(call, "_guard_checked", False)
+                else self._ask_guard(symbiote_id, session_id, call.tool_id, call.params)
+            )
+            if refusal is not None:
+                pre_results.append(refusal)
                 handler_fns.append(None)
             else:
                 pre_results.append(None)  # placeholder — will run in pool

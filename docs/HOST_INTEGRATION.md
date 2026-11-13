@@ -37,6 +37,57 @@ if sym is None:
     )
 ```
 
+### Injecting the storage adapter
+
+By default the kernel opens the SQLite file at `config.db_path`. A host can
+hand in its own adapter instead:
+
+```python
+storage = SQLiteAdapter(Path("data/symbiote.db"))   # anything satisfying StoragePort
+kernel = SymbioteKernel(config=KernelConfig(), llm=llm, storage=storage)
+```
+
+The kernel calls `storage.init_schema()` once and never closes an injected
+adapter: `kernel.shutdown()` leaves it open and the host closes it. Several
+kernels can share one adapter. The SQL the kernel sends is still SQLite dialect
+with `?` placeholders, so this is not yet a way to run on another database.
+
+### LLM through SymGateway
+
+With a SymGateway key in place of a provider key, use `SymGatewayLLMAdapter`.
+The key needs `models.read`, `work_sessions.create` and `gateway.llm.invoke`.
+
+```python
+import contextvars, os
+from symbiote.adapters.llm.symgateway import SymGatewayLLMAdapter
+
+conversation: contextvars.ContextVar[str | None] = contextvars.ContextVar("conv", default=None)
+
+llm = SymGatewayLLMAdapter(
+    os.environ["SYMGATEWAY_API_KEY"],
+    model="<an id from llm.list_models()>",
+    project_slug=os.getenv("SYMGATEWAY_PROJECT_SLUG"),  # only when the key is in a project
+    session_key=conversation.get,   # which conversation the current call belongs to
+    session_title="My app",
+)
+print(llm.list_models())             # GET /v1/models, LLM models only
+aux = llm.with_model("<cheaper id>") # same work sessions, other model (set_evolver_llm)
+
+token = conversation.set(session.id)  # e.g. the Symbiote session id, around each turn
+try:
+    kernel.message(session.id, text)
+finally:
+    conversation.reset(token)
+```
+
+Each distinct `session_key()` value gets one gateway work session
+(`POST /_api/work-sessions`), opened on first use and sent as
+`X-SymGateway-Session-Id` on every call of that conversation. Calls with no key
+share one default session. Set the same key around `close_session()` so the
+reflection and dream calls land in the conversation's session. The adapter
+talks to the OpenAI-compatible `/v1/chat/completions` with httpx; it does not
+stream, so `on_token` receives the final text.
+
 ---
 
 ## Common embedded-host pitfalls (read this first)
@@ -478,38 +529,102 @@ ToolDescriptor(
 )
 ```
 
-### Multi-user hosts: identity in tool handlers
+### Host veto: the tool guard
 
-Tool handlers are registered as `Callable[[dict], Any]` and receive **only the
-LLM-provided `params`** — not the `symbiote_id`/`session_id` of the turn (the
-gateway knows them, but does not pass them to the handler). In a host that runs
-one symbiote per user, the handler (and `HttpToolConfig.header_factory`, which
-is arg-less) typically needs the current user to authorize/route the action.
-
-The supported pattern is a **`contextvars.ContextVar`** set by the host before
-calling `message()`/`message_async()` and read inside the handler /
-`header_factory`. The gateway propagates the caller's context into worker
-threads (`contextvars.copy_context()` on both the single-call and parallel sync
-dispatch paths, and `asyncio.to_thread`/task copying on the async path), so the
-var survives into the handler:
+The approval callback asks a *person* and only about high-risk tools. The tool
+guard is the host's own decision (IAM, quotas, tenancy rules) and covers
+**every** tool call, whatever its risk level:
 
 ```python
-current_user: contextvars.ContextVar[str] = contextvars.ContextVar("current_user")
+from symbiote.environment.policies import ToolDecision
 
-def header_factory() -> dict[str, str]:
-    return {"Authorization": f"Bearer {mint_jwt(current_user.get())}"}
+def guard(tool_id: str, params: dict, ctx) -> ToolDecision:
+    user = ctx.host["user"]                 # see "Caller context" below
+    if not iam.allows(user, tool_id, params):
+        return ToolDecision.deny(f"{user.role} cannot call {tool_id}")
+    return ToolDecision.allow()
 
-# In your request handler (FastAPI), before invoking the kernel:
-token = current_user.set(request.state.user_id)
-try:
-    await kernel.message_async(session_id, content)
-finally:
-    current_user.reset(token)
+kernel.set_tool_guard(guard)                # None removes it
 ```
 
-> Both sync (`message`) and async (`message_async`) paths propagate contextvars
-> into handlers. `message_async` is still recommended for web hosts (it also
-> supports coroutine handlers and `on_token` streaming).
+- **Order:** policy (`environment` authorization) → tool guard → approval
+  callback → handler. Nobody is asked to approve a call that policy or the
+  guard refuses, and the guard is not asked about a call policy blocks.
+- **A denied call does not execute.** The reason is returned to the model as
+  the tool result (`Tool '<id>' denied by host: <reason>`), written to
+  `audit_log` (`action='denied'`, `result='denied:<reason>'`) and to the
+  execution trace. Keep secrets out of the reason.
+- **Fail-closed.** A guard that raises, or returns anything other than a
+  `ToolDecision` or a bool, denies the call.
+- **Once per call**, on every path: `message()`, `message_async()`, the blocks
+  of `long_run`, and `tool_gateway.execute()` called directly.
+- It may be `async def`. A plain function is called from a worker thread in
+  `message_async`, so it may block (an HTTP call to your IAM).
+
+### Caller context: who is this turn for
+
+A kernel serves many users at once. Tell it who each turn is for with
+`host_context`, a mapping that belongs to the host:
+
+```python
+reply = await kernel.message_async(
+    session_id,
+    content,
+    host_context={"user": request.state.user, "token": request.state.token},
+)
+```
+
+`host_context` is **not** `extra_context`. `extra_context` is rendered into
+the prompt (the model and your LLM provider see it); `host_context` is never
+rendered, persisted or logged by the kernel. Credentials and identifiers go in
+`host_context` only.
+
+It reaches your code as a `ToolExecContext(symbiote_id, session_id, host)`,
+where `host` is a read-only view of the mapping:
+
+```python
+from symbiote.environment.exec_context import (
+    ToolExecContext, current_host_context, current_tool_context,
+)
+
+# 1. Tool handlers: opt in to a second argument...
+def rotate_key(params: dict, ctx: ToolExecContext) -> str:
+    return gateway_api.rotate(params["provider"], token=ctx.host["token"])
+
+kernel.tool_gateway.register_descriptor(descriptor, rotate_key, pass_context=True)
+
+# ...or keep handler(params) and ask for it (also inside header_factory):
+def header_factory() -> dict[str, str]:
+    return {"Authorization": f"Bearer {current_tool_context().host['token']}"}
+
+# 2. Approval callback: fourth argument with pass_context=True.
+def approve(tool_id, params, risk, ctx: ToolExecContext) -> bool: ...
+kernel.set_approval_callback(approve, pass_context=True)
+
+# 3. Tool guard: always receives it (see above).
+
+# 4. Anything else running inside the turn (your LLM adapter, hooks):
+user = current_host_context().get("user")
+```
+
+Guarantees:
+
+- **Isolation.** Two turns running at the same time, in threads or in asyncio
+  tasks, never see each other's context. After the turn it is gone.
+- **Propagation.** The context is visible on the calling thread, in the worker
+  threads that run sync handlers (single and parallel calls), in coroutine
+  handlers, and in the `asyncio.to_thread` workers that `message_async` uses
+  for the model call and the approval callback.
+- **Scope.** `current_tool_context()` is set while a handler, the approval
+  callback or the guard runs, and is `None` elsewhere;
+  `current_host_context()` is set for the whole turn and is an empty mapping
+  when the host gave none.
+- A turn started from inside a tool handler without `host_context` (a
+  sub-agent) inherits the context of the turn that started it.
+
+Your own `contextvars.ContextVar` set before calling `message()` /
+`message_async()` keeps working: the kernel copies the caller's context into
+every worker thread it starts.
 
 ---
 

@@ -40,7 +40,7 @@ from symbiote.core.exceptions import (
 )
 from symbiote.core.identity import IdentityManager
 from symbiote.core.kernel import SymbioteKernel
-from symbiote.core.ports import LLMPort
+from symbiote.core.ports import LLMPort, StoragePort
 from symbiote.core.session import SessionManager
 from symbiote.discovery.repository import DiscoveredToolRepository
 from symbiote.discovery.service import DiscoveryService
@@ -189,7 +189,7 @@ async def integrity_error_handler(request: Request, exc: sqlite3.IntegrityError)
 
 # ── Dependency injection ──────────────────────────────────────────────────
 
-_adapter: SQLiteAdapter | None = None
+_adapter: StoragePort | None = None
 _tool_gateway: ToolGateway | None = None
 _kernel: SymbioteKernel | None = None
 _key_manager: APIKeyManager | None = None
@@ -307,7 +307,7 @@ def _resolve_config() -> KernelConfig:
     return KernelConfig(**kwargs)
 
 
-def get_adapter() -> SQLiteAdapter:
+def get_adapter() -> StoragePort:
     """The kernel's storage: one SQLite connection per process.
 
     Kept as a separate dependency so tests can override it.
@@ -416,7 +416,7 @@ def _require_symbiote(identity: IdentityManager, symbiote_id: str, auth: APIKey)
 
 
 def _require_symbiote_access(
-    storage: SQLiteAdapter, symbiote_id: str, auth: APIKey
+    storage: StoragePort, symbiote_id: str, auth: APIKey
 ) -> dict:
     row = storage.fetch_one(
         "SELECT id, owner_id, status FROM symbiotes WHERE id = ?", (symbiote_id,)
@@ -428,7 +428,7 @@ def _require_symbiote_access(
 
 
 def _require_session_access(
-    storage: SQLiteAdapter, session_id: str, auth: APIKey
+    storage: StoragePort, session_id: str, auth: APIKey
 ) -> dict:
     row = storage.fetch_one(
         "SELECT s.id, s.symbiote_id, sym.owner_id, sym.status AS symbiote_status "

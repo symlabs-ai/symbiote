@@ -11,6 +11,7 @@ import logging
 import threading
 from collections.abc import Callable
 from concurrent.futures import TimeoutError as FuturesTimeoutError
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -59,6 +60,14 @@ def log_tool_timeout(tool_id: str, timeout: float) -> None:
     )
 
 
+_ERROR_HINT = "[Hint: Analyze the error above and try a different approach.]"
+
+
+def error_with_hint(error: str) -> str:
+    """The text of a failed tool call as the model sees it."""
+    return f"{error}\n{_ERROR_HINT}"
+
+
 # ── Models ────────────────────────────────────────────────────────────────────
 
 
@@ -72,6 +81,26 @@ class ToolResult(BaseModel):
     tool_id: str
     output: Any = None
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class ToolDecision:
+    """Answer of the host's tool guard (``kernel.set_tool_guard``).
+
+    ``reason`` is returned to the model as the tool result and written to the
+    audit log and to the execution trace, so it must not carry secrets.
+    """
+
+    allowed: bool
+    reason: str = ""
+
+    @classmethod
+    def allow(cls) -> ToolDecision:
+        return cls(allowed=True)
+
+    @classmethod
+    def deny(cls, reason: str) -> ToolDecision:
+        return cls(allowed=False, reason=reason)
 
 
 # ── PolicyGate ────────────────────────────────────────────────────────────────
