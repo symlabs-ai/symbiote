@@ -505,19 +505,25 @@ class SymbioteKernel:
                 session_id, symbiote_id, extra_context
             )
 
-            self._sessions.add_message(session_id, "user", content)
+            user_message = self._sessions.add_message(session_id, "user", content)
 
             turn_messages = [{"role": "user", "content": content}]
             if self._hooks.hooks:
                 self._tool_gateway.run_coroutine_sync(
                     self._hooks.before_turn(turn_messages)
                 )
-            result = self._capabilities.run_chat(
-                symbiote_id, session_id, content,
-                extra_context=extra_context,
-                llm_config=llm_config,
-            )
-            response = self._finish_turn(session_id, symbiote_id, result)
+            try:
+                result = self._capabilities.run_chat(
+                    symbiote_id, session_id, content,
+                    extra_context=extra_context,
+                    llm_config=llm_config,
+                )
+                response = self._finish_turn(session_id, symbiote_id, result)
+            except BaseException:
+                # No answer was stored: drop the user message too, so a
+                # retried turn does not leave duplicates without replies.
+                self._sessions.delete_message(user_message.id)
+                raise
             if self._hooks.hooks:
                 self._tool_gateway.run_coroutine_sync(
                     self._hooks.after_turn(turn_messages, _response_text(response))
@@ -568,19 +574,23 @@ class SymbioteKernel:
                 session_id, symbiote_id, extra_context
             )
 
-            self._sessions.add_message(session_id, "user", content)
+            user_message = self._sessions.add_message(session_id, "user", content)
 
             turn_messages = [{"role": "user", "content": content}]
             await self._hooks.before_turn(turn_messages)
-            result = await self._capabilities.run_chat_async(
-                symbiote_id,
-                session_id,
-                content,
-                extra_context=extra_context,
-                on_token=on_token,
-                llm_config=llm_config,
-            )
-            response = self._finish_turn(session_id, symbiote_id, result)
+            try:
+                result = await self._capabilities.run_chat_async(
+                    symbiote_id,
+                    session_id,
+                    content,
+                    extra_context=extra_context,
+                    on_token=on_token,
+                    llm_config=llm_config,
+                )
+                response = self._finish_turn(session_id, symbiote_id, result)
+            except BaseException:
+                self._sessions.delete_message(user_message.id)
+                raise
             await self._hooks.after_turn(turn_messages, _response_text(response))
             return response
         finally:

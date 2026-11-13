@@ -146,6 +146,10 @@ class SessionManager:
         )
         return msg
 
+    def delete_message(self, message_id: str) -> None:
+        """Remove one message (used to undo the user message of a failed turn)."""
+        self._storage.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+
     def get_messages(self, session_id: str, limit: int = 50) -> list[Message]:
         """Return messages for a session, most recent first."""
         rows = self._storage.fetch_all(

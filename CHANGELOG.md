@@ -37,6 +37,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - fix(chat): `run_async()` passa a respeitar `on_after_tool_result` (antes ignorado, gerando uma chamada de LLM a mais e outro texto) e a disparar o nudge de review de skills, como `run()` (E-11). No modo `instant`, `on_token` deixa de receber o bloco `tool_call` cru quando o texto final é outro. Um teste parametrizado roda os mesmos cenários pelos dois caminhos.
 - fix(chat): uma segunda compactação do loop deixa de perder o resumo da primeira (E-12). No modo nativo o resumo anterior era descartado inteiro; no modo texto virava um único passo truncado. As duas camadas reconhecem resumos anteriores e carregam seus passos; cada passo do resumo ocupa uma linha.
 - fix(subagent): a profundidade de delegação passa a ser contada por cadeia (`ContextVar`), não num contador único do kernel: cinco `spawn` paralelos de profundidade 1, ou sessões diferentes delegando ao mesmo tempo, não batem mais no limite de 3. Um `spawn` cujo sub-run falha fecha a sub-sessão em vez de deixá-la ativa. A constante `_BLOCKED_TOOLS`, que nunca foi aplicada, foi removida junto com a promessa de "restricted tool sets" do docstring (E-12).
+- fix(kernel): um turno que falha remove a mensagem do usuário que tinha gravado, então um retry do cliente ou do `MessageBus` não deixa mensagens `user` repetidas sem resposta (E-12). O `MessageBus` loga a exceção do handler (`exc_info`) a cada tentativa e, ao esgotar os retries, publica um `OutboundMessage` de erro para o canal (`metadata.error = True`) em vez de descartar em silêncio. `SessionManager.delete_message()` é novo.
+  - **Observação:** o retry do bus ainda reexecuta tools com efeito colateral; idempotência fica para o host.
 
 ## [v0.7.3] - 2026-07-28
 

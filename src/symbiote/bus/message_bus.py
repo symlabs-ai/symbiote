@@ -192,16 +192,28 @@ class MessageBus:
                 if asyncio.iscoroutine(result):
                     await result
                 return
-            except Exception:
+            except Exception as exc:
                 if attempt >= self._max_retries:
                     logger.error(
-                        "handler failed after %d retries for message %s, dropping",
+                        "handler failed after %d attempts for message %s, dropping",
                         self._max_retries + 1, msg.id,
+                        exc_info=True,
+                    )
+                    # Tell the channel instead of going silent.
+                    await self.respond(
+                        OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content="Não consegui processar sua mensagem. Tente novamente.",
+                            in_reply_to=msg.id,
+                            metadata={"error": True, "exception": type(exc).__name__},
+                        )
                     )
                     return
                 delay = self._base_delay * (2 ** attempt)
                 logger.warning(
                     "handler error on message %s, retry %d/%d in %.1fs",
                     msg.id, attempt + 1, self._max_retries, delay,
+                    exc_info=True,
                 )
                 await asyncio.sleep(delay)
