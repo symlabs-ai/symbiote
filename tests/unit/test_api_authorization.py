@@ -19,11 +19,23 @@ def _concrete(path: str) -> str:
 
 def _protected_routes() -> list[tuple[str, str]]:
     out = []
-    for route in app.routes:
-        if isinstance(route, APIRoute) and route.path not in PUBLIC_PATHS:
+    for route in _api_routes(app.routes):
+        if route.path not in PUBLIC_PATHS:
             for method in sorted(route.methods):
                 out.append((method, route.path))
     return out
+
+
+def _api_routes(routes):  # noqa: ANN001, ANN202
+    """APIRoutes of the app, including the ones of included routers (newer
+    FastAPI keeps those behind an ``_IncludedRouter`` in ``app.routes``)."""
+    for route in routes:
+        if isinstance(route, APIRoute):
+            yield route
+        else:
+            inner = getattr(route, "original_router", None)
+            if inner is not None:
+                yield from _api_routes(inner.routes)
 
 
 def test_route_sweep_finds_routes() -> None:
