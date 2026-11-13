@@ -39,6 +39,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - fix(subagent): a profundidade de delegação passa a ser contada por cadeia (`ContextVar`), não num contador único do kernel: cinco `spawn` paralelos de profundidade 1, ou sessões diferentes delegando ao mesmo tempo, não batem mais no limite de 3. Um `spawn` cujo sub-run falha fecha a sub-sessão em vez de deixá-la ativa. A constante `_BLOCKED_TOOLS`, que nunca foi aplicada, foi removida junto com a promessa de "restricted tool sets" do docstring (E-12).
 - fix(kernel): um turno que falha remove a mensagem do usuário que tinha gravado, então um retry do cliente ou do `MessageBus` não deixa mensagens `user` repetidas sem resposta (E-12). O `MessageBus` loga a exceção do handler (`exc_info`) a cada tentativa e, ao esgotar os retries, publica um `OutboundMessage` de erro para o canal (`metadata.error = True`) em vez de descartar em silêncio. `SessionManager.delete_message()` é novo.
   - **Observação:** o retry do bus ainda reexecuta tools com efeito colateral; idempotência fica para o host.
+- fix(memory): o recall padrão passa a buscar memórias por termos, não pela mensagem inteira como substring (M-1). Antes "Which editor do I prefer?" não encontrava "User prefers the vim editor". `get_relevant` pontua as memórias do symbiote pela sobreposição de termos (com importância e recência), ignorando caixa, acentos, stop-words em inglês e português e sufixos comuns; memórias da sessão atual vêm primeiro. O tokenizer de `memory/recall.py` ganhou suporte a acentos e português.
 
 ## [v0.7.3] - 2026-07-28
 

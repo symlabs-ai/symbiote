@@ -10,6 +10,9 @@ from symbiote.core.models import MemoryEntry
 from symbiote.core.ports import StoragePort
 
 _LIKE_ESCAPE = "\\"
+# How many of a symbiote's memories (most important / recently used first)
+# the term-based recall scores per message.
+_RECALL_CANDIDATES = 500
 
 
 def _like_contains(text: str) -> str:
@@ -116,52 +119,29 @@ class MemoryStore:
         *,
         symbiote_id: str,
     ) -> list[MemoryEntry]:
-        """Return one symbiote's relevant memories, session matches first.
+        """Return one symbiote's memories that share terms with ``intent``.
 
-        Updates last_used_at for all returned entries.
+        Terms are compared after removing stop words (English and
+        Portuguese), accents and common suffixes, so a question finds a
+        memory without being a substring of it. Memories from ``session_id``
+        come first. Updates last_used_at for all returned entries.
         """
-        pattern = _like_contains(intent)
-        results: list[MemoryEntry] = []
-        seen_ids: set[str] = set()
+        from symbiote.memory.recall import rank_entries
 
-        # 1) Session-specific matches first
-        if session_id is not None:
-            session_rows = self._storage.fetch_all(
-                "SELECT * FROM memory_entries "
-                "WHERE is_active = 1 AND symbiote_id = ? AND session_id = ? "
-                "AND content LIKE ? ESCAPE '\\' "
-                "ORDER BY importance DESC, last_used_at DESC LIMIT ?",
-                (symbiote_id, session_id, pattern, limit),
-            )
-            for row in session_rows:
-                entry = self._row_to_entry(row)
-                results.append(entry)
-                seen_ids.add(entry.id)
-
-        # 2) Content matches (excluding already seen)
-        remaining = limit - len(results)
-        if remaining > 0:
-            content_rows = self._storage.fetch_all(
-                "SELECT * FROM memory_entries "
-                "WHERE is_active = 1 AND symbiote_id = ? AND content LIKE ? ESCAPE '\\' "
-                "ORDER BY importance DESC, last_used_at DESC LIMIT ?",
-                (symbiote_id, pattern, limit),
-            )
-            for row in content_rows:
-                if row["id"] not in seen_ids:
-                    results.append(self._row_to_entry(row))
-                    seen_ids.add(row["id"])
-                    if len(results) >= limit:
-                        break
-
-        # Update last_used_at for returned entries
+        rows = self._storage.fetch_all(
+            "SELECT * FROM memory_entries WHERE is_active = 1 AND symbiote_id = ? "
+            "ORDER BY importance DESC, last_used_at DESC LIMIT ?",
+            (symbiote_id, _RECALL_CANDIDATES),
+        )
+        results = rank_entries(
+            [self._row_to_entry(r) for r in rows], intent, session_id, limit
+        )
         now = datetime.now(tz=UTC).isoformat()
         for entry in results:
             self._storage.execute(
                 "UPDATE memory_entries SET last_used_at = ? WHERE id = ?",
                 (now, entry.id),
             )
-
         return results
 
     def get_by_type(

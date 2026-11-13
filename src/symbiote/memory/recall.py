@@ -7,6 +7,7 @@ memory entries by keyword overlap, importance, and recency.
 from __future__ import annotations
 
 import re
+import unicodedata
 from datetime import UTC, datetime
 
 from symbiote.core.models import MemoryEntry
@@ -23,15 +24,92 @@ _STOP_WORDS = frozenset({
     "who", "whom", "when", "where", "why", "all", "each", "every", "both",
     "few", "more", "most", "other", "some", "such", "only", "own", "same",
     "i", "me", "my", "we", "our", "you", "your", "he", "she", "they",
+    # Portuguese (accents removed: tokens are compared without them)
+    "o", "os", "um", "uma", "uns", "umas", "de", "da", "dos", "das",
+    "em", "na", "nos", "nas", "por", "pelo", "pela", "para", "pra", "com",
+    "sem", "e", "ou", "mas", "se", "que", "qual", "quais", "quem", "como",
+    "onde", "quando", "porque", "ao", "aos", "eu", "tu", "ele", "ela",
+    "eles", "elas", "voce", "voces", "meu", "minha", "meus", "minhas",
+    "seu", "sua", "seus", "suas", "nosso", "nossa", "isso", "isto", "esse",
+    "essa", "este", "esta", "aquele", "aquela", "ser", "estar", "sao",
+    "foi", "era", "ter", "tem", "ha", "fica", "nao", "sim", "ja", "mais",
+    "muito", "tambem",
 })
 
-_WORD_RE = re.compile(r"[a-zA-Z0-9_]+")
+_WORD_RE = re.compile(r"\w+", re.UNICODE)
+
+# Light suffix stripping so "prefers"/"prefer" and "deploys"/"deploy" or
+# "preferido"/"prefere" meet. Longest first; the stem keeps >= 4 letters.
+_SUFFIXES = (
+    "mente", "acoes", "icoes", "ando", "endo", "indo", "ados", "idos",
+    "ings", "ing", "ado", "ido", "ada", "ida", "oes", "aes", "ies", "es",
+    "ed", "er", "ar", "ir", "s", "e", "o", "a",
+)
+
+
+def _strip_accents(word: str) -> str:
+    return "".join(
+        ch for ch in unicodedata.normalize("NFKD", word) if not unicodedata.combining(ch)
+    )
+
+
+def _stem(word: str) -> str:
+    """Strip suffixes until stable, so inflections meet on one stem
+    ("prefers" -> "prefer" -> "pref" and "preferido" -> "prefer" -> "pref")."""
+    while True:
+        for suffix in _SUFFIXES:
+            if word.endswith(suffix) and len(word) - len(suffix) >= 4:
+                word = word[: -len(suffix)]
+                break
+        else:
+            return word
 
 
 def tokenize(text: str) -> set[str]:
-    """Extract meaningful keywords from text, filtering stop words."""
-    words = _WORD_RE.findall(text.lower())
+    """Extract meaningful keywords from text, filtering stop words.
+
+    Case and accents are ignored; English and Portuguese stop words and
+    one-letter words are dropped.
+    """
+    words = (_strip_accents(w) for w in _WORD_RE.findall(text.lower()))
     return {w for w in words if w not in _STOP_WORDS and len(w) > 1}
+
+
+def terms(text: str) -> set[str]:
+    """``tokenize`` reduced to light stems — what recall compares."""
+    return {_stem(w) for w in tokenize(text) if not w.isdigit()}
+
+
+def rank_entries(
+    entries: list[MemoryEntry],
+    query: str,
+    session_id: str | None = None,
+    limit: int = 5,
+) -> list[MemoryEntry]:
+    """Rank memories by term overlap with ``query``.
+
+    Entries sharing no term with the query are dropped. Entries from
+    ``session_id`` come first; inside each group the order follows
+    ``score_entry`` (overlap, importance, recency).
+    """
+    query_keywords = terms(query)
+    if not query_keywords:
+        return []
+    now = datetime.now(tz=UTC)
+    scored: list[tuple[bool, float, MemoryEntry]] = []
+    for entry in entries:
+        entry_keywords = terms(entry.content)
+        for tag in entry.tags:
+            entry_keywords |= terms(tag)
+        if not entry_keywords & query_keywords:
+            continue
+        recency_days = (now - entry.last_used_at).total_seconds() / 86400
+        recency_weight = max(0.0, 1.0 - (recency_days / 30))
+        score = score_entry(entry_keywords, query_keywords, entry.importance, recency_weight)
+        same_session = session_id is not None and entry.session_id == session_id
+        scored.append((same_session, score, entry))
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [entry for _, _, entry in scored[:limit]]
 
 
 def score_entry(
