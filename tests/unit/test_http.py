@@ -390,8 +390,9 @@ class TestGetSession:
 
 class TestMemorySearch:
     def test_search_returns_200_empty_list(self, client: TestClient) -> None:
+        sym = client.post("/symbiotes", json={"name": "S", "role": "r"}).json()
         resp = client.get(
-            "/memory/search", params={"query": "anything", "symbiote_id": "any"}
+            "/memory/search", params={"query": "anything", "symbiote_id": sym["id"]}
         )
         assert resp.status_code == 200
         assert resp.json() == []
@@ -537,6 +538,7 @@ class TestDebugEndpoints:
 
     def test_reflections_endpoint(self, client: TestClient, adapter: SQLiteAdapter) -> None:
         sid = "sym-dbg-ref"
+        self._seed_symbiote(adapter, sid)
         adapter.execute(
             "INSERT INTO reflection_audit (id, session_id, symbiote_id, mode, "
             "keyword_facts_json, llm_facts_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -562,8 +564,11 @@ class TestDebugEndpoints:
 class TestHarnessEndpoints:
     """Harness version list/create/rollback feeding the Harness tab (item 4)."""
 
-    def test_create_list_summary_rollback(self, client: TestClient) -> None:
+    def test_create_list_summary_rollback(
+        self, client: TestClient, adapter: SQLiteAdapter
+    ) -> None:
         sid = "sym-harness"
+        TestDebugEndpoints._seed_symbiote(adapter, sid)
         comp = "tool_instructions"
 
         r1 = client.post(f"/symbiotes/{sid}/harness/{comp}", json={"content": "v1 text"})
@@ -587,8 +592,11 @@ class TestHarnessEndpoints:
         assert rb.status_code == 200
         assert rb.json()["active_version"] == 1
 
-    def test_summary_lists_base_components_without_versions(self, client: TestClient) -> None:
+    def test_summary_lists_base_components_without_versions(
+        self, client: TestClient, adapter: SQLiteAdapter
+    ) -> None:
         sid = "sym-harness-empty"
+        TestDebugEndpoints._seed_symbiote(adapter, sid)
         summary = client.get(f"/api/symbiotes/{sid}/harness").json()
         comps = {c["component"]: c for c in summary}
         assert "tool_instructions" in comps

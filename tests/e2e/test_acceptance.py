@@ -162,8 +162,9 @@ class TestHTTPMemorySearch:
     """US-06/US-07: memory search via API."""
 
     def test_search_empty(self, http_client: TestClient) -> None:
+        sym = http_client.post("/symbiotes", json={"name": "S", "role": "r"}).json()
         resp = http_client.get(
-            "/memory/search", params={"query": "nothing", "symbiote_id": "any"}
+            "/memory/search", params={"query": "nothing", "symbiote_id": sym["id"]}
         )
         assert resp.status_code == 200
         assert resp.json() == []

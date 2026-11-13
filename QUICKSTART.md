@@ -77,6 +77,12 @@ per-symbiote config, inspect each symbiote's **memory, reflections and tool
 activity** (Memory tab), view/edit/rollback the self-evolving **harness text
 versions** (Harness tab), approve discovered tools, and view logs.
 
+**Authentication.** Every route requires `Authorization: Bearer sk-symbiote_...`
+except `/health`, `/` (the Console page itself), `/docs`, `/openapi.json` and
+`/redoc`. A key only reaches symbiotes owned by its tenant; symbiotes without
+an owner, and the Console data routes under `/api/*`, require an **admin** key.
+Sessions of a deleted symbiote are no longer served.
+
 Server environment variables:
 
 | Variable | Purpose |

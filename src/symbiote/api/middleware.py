@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from fastapi import Depends, HTTPException, Security
+from fastapi import Depends, HTTPException, Request, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 if TYPE_CHECKING:
@@ -16,8 +16,9 @@ _security = HTTPBearer(auto_error=False)
 # Module-level reference, set during app startup
 _key_manager: APIKeyManager | None = None
 
-# Paths that don't require authentication
-_PUBLIC_PATHS = frozenset({"/health", "/docs", "/openapi.json", "/redoc"})
+# Paths that don't require authentication. ``/`` serves the Console HTML,
+# which carries no data; the Console then calls authenticated routes.
+_PUBLIC_PATHS = frozenset({"/", "/health", "/docs", "/openapi.json", "/redoc"})
 
 
 def set_key_manager(manager: APIKeyManager) -> None:
@@ -63,6 +64,21 @@ async def require_auth(
         raise HTTPException(status_code=401, detail="Invalid or revoked API key")
 
     return api_key
+
+
+async def enforce_auth(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Security(_security),  # noqa: B008
+) -> None:
+    """App-wide dependency: every route outside ``_PUBLIC_PATHS`` needs a key.
+
+    Installed on the FastAPI app so a new route cannot ship unauthenticated
+    by forgetting ``Depends(require_auth)``. Routes still declare
+    ``require_auth`` / ``require_admin`` to get the key and its role.
+    """
+    if request.url.path in _PUBLIC_PATHS:
+        return
+    await require_auth(credentials)
 
 
 async def require_admin(

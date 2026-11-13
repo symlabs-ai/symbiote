@@ -367,9 +367,17 @@ class SymbioteKernel:
     # ── Public API — thin delegation ──────────────────────────────────────
 
     def create_symbiote(
-        self, name: str, role: str, persona: dict | None = None
+        self,
+        name: str,
+        role: str,
+        persona: dict | None = None,
+        owner_id: str | None = None,
     ) -> Symbiote:
-        return self._identity.create(name=name, role=role, persona=persona)
+        """Create a symbiote. ``owner_id`` is the tenant that owns it in the
+        HTTP API; symbiotes without an owner are reachable by admin keys only."""
+        return self._identity.create(
+            name=name, role=role, persona=persona, owner_id=owner_id
+        )
 
     def get_symbiote(self, symbiote_id: str) -> Symbiote | None:
         return self._identity.get(symbiote_id)

@@ -78,7 +78,7 @@ class TestAuthMiddleware:
     def test_chat_without_key_returns_401(self, setup) -> None:
         # Create a symbiote and session first
         kernel = setup["kernel"]
-        sym = kernel.create_symbiote(name="Bot", role="assistant")
+        sym = kernel.create_symbiote(name="Bot", role="assistant", owner_id="test-tenant")
         session = kernel.start_session(symbiote_id=sym.id)
 
         resp = setup["client"].post(
@@ -89,7 +89,7 @@ class TestAuthMiddleware:
 
     def test_chat_with_invalid_key_returns_401(self, setup) -> None:
         kernel = setup["kernel"]
-        sym = kernel.create_symbiote(name="Bot", role="assistant")
+        sym = kernel.create_symbiote(name="Bot", role="assistant", owner_id="test-tenant")
         session = kernel.start_session(symbiote_id=sym.id)
 
         resp = setup["client"].post(
@@ -101,7 +101,7 @@ class TestAuthMiddleware:
 
     def test_chat_with_valid_key_succeeds(self, setup) -> None:
         kernel = setup["kernel"]
-        sym = kernel.create_symbiote(name="Bot", role="assistant")
+        sym = kernel.create_symbiote(name="Bot", role="assistant", owner_id="test-tenant")
         session = kernel.start_session(symbiote_id=sym.id)
 
         resp = setup["client"].post(
@@ -118,7 +118,7 @@ class TestAuthMiddleware:
 class TestChatEndpoint:
     def test_chat_returns_llm_response(self, setup) -> None:
         kernel = setup["kernel"]
-        sym = kernel.create_symbiote(name="ChatBot", role="assistant")
+        sym = kernel.create_symbiote(name="ChatBot", role="assistant", owner_id="test-tenant")
         session = kernel.start_session(symbiote_id=sym.id)
 
         resp = setup["client"].post(

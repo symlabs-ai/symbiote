@@ -622,7 +622,7 @@ function renderTable(headers, rows, opts = {}) {
 
 // ── API helper ───────────────────────────────────────────────────────────
 function getApiKey() { return localStorage.getItem('symbiote_api_key') || window.__SYMBIOTE_KEY__ || ''; }
-function saveApiKey(v) { localStorage.setItem('symbiote_api_key', v); }
+function saveApiKey(v) { localStorage.setItem('symbiote_api_key', v); api._warned401 = false; }
 function toggleKeyVisibility() {
   const inp = $('api-key-input');
   inp.type = inp.type === 'password' ? 'text' : 'password';
@@ -635,6 +635,14 @@ async function api(method, url, body) {
   const opts = { method, headers };
   if (body !== undefined) opts.body = JSON.stringify(body);
   const resp = await fetch(url, opts);
+  if (resp.status === 401) {
+    const msg = 'API key ausente ou inválida — informe a chave no campo do canto superior ou rode o servidor com SYMBIOTE_LOCAL_ADMIN=1';
+    if (!api._warned401) { api._warned401 = true; toast(msg, 'error'); }
+    throw new Error(msg);
+  }
+  if (resp.status === 403) {
+    throw new Error('Esta chave não tem permissão para esta ação (o Console exige uma chave admin)');
+  }
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ detail: resp.statusText }));
     throw new Error(err.detail || `HTTP ${resp.status}`);
@@ -729,7 +737,7 @@ async function checkHealth() {
 
 async function loadDashboard() {
   try {
-    const data = await fetch('/api/dashboard').then(r => r.json());
+    const data = await api('GET', '/api/dashboard');
     const s = data.stats;
 
     $('stat-symbiotes').textContent = s.symbiotes;
@@ -784,7 +792,7 @@ async function loadDashboard() {
       // We'll fetch traces from the first symbiote if available, or show empty
       let allTraces = [];
       for (const sym of data.symbiotes.slice(0, 5)) {
-        const traces = await fetch(`/api/symbiotes/${sym.id}/traces?limit=5`).then(r => r.json());
+        const traces = await api('GET', `/api/symbiotes/${sym.id}/traces?limit=5`);
         allTraces = allTraces.concat(traces.map(t => ({ ...t, symbiote_name: sym.name })));
       }
       allTraces.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
@@ -819,7 +827,7 @@ async function loadSymbiotes() {
   $('symbiote-detail').classList.add('hidden');
   $('symbiotes-list').classList.remove('hidden');
   try {
-    state.symbiotes = await fetch('/api/symbiotes').then(r => r.json());
+    state.symbiotes = await api('GET', '/api/symbiotes');
     $('symbiotes-list').innerHTML = renderTable(
       ['Name', 'Role', 'Status', 'Owner', 'Created', 'Actions'],
       state.symbiotes.map(s => [
@@ -849,13 +857,13 @@ async function loadSymbioteDetail(id) {
   det.innerHTML = '<div class="py-10 text-center text-text-dim text-xs">Loading...</div>';
 
   try {
-    const sym = (await fetch('/api/symbiotes').then(r => r.json())).find(s => s.id === id);
+    const sym = (await api('GET', '/api/symbiotes')).find(s => s.id === id);
     if (!sym) { det.innerHTML = '<div class="py-10 text-center text-red text-xs">Symbiote not found</div>'; return; }
 
     const [sessions, traces, scores] = await Promise.all([
-      fetch(`/api/sessions?symbiote_id=${id}&limit=20`).then(r => r.json()),
-      fetch(`/api/symbiotes/${id}/traces?limit=10`).then(r => r.json()),
-      fetch(`/api/symbiotes/${id}/scores?limit=10`).then(r => r.json()),
+      api('GET', `/api/sessions?symbiote_id=${id}&limit=20`),
+      api('GET', `/api/symbiotes/${id}/traces?limit=10`),
+      api('GET', `/api/symbiotes/${id}/scores?limit=10`),
     ]);
 
     det.innerHTML = `
@@ -1318,7 +1326,7 @@ async function loadSessions() {
     let url = '/api/sessions?limit=50';
     if (symId) url += `&symbiote_id=${symId}`;
     if (status) url += `&status=${status}`;
-    state.sessions = await fetch(url).then(r => r.json());
+    state.sessions = await api('GET', url);
 
     $('sessions-list').innerHTML = renderTable(
       ['ID', 'Symbiote', 'Status', 'Goal', 'Started', 'Actions'],
@@ -1345,10 +1353,10 @@ async function loadSessionDetail(id) {
 
   try {
     const [session, messages, traces, scores] = await Promise.all([
-      fetch(`/sessions/${id}`).then(r => r.json()).catch(() => null),
-      fetch(`/api/sessions/${id}/messages`).then(r => r.json()),
-      fetch(`/api/sessions/${id}/trace`).then(r => r.json()),
-      fetch(`/api/sessions/${id}/score`).then(r => r.json()),
+      api('GET', `/sessions/${id}`).catch(() => null),
+      api('GET', `/api/sessions/${id}/messages`),
+      api('GET', `/api/sessions/${id}/trace`),
+      api('GET', `/api/sessions/${id}/score`),
     ]);
 
     det.innerHTML = `
@@ -1442,7 +1450,7 @@ async function closeSession(id) {
 async function initChat() {
   // Load symbiotes for dropdown
   try {
-    const syms = await fetch('/api/symbiotes').then(r => r.json());
+    const syms = await api('GET', '/api/symbiotes');
     state.symbiotes = syms;
     updateSymbioteSelects(syms);
   } catch {}
@@ -1455,7 +1463,7 @@ async function onChatSymbioteChange() {
   if (!symId) return;
 
   try {
-    const sessions = await fetch(`/api/sessions?symbiote_id=${symId}&status=active&limit=20`).then(r => r.json());
+    const sessions = await api('GET', `/api/sessions?symbiote_id=${symId}&status=active&limit=20`);
     sessions.forEach(s => {
       const opt = document.createElement('option');
       opt.value = s.id;
@@ -1493,7 +1501,7 @@ async function startChatSession() {
 
   // Load existing messages
   try {
-    const msgs = await fetch(`/api/sessions/${sessId}/messages`).then(r => r.json());
+    const msgs = await api('GET', `/api/sessions/${sessId}/messages`);
     state.chatMessages = msgs;
     renderChatMessages();
   } catch {
@@ -1596,7 +1604,7 @@ async function sendChat() {
 
     // Fetch trace for this session to show tool calls
     try {
-      const traces = await fetch(`/api/sessions/${state.chatSessionId}/trace`).then(r => r.json());
+      const traces = await api('GET', `/api/sessions/${state.chatSessionId}/trace`);
       if (traces.length > 0) {
         const latest = traces[0];
         if (latest.steps_json) {
@@ -1636,7 +1644,7 @@ async function sendChat() {
 
 async function loadTools() {
   try {
-    const data = await fetch('/api/dashboard').then(r => r.json());
+    const data = await api('GET', '/api/dashboard');
     const tools = data.discovered_tools || [];
 
     if (tools.length === 0) {
@@ -1708,7 +1716,7 @@ async function discoverTools() {
 
 async function initConfig() {
   try {
-    const syms = await fetch('/api/symbiotes').then(r => r.json());
+    const syms = await api('GET', '/api/symbiotes');
     state.symbiotes = syms;
     updateSymbioteSelects(syms);
   } catch {}
@@ -1719,7 +1727,7 @@ const memoryState = { view: 'memory' };
 
 async function initMemory() {
   try {
-    const syms = await fetch('/api/symbiotes').then(r => r.json());
+    const syms = await api('GET', '/api/symbiotes');
     state.symbiotes = syms;
     updateSymbioteSelects(syms);
   } catch {}
@@ -1743,7 +1751,7 @@ async function loadMemoryTab() {
   box.innerHTML = '<div class="py-10 text-center text-text-dim text-xs">Carregando…</div>';
   try {
     if (memoryState.view === 'memory') {
-      const rows = await fetch(`/api/symbiotes/${symId}/memory?limit=100`).then(r => r.json());
+      const rows = await api('GET', `/api/symbiotes/${symId}/memory?limit=100`);
       box.innerHTML = renderTable(
         ['Tipo', 'Scope', 'Conteúdo', 'Imp.', 'Origem', 'Criado'],
         rows.map(m => [
@@ -1757,7 +1765,7 @@ async function loadMemoryTab() {
         { empty: 'Sem memórias.' }
       );
     } else if (memoryState.view === 'reflections') {
-      const rows = await fetch(`/api/symbiotes/${symId}/reflections?limit=50`).then(r => r.json());
+      const rows = await api('GET', `/api/symbiotes/${symId}/reflections?limit=50`);
       box.innerHTML = renderTable(
         ['Modo', 'Fatos (keyword)', 'Fatos (LLM)', 'Erro', 'Criado'],
         rows.map(r => {
@@ -1773,7 +1781,7 @@ async function loadMemoryTab() {
         { empty: 'Sem reflexões.' }
       );
     } else {
-      const rows = await fetch(`/api/symbiotes/${symId}/activity?limit=100`).then(r => r.json());
+      const rows = await api('GET', `/api/symbiotes/${symId}/activity?limit=100`);
       box.innerHTML = renderTable(
         ['Tool', 'Ação', 'Resultado', 'Criado'],
         rows.map(a => [
@@ -1797,7 +1805,7 @@ function jsonLen(s) {
 // ── Harness tab (item 4) ────────────────────────────────────────────────────
 async function initHarness() {
   try {
-    const syms = await fetch('/api/symbiotes').then(r => r.json());
+    const syms = await api('GET', '/api/symbiotes');
     state.symbiotes = syms;
     updateSymbioteSelects(syms);
   } catch {}
@@ -1812,7 +1820,7 @@ async function loadHarnessComponents() {
   $('harness-content').innerHTML = '<div class="py-10 text-center text-text-dim text-xs">Selecione um componente.</div>';
   if (!symId) return;
   try {
-    const comps = await fetch(`/api/symbiotes/${symId}/harness`).then(r => r.json());
+    const comps = await api('GET', `/api/symbiotes/${symId}/harness`);
     comps.forEach(c => {
       const opt = document.createElement('option');
       opt.value = c.component;
@@ -1832,7 +1840,7 @@ async function loadHarnessVersions() {
   if (!symId || !component) { box.innerHTML = '<div class="py-10 text-center text-text-dim text-xs">Selecione um componente.</div>'; return; }
   box.innerHTML = '<div class="py-10 text-center text-text-dim text-xs">Carregando…</div>';
   try {
-    const versions = await fetch(`/api/symbiotes/${symId}/harness/${encodeURIComponent(component)}`).then(r => r.json());
+    const versions = await api('GET', `/api/symbiotes/${symId}/harness/${encodeURIComponent(component)}`);
     const active = versions.find(v => v.is_active);
     const activeContent = active ? active.content : '';
     const editor = `
@@ -2142,7 +2150,7 @@ async function loadLogs() {
     if (level) url += `&level=${encodeURIComponent(level)}`;
     if (search) url += `&search=${encodeURIComponent(search)}`;
     if (logger) url += `&logger=${encodeURIComponent(logger)}`;
-    const logs = await fetch(url).then(r => r.json());
+    const logs = await api('GET', url);
 
     if (logs.length === 0) {
       $('logs-list').innerHTML = '<div class="p-10 text-center text-text-dim text-xs">No log entries matching filters.</div>';

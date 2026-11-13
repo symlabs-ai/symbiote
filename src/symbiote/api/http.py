@@ -18,7 +18,12 @@ from starlette.requests import Request
 
 from symbiote.adapters.storage.sqlite import SQLiteAdapter
 from symbiote.api.auth import APIKey, APIKeyManager
-from symbiote.api.middleware import require_admin, require_auth, set_key_manager
+from symbiote.api.middleware import (
+    enforce_auth,
+    require_admin,
+    require_auth,
+    set_key_manager,
+)
 from symbiote.config.models import KernelConfig
 from symbiote.core.exceptions import EntityNotFoundError, SymbioteError, ValidationError
 from symbiote.core.identity import IdentityManager
@@ -68,7 +73,10 @@ for _ns in ("symbiote", "forge_llm", "httpx", "openai"):
     logging.getLogger(_ns).setLevel(logging.DEBUG)
 
 
-app = FastAPI(title="Symbiote API")
+# Every route requires an API key except the public allowlist in
+# ``symbiote.api.middleware._PUBLIC_PATHS``. Route-level ``require_auth`` /
+# ``require_admin`` dependencies still decide *who* may call each route.
+app = FastAPI(title="Symbiote API", dependencies=[Depends(enforce_auth)])
 
 
 @app.get("/health")
@@ -513,6 +521,57 @@ def get_discovery_service(
     return DiscoveryService(DiscoveredToolRepository(adapter))
 
 
+# ── Authorization helpers ───────────────────────────────────────────────
+#
+# Ownership rule (applies to every route that names a symbiote or session):
+#   * admin keys pass;
+#   * otherwise the symbiote's owner_id must equal the key's tenant;
+#   * symbiotes without an owner are visible to admins only;
+#   * soft-deleted symbiotes (and their sessions) are not found.
+
+
+def _check_owner(owner_id: str | None, auth: APIKey) -> None:
+    if auth.is_admin:
+        return
+    if not owner_id or owner_id != auth.tenant_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+
+def _require_symbiote(identity: IdentityManager, symbiote_id: str, auth: APIKey):  # noqa: ANN202
+    sym = identity.get(symbiote_id)
+    if sym is None or sym.status == "deleted":
+        raise HTTPException(status_code=404, detail="Symbiote not found")
+    _check_owner(sym.owner_id, auth)
+    return sym
+
+
+def _require_symbiote_access(
+    storage: SQLiteAdapter, symbiote_id: str, auth: APIKey
+) -> dict:
+    row = storage.fetch_one(
+        "SELECT id, owner_id, status FROM symbiotes WHERE id = ?", (symbiote_id,)
+    )
+    if row is None or row["status"] == "deleted":
+        raise HTTPException(status_code=404, detail="Symbiote not found")
+    _check_owner(row["owner_id"], auth)
+    return row
+
+
+def _require_session_access(
+    storage: SQLiteAdapter, session_id: str, auth: APIKey
+) -> dict:
+    row = storage.fetch_one(
+        "SELECT s.id, s.symbiote_id, sym.owner_id, sym.status AS symbiote_status "
+        "FROM sessions s JOIN symbiotes sym ON s.symbiote_id = sym.id "
+        "WHERE s.id = ?",
+        (session_id,),
+    )
+    if row is None or row["symbiote_status"] == "deleted":
+        raise HTTPException(status_code=404, detail="Session not found")
+    _check_owner(row["owner_id"], auth)
+    return row
+
+
 # ── Symbiote endpoints ───────────────────────────────────────────────────
 
 
@@ -543,11 +602,7 @@ def get_symbiote(
     auth: Annotated[APIKey, Depends(require_auth)],
     identity: Annotated[IdentityManager, Depends(get_identity_manager)],
 ) -> SymbioteResponse:
-    sym = identity.get(symbiote_id)
-    if sym is None:
-        raise HTTPException(status_code=404, detail="Symbiote not found")
-    if sym.owner_id and sym.owner_id != auth.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    sym = _require_symbiote(identity, symbiote_id, auth)
     return SymbioteResponse(
         id=sym.id,
         name=sym.name,
@@ -564,11 +619,7 @@ def update_symbiote(
     auth: Annotated[APIKey, Depends(require_auth)],
     identity: Annotated[IdentityManager, Depends(get_identity_manager)],
 ) -> SymbioteResponse:
-    sym = identity.get(symbiote_id)
-    if sym is None:
-        raise HTTPException(status_code=404, detail="Symbiote not found")
-    if sym.owner_id and sym.owner_id != auth.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    sym = _require_symbiote(identity, symbiote_id, auth)
     sym = identity.update(
         symbiote_id,
         name=body.name,
@@ -590,11 +641,7 @@ def delete_symbiote(
     auth: Annotated[APIKey, Depends(require_auth)],
     identity: Annotated[IdentityManager, Depends(get_identity_manager)],
 ) -> Response:
-    sym = identity.get(symbiote_id)
-    if sym is None:
-        raise HTTPException(status_code=404, detail="Symbiote not found")
-    if sym.owner_id and sym.owner_id != auth.tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    _require_symbiote(identity, symbiote_id, auth)
     identity.delete(symbiote_id)
     return Response(status_code=204)
 
@@ -605,8 +652,11 @@ def delete_symbiote(
 @app.post("/sessions", status_code=201, response_model=SessionResponse)
 def create_session(
     body: CreateSessionRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     sessions: Annotated[SessionManager, Depends(get_session_manager)],
 ) -> SessionResponse:
+    _require_symbiote_access(adapter, body.symbiote_id, auth)
     if body.external_key:
         sess = sessions.get_or_create_by_external_key(
             symbiote_id=body.symbiote_id,
@@ -627,8 +677,11 @@ def create_session(
 @app.get("/sessions/{session_id}", response_model=SessionResponse)
 def get_session(
     session_id: str,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     sessions: Annotated[SessionManager, Depends(get_session_manager)],
 ) -> SessionResponse:
+    _require_session_access(adapter, session_id, auth)
     sess = sessions.resume(session_id)
     if sess is None:
         raise HTTPException(status_code=404, detail="Session not found") from None
@@ -645,11 +698,14 @@ def get_session(
 @app.get("/sessions/by-key/{external_key}", response_model=SessionResponse)
 def get_session_by_key(
     external_key: str,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     sessions: Annotated[SessionManager, Depends(get_session_manager)],
 ) -> SessionResponse:
     sess = sessions.find_by_external_key(external_key)
     if sess is None:
         raise HTTPException(status_code=404, detail="Session not found") from None
+    _require_session_access(adapter, sess.id, auth)
     return SessionResponse(
         id=sess.id,
         symbiote_id=sess.symbiote_id,
@@ -668,8 +724,11 @@ def get_session_by_key(
 def add_message(
     session_id: str,
     body: CreateMessageRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     sessions: Annotated[SessionManager, Depends(get_session_manager)],
 ) -> MessageResponse:
+    _require_session_access(adapter, session_id, auth)
     try:
         msg = sessions.add_message(session_id, role=body.role, content=body.content)
     except EntityNotFoundError:
@@ -685,8 +744,11 @@ def add_message(
 @app.post("/sessions/{session_id}/close", response_model=SessionResponse)
 def close_session(
     session_id: str,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     sessions: Annotated[SessionManager, Depends(get_session_manager)],
 ) -> SessionResponse:
+    _require_session_access(adapter, session_id, auth)
     try:
         sess = sessions.close(session_id)
     except EntityNotFoundError:
@@ -708,10 +770,13 @@ def close_session(
 def search_memory(
     query: Annotated[str, Query()],
     symbiote_id: Annotated[str, Query()],
+    auth: Annotated[APIKey, Depends(require_auth)],
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     memory: Annotated[MemoryStore, Depends(get_memory_store)],
     scope: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 10,
 ) -> list[MemoryEntryResponse]:
+    _require_symbiote_access(adapter, symbiote_id, auth)
     entries = memory.search(
         query=query, scope=scope, limit=limit, symbiote_id=symbiote_id
     )
@@ -742,9 +807,12 @@ def search_memory(
 def register_tool(
     symbiote_id: str,
     body: RegisterToolRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     env: Annotated[EnvironmentManager, Depends(get_env_manager)],
     gw: Annotated[ToolGateway, Depends(get_tool_gateway)],
 ) -> ToolDescriptorResponse:
+    _require_symbiote_access(adapter, symbiote_id, auth)
     """Register an HTTP tool for a symbiote."""
     descriptor = ToolDescriptor(
         tool_id=body.tool_id,
@@ -782,9 +850,12 @@ def register_tool(
 )
 def list_tools(
     symbiote_id: str,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     env: Annotated[EnvironmentManager, Depends(get_env_manager)],
     gw: Annotated[ToolGateway, Depends(get_tool_gateway)],
 ) -> list[ToolDescriptorResponse]:
+    _require_symbiote_access(adapter, symbiote_id, auth)
     """List tools available to a symbiote (authorized ones only)."""
     authorized = set(env.list_tools(symbiote_id))
     return [
@@ -804,9 +875,12 @@ def list_tools(
 def remove_tool(
     symbiote_id: str,
     tool_id: str,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     env: Annotated[EnvironmentManager, Depends(get_env_manager)],
     gw: Annotated[ToolGateway, Depends(get_tool_gateway)],
 ) -> dict:
+    _require_symbiote_access(adapter, symbiote_id, auth)
     """Remove a tool from a symbiote."""
     current = env.list_tools(symbiote_id)
     updated = [t for t in current if t != tool_id]
@@ -823,8 +897,11 @@ def exec_tool(
     symbiote_id: str,
     tool_id: str,
     body: ToolExecRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     gw: Annotated[ToolGateway, Depends(get_tool_gateway)],
 ) -> ToolExecResponse:
+    _require_symbiote_access(adapter, symbiote_id, auth)
     """Execute a tool manually (for testing)."""
     result = gw.execute(
         symbiote_id=symbiote_id,
@@ -854,11 +931,7 @@ def discover(
     svc: Annotated[DiscoveryService, Depends(get_discovery_service)],
 ) -> DiscoverResponse:
     """Scan a local repository path and register discovered tools for a Symbiote."""
-    sym = identity.get(symbiote_id)
-    if sym is None:
-        raise HTTPException(status_code=404, detail="Symbiote not found")
-    if sym.owner_id != auth.tenant_id and not auth.is_admin:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_symbiote(identity, symbiote_id, auth)
 
     result = svc.discover(symbiote_id=symbiote_id, source_path=body.source_path, url=body.url)
     return DiscoverResponse(
@@ -880,11 +953,7 @@ def list_discovered_tools(
     status: str | None = Query(default=None),
 ) -> list[DiscoveredToolResponse]:
     """List tools discovered for a Symbiote, optionally filtered by status."""
-    sym = identity.get(symbiote_id)
-    if sym is None:
-        raise HTTPException(status_code=404, detail="Symbiote not found")
-    if sym.owner_id != auth.tenant_id and not auth.is_admin:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_symbiote(identity, symbiote_id, auth)
 
     repo = DiscoveredToolRepository(adapter)
     tools = repo.list(symbiote_id, status=status)
@@ -907,11 +976,7 @@ def update_discovered_tool(
     if body.status not in ("approved", "disabled", "pending"):
         raise HTTPException(status_code=422, detail="status must be approved, disabled, or pending")
 
-    sym = identity.get(symbiote_id)
-    if sym is None:
-        raise HTTPException(status_code=404, detail="Symbiote not found")
-    if sym.owner_id != auth.tenant_id and not auth.is_admin:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_symbiote(identity, symbiote_id, auth)
 
     repo = DiscoveredToolRepository(adapter)
     updated = repo.set_status(symbiote_id, tool_id, body.status)
@@ -934,11 +999,7 @@ def classify_discovered_tools(
     adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
 ) -> ClassifyToolsResponse:
     """Batch approve/disable discovered tools by OpenAPI tags."""
-    sym = identity.get(symbiote_id)
-    if sym is None:
-        raise HTTPException(status_code=404, detail="Symbiote not found")
-    if sym.owner_id != auth.tenant_id and not auth.is_admin:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_symbiote(identity, symbiote_id, auth)
 
     repo = DiscoveredToolRepository(adapter)
     result = repo.classify_by_tags(
@@ -958,11 +1019,7 @@ def reset_discovered_tools(
     adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
 ) -> ResetToolsResponse:
     """Reset all disabled discovered tools back to pending."""
-    sym = identity.get(symbiote_id)
-    if sym is None:
-        raise HTTPException(status_code=404, detail="Symbiote not found")
-    if sym.owner_id != auth.tenant_id and not auth.is_admin:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_symbiote(identity, symbiote_id, auth)
 
     repo = DiscoveredToolRepository(adapter)
     count = repo.reset_disabled(symbiote_id)
@@ -978,11 +1035,7 @@ def delete_discovered_tool(
     adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
 ) -> dict:
     """Remove a discovered tool entry."""
-    sym = identity.get(symbiote_id)
-    if sym is None:
-        raise HTTPException(status_code=404, detail="Symbiote not found")
-    if sym.owner_id != auth.tenant_id and not auth.is_admin:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_symbiote(identity, symbiote_id, auth)
 
     repo = DiscoveredToolRepository(adapter)
     if not repo.delete(symbiote_id, tool_id):
@@ -1021,11 +1074,7 @@ def set_tool_tags(
     env: Annotated[EnvironmentManager, Depends(get_env_manager)],
 ) -> dict:
     """Set tool visibility tags for a symbiote."""
-    sym = identity.get(symbiote_id)
-    if sym is None:
-        raise HTTPException(status_code=404, detail="Symbiote not found")
-    if sym.owner_id and sym.owner_id != auth.tenant_id and not auth.is_admin:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_symbiote(identity, symbiote_id, auth)
 
     kwargs: dict[str, Any] = {"tool_tags": body.tags, "tool_loading": body.loading, "tool_loop": body.loop}
     if body.tool_mode is not None:
@@ -1043,11 +1092,7 @@ def get_tool_tags(
     env: Annotated[EnvironmentManager, Depends(get_env_manager)],
 ) -> dict:
     """Get tool visibility tags for a symbiote."""
-    sym = identity.get(symbiote_id)
-    if sym is None:
-        raise HTTPException(status_code=404, detail="Symbiote not found")
-    if sym.owner_id and sym.owner_id != auth.tenant_id and not auth.is_admin:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_symbiote(identity, symbiote_id, auth)
 
     tags = env.get_tool_tags(symbiote_id)
     loading = env.get_tool_loading(symbiote_id)
@@ -1074,11 +1119,7 @@ def set_config(
     memory/knowledge shares, context mode, and long-run config
     (planner_prompt, evaluator_prompt, evaluator_criteria, etc.).
     """
-    sym = identity.get(symbiote_id)
-    if sym is None:
-        raise HTTPException(status_code=404, detail="Symbiote not found")
-    if sym.owner_id and sym.owner_id != auth.tenant_id and not auth.is_admin:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_symbiote(identity, symbiote_id, auth)
 
     # Build kwargs from non-None fields
     kwargs: dict[str, Any] = {}
@@ -1116,11 +1157,7 @@ def get_config(
     env: Annotated[EnvironmentManager, Depends(get_env_manager)],
 ) -> ConfigResponse:
     """Get full environment configuration for a symbiote."""
-    sym = identity.get(symbiote_id)
-    if sym is None:
-        raise HTTPException(status_code=404, detail="Symbiote not found")
-    if sym.owner_id and sym.owner_id != auth.tenant_id and not auth.is_admin:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_symbiote(identity, symbiote_id, auth)
 
     return _build_config_response(env, symbiote_id)
 
@@ -1169,17 +1206,7 @@ def chat(
     The kernel assembles context, calls the LLM, executes any tool calls,
     and returns the response. Tenant isolation is enforced via session ownership.
     """
-    # Tenant isolation: verify session belongs to a symbiote owned by this tenant
-    row = kernel._storage.fetch_one(
-        "SELECT s.symbiote_id, sym.owner_id FROM sessions s "
-        "JOIN symbiotes sym ON s.symbiote_id = sym.id "
-        "WHERE s.id = ?",
-        (session_id,),
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-    if row["owner_id"] and row["owner_id"] != auth.tenant_id:
-        raise HTTPException(status_code=403, detail="Session belongs to another tenant")
+    _require_session_access(kernel._storage, session_id, auth)
 
     response = kernel.message(
         session_id=session_id,
@@ -1268,6 +1295,7 @@ def revoke_api_key(
 
 @app.get("/api/logs")
 def api_logs(
+    auth: Annotated[APIKey, Depends(require_admin)],
     level: str | None = Query(default=None),
     logger_name: str | None = Query(default=None, alias="logger"),
     search: str | None = Query(default=None),
@@ -1288,6 +1316,7 @@ def api_logs(
 
 @app.get("/api/symbiotes")
 def api_list_symbiotes(
+    auth: Annotated[APIKey, Depends(require_admin)],
     adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
 ) -> list[dict]:
     """List all symbiotes (admin console)."""
@@ -1300,6 +1329,7 @@ def api_list_symbiotes(
 
 @app.get("/api/sessions")
 def api_list_sessions(
+    auth: Annotated[APIKey, Depends(require_admin)],
     adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     symbiote_id: str | None = Query(default=None),
     status: str | None = Query(default=None),
@@ -1330,10 +1360,13 @@ def api_list_sessions(
 @app.get("/api/sessions/{session_id}/messages")
 def api_session_messages(
     session_id: str,
+    auth: Annotated[APIKey, Depends(require_admin)],
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     sessions: Annotated[SessionManager, Depends(get_session_manager)],
     limit: int = Query(default=100, ge=1, le=500),
 ) -> list[dict]:
     """Get message history for a session (admin console)."""
+    _require_session_access(adapter, session_id, auth)
     msgs = sessions.get_messages(session_id, limit=limit)
     return [
         {"id": m.id, "role": m.role, "content": m.content, "created_at": m.created_at.isoformat()}
@@ -1344,9 +1377,11 @@ def api_session_messages(
 @app.get("/api/sessions/{session_id}/trace")
 def api_session_trace(
     session_id: str,
+    auth: Annotated[APIKey, Depends(require_admin)],
     adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
 ) -> list[dict]:
     """Get execution traces for a session (admin console)."""
+    _require_session_access(adapter, session_id, auth)
     rows = adapter.fetch_all(
         "SELECT id, session_id, symbiote_id, total_iterations, total_tool_calls, "
         "total_elapsed_ms, stop_reason, steps_json, created_at "
@@ -1359,9 +1394,11 @@ def api_session_trace(
 @app.get("/api/sessions/{session_id}/score")
 def api_session_score(
     session_id: str,
+    auth: Annotated[APIKey, Depends(require_admin)],
     adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
 ) -> list[dict]:
     """Get session scores (admin console)."""
+    _require_session_access(adapter, session_id, auth)
     rows = adapter.fetch_all(
         "SELECT id, session_id, symbiote_id, auto_score, user_score, final_score, "
         "stop_reason, total_iterations, total_tool_calls, computed_at "
@@ -1374,10 +1411,12 @@ def api_session_score(
 @app.get("/api/symbiotes/{symbiote_id}/traces")
 def api_symbiote_traces(
     symbiote_id: str,
+    auth: Annotated[APIKey, Depends(require_admin)],
     adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     limit: int = Query(default=20, ge=1, le=100),
 ) -> list[dict]:
     """Get recent execution traces for a symbiote (admin console)."""
+    _require_symbiote_access(adapter, symbiote_id, auth)
     rows = adapter.fetch_all(
         "SELECT id, session_id, symbiote_id, total_iterations, total_tool_calls, "
         "total_elapsed_ms, stop_reason, created_at "
@@ -1390,10 +1429,12 @@ def api_symbiote_traces(
 @app.get("/api/symbiotes/{symbiote_id}/scores")
 def api_symbiote_scores(
     symbiote_id: str,
+    auth: Annotated[APIKey, Depends(require_admin)],
     adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     limit: int = Query(default=20, ge=1, le=100),
 ) -> list[dict]:
     """Get recent session scores for a symbiote (admin console)."""
+    _require_symbiote_access(adapter, symbiote_id, auth)
     rows = adapter.fetch_all(
         "SELECT id, session_id, symbiote_id, auto_score, user_score, final_score, "
         "stop_reason, total_iterations, total_tool_calls, computed_at "
@@ -1406,10 +1447,12 @@ def api_symbiote_scores(
 @app.get("/api/symbiotes/{symbiote_id}/memory")
 def api_symbiote_memory(
     symbiote_id: str,
+    auth: Annotated[APIKey, Depends(require_admin)],
     adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[dict]:
     """Get active memory entries for a symbiote (admin console — what it knows)."""
+    _require_symbiote_access(adapter, symbiote_id, auth)
     rows = adapter.fetch_all(
         "SELECT id, session_id, type, scope, content, importance, source, "
         "tags_json, created_at, last_used_at "
@@ -1423,10 +1466,12 @@ def api_symbiote_memory(
 @app.get("/api/symbiotes/{symbiote_id}/reflections")
 def api_symbiote_reflections(
     symbiote_id: str,
+    auth: Annotated[APIKey, Depends(require_admin)],
     adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     limit: int = Query(default=20, ge=1, le=100),
 ) -> list[dict]:
     """Get reflection audit rows for a symbiote (admin console — what it learned)."""
+    _require_symbiote_access(adapter, symbiote_id, auth)
     rows = adapter.fetch_all(
         "SELECT id, session_id, mode, keyword_facts_json, llm_facts_json, "
         "llm_error, created_at "
@@ -1439,10 +1484,12 @@ def api_symbiote_reflections(
 @app.get("/api/symbiotes/{symbiote_id}/activity")
 def api_symbiote_activity(
     symbiote_id: str,
+    auth: Annotated[APIKey, Depends(require_admin)],
     adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[dict]:
     """Get tool-execution audit log for a symbiote (admin console — what it did)."""
+    _require_symbiote_access(adapter, symbiote_id, auth)
     rows = adapter.fetch_all(
         "SELECT id, session_id, tool_id, action, params_json, result, created_at "
         "FROM audit_log WHERE symbiote_id = ? ORDER BY created_at DESC LIMIT ?",
@@ -1471,6 +1518,7 @@ class HarnessVersionBody(BaseModel):
 @app.get("/api/symbiotes/{symbiote_id}/harness")
 def api_symbiote_harness(
     symbiote_id: str,
+    auth: Annotated[APIKey, Depends(require_admin)],
     adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     repo: Annotated[HarnessVersionRepository, Depends(get_harness_repo)],
 ) -> list[dict]:
@@ -1479,6 +1527,7 @@ def api_symbiote_harness(
     Returns one row per component that has versions, plus the base
     ``EVOLVABLE_COMPONENTS`` (even without versions) so the UI can offer them.
     """
+    _require_symbiote_access(adapter, symbiote_id, auth)
     present = adapter.fetch_all(
         "SELECT DISTINCT component FROM harness_versions WHERE symbiote_id = ?",
         (symbiote_id,),
@@ -1503,10 +1552,13 @@ def api_symbiote_harness(
 def api_symbiote_harness_versions(
     symbiote_id: str,
     component: str,
+    auth: Annotated[APIKey, Depends(require_admin)],
+    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     repo: Annotated[HarnessVersionRepository, Depends(get_harness_repo)],
     limit: int = Query(default=20, ge=1, le=100),
 ) -> list[dict]:
     """Version history for a harness component, most recent first."""
+    _require_symbiote_access(adapter, symbiote_id, auth)
     return [dict(r) for r in repo.list_versions(symbiote_id, component, limit=limit)]
 
 
@@ -1545,6 +1597,7 @@ def rollback_harness_version(
 
 @app.get("/api/dashboard", response_model=dict)
 def dashboard_data(
+    auth: Annotated[APIKey, Depends(require_admin)],
     adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
 ) -> dict:
     """Aggregate data for the admin dashboard (no auth — read-only summary)."""
