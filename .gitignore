@@ -32,3 +32,7 @@ symbiote.db
 symbiote.db-shm
 symbiote.db-wal
 .coverage
+
+# Demo
+demo/demo.env
+demo/data/

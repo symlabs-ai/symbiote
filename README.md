@@ -274,6 +274,7 @@ Opens a real Chromium window, navigates, snapshots, clicks, closes. Useful for v
 
 ## Documentation
 
+- **[demo/README.md](demo/README.md)** — Interactive demo: a personal assistant chat with tabs that show the kernel at work (live turn, context, memory, learning, tools, harness…). `bash demo/setup.sh && bash demo/run.sh`
 - **[QUICKSTART.md](QUICKSTART.md)** — Full usage guide (Python, CLI, HTTP API, embedded)
 - **[docs/releases/v0.6.0.md](docs/releases/v0.6.0.md)** — Release report for clients: quickstart, examples, cost cheat-sheet, migration
 - **[docs/integrations/symbiote-browser-quickstart.md](docs/integrations/symbiote-browser-quickstart.md)** — Detailed `symbiote.browser` user guide (setup, troubleshooting, FAQ)

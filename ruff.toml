@@ -27,3 +27,5 @@ ignore = [
 
 [lint.per-file-ignores]
 "tests/**" = ["E402", "F401"]
+# FastAPI dependency injection: Depends() in argument defaults is the idiom.
+"demo/**" = ["B008"]

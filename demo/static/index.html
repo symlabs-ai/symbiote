@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="demo-token" content="__DEMO_TOKEN__">
+  <title>Symbiote Demo</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='12' fill='none' stroke='%2300e5a0' stroke-width='4'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%2300e5a0'/%3E%3C/svg%3E">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo"></span>Symbiote <span class="dim">demo</span></div>
+    <div class="seg" id="symbiote-switch" role="tablist" aria-label="Symbiote">
+      <button data-symbiote="sol" class="active">Sol</button>
+      <button data-symbiote="researcher">Pesquisador</button>
+    </div>
+    <div class="session-info" id="session-info"></div>
+    <div class="spacer"></div>
+    <span class="pill" id="llm-pill" title="Modelo em uso"></span>
+    <button class="btn ghost" id="btn-new-session" title="Começa outra sessão sem encerrar a atual (não aprende)">Nova sessão</button>
+    <button class="btn accent" id="btn-close-session" title="Encerra a sessão: score, reflexão, memória de falha, handoff, skills e dream">Encerrar sessão e aprender</button>
+    <button class="btn" id="btn-tour">Roteiro</button>
+  </header>
+
+  <main class="layout">
+    <section class="chat-col" id="chat-col" aria-label="Chat"></section>
+    <section class="panel-col">
+      <nav class="tabs" id="tabs" role="tablist"></nav>
+      <div class="tab-body" id="tab-body"></div>
+    </section>
+  </main>
+
+  <aside class="drawer" id="tour" aria-label="Roteiro" hidden></aside>
+
+  <div class="overlay" id="setup" hidden>
+    <form class="dialog setup" id="setup-form" autocomplete="off">
+      <h2><span class="logo"></span> Symbiote demo</h2>
+      <p>O demo conversa com um LLM de verdade. Informe a chave da Anthropic, da OpenAI ou do SymGateway.
+         Ela é validada com uma chamada curta e gravada em <code id="env-path">demo/demo.env</code>
+         (fora do git, permissão 0600). Ela nunca volta para o navegador.</p>
+      <label>Provider
+        <select name="provider">
+          <option value="anthropic">Anthropic</option>
+          <option value="openai">OpenAI</option>
+          <option value="symgateway">SymGateway</option>
+        </select>
+      </label>
+      <label>Chave da API
+        <input name="api_key" type="password" placeholder="sk-…">
+      </label>
+      <div class="gw-only" hidden>
+        <p class="dim small">A chave do gateway substitui a do provider e precisa de
+          <code>models.read</code>, <code>work_sessions.create</code> e <code>gateway.llm.invoke</code>.
+          Cada sessão do Symbiote abre uma sessão de trabalho no gateway.</p>
+        <label>URL do gateway <input name="base_url" placeholder="https://symgateway.symlabs.ai"></label>
+        <label>Projeto (opcional, vai em <code>X-Project-Slug</code>)
+          <input name="project" placeholder="slug do projeto, se a chave for de um projeto"></label>
+        <div class="row">
+          <button type="button" class="btn" id="setup-models">Listar modelos liberados</button>
+          <span class="dim small" id="setup-models-info"></span>
+        </div>
+      </div>
+      <datalist id="gw-models"></datalist>
+      <details id="setup-models-box">
+        <summary>Modelos <span id="setup-models-hint">(opcional)</span></summary>
+        <label>Modelo principal <input name="model" placeholder="" list="gw-models"></label>
+        <label>Modelo auxiliar <input name="aux_model" placeholder="" list="gw-models"></label>
+        <p class="dim small">O auxiliar roda o trabalho de fundo: reflexão por LLM, evolução do harness,
+          seleção semântica de tools, dream e review de skills.</p>
+      </details>
+      <p class="error" id="setup-error" hidden></p>
+      <div class="row end">
+        <button type="button" class="btn ghost" id="setup-cancel" hidden>Cancelar</button>
+        <button class="btn accent" type="submit" id="setup-submit">Validar e começar</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="overlay" id="approval" hidden>
+    <div class="dialog approval" role="alertdialog" aria-labelledby="approval-title">
+      <div class="eyebrow amber">Aprovação humana · risco alto</div>
+      <h2 id="approval-title"></h2>
+      <p class="dim">O kernel pausou o loop antes de executar esta tool. Nada roda até você decidir.
+        Sem resposta em <span id="approval-timeout"></span>s, conta como negado.</p>
+      <pre class="code" id="approval-params"></pre>
+      <div class="row end">
+        <button class="btn danger" id="approval-deny">Negar</button>
+        <button class="btn accent" id="approval-allow">Permitir</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="confirm" hidden>
+    <div class="dialog">
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-text" class="dim"></p>
+      <div class="row end">
+        <button class="btn ghost" id="confirm-no">Cancelar</button>
+        <button class="btn danger" id="confirm-yes">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <script src="/vendor/symbiote-chat.js"></script>
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
