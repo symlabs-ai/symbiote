@@ -11,6 +11,7 @@ import inspect
 import logging
 import os
 import signal
+import socket
 import subprocess
 import threading
 import time
@@ -889,16 +890,20 @@ def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
         import urllib.parse
         import urllib.request
 
-        from symbiote.security.network import validate_url
+        from symbiote.security.network import validated_addresses
 
         url = _build_url(config.url_template, params, config.optional_params)
+        # hostname -> IP approved by the SSRF check; the connection goes to
+        # that IP (Host header, SNI and certificate still use the hostname).
+        pins: dict[str, str] = {}
         if config.allow_internal:
             logger.warning(
                 "SSRF bypass: allow_internal=True for %s %s",
                 config.method, url,
             )
         else:
-            validate_url(url)  # SSRF protection: block private/internal IPs
+            # SSRF protection: block private/internal IPs, then pin.
+            pins[_hostname(url)] = validated_addresses(url)[0]
 
         body_bytes: bytes | None = None
         is_form = config.content_type == "application/x-www-form-urlencoded"
@@ -947,7 +952,8 @@ def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
             class _NoRedirect(urllib.request.HTTPRedirectHandler):
                 def redirect_request(self, req, fp, code, msg, headers, newurl):
                     if not _allow_internal:
-                        validate_url(newurl)  # re-validate redirect target
+                        # re-validate (and pin) the redirect target
+                        pins[_hostname(newurl)] = validated_addresses(newurl)[0]
                     new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
                     if new_req is not None and _origin(newurl) != _origin(req.full_url):
                         # Cross-origin hop: strip the configured / host-provided
@@ -960,7 +966,13 @@ def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
                                 del new_req.unredirected_hdrs[name]
                     return new_req
 
-            opener = urllib.request.build_opener(_NoRedirect)
+            if pins and not _proxy_for(url):
+                opener = urllib.request.build_opener(
+                    urllib.request.ProxyHandler({}), *_pinned_handlers(pins), _NoRedirect
+                )
+            else:
+                # allow_internal, or a proxy that resolves the name itself.
+                opener = urllib.request.build_opener(_NoRedirect)
             with opener.open(req, timeout=config.timeout) as resp:
                 raw = resp.read(MAX_HTTP_TOOL_RESPONSE_BYTES + 1)
                 if len(raw) > MAX_HTTP_TOOL_RESPONSE_BYTES:
@@ -982,6 +994,70 @@ def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
             raise RuntimeError(f"URL error: {exc.reason}") from exc
 
     return handler
+
+
+def _hostname(url: str) -> str:
+    from urllib.parse import urlsplit
+
+    return (urlsplit(url).hostname or "").lower()
+
+
+def _proxy_for(url: str) -> bool:
+    """A proxy from the environment would carry this request."""
+    import urllib.request
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    proxies = urllib.request.getproxies()
+    if parts.scheme not in proxies and "all" not in proxies:
+        return False
+    return not urllib.request.proxy_bypass(parts.hostname or "")
+
+
+def _pinned_handlers(pins: dict[str, str]) -> tuple[Any, Any]:
+    """urllib HTTP/HTTPS handlers that connect to ``pins[hostname]``.
+
+    Only the TCP connection target changes: the request keeps the hostname
+    in the Host header, TLS SNI and certificate verification. A host with no
+    pin is refused (every hop is validated before it is followed).
+    """
+    import http.client
+    import urllib.request
+
+    def _target(host: str) -> str:
+        ip = pins.get(host.lower())
+        if ip is None:
+            raise ConnectionError(f"{host} was not validated; refusing to connect")
+        return ip
+
+    # source_address / _context are set by http.client and urllib but are
+    # not in the type stubs.
+    class _Conn(http.client.HTTPConnection):
+        def connect(self) -> None:
+            self.sock = socket.create_connection(
+                (_target(self.host), self.port), self.timeout,
+                getattr(self, "source_address", None),
+            )
+            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+    class _TLSConn(http.client.HTTPSConnection):
+        def connect(self) -> None:
+            sock = socket.create_connection(
+                (_target(self.host), self.port), self.timeout,
+                getattr(self, "source_address", None),
+            )
+            context = getattr(self, "_context")  # noqa: B009
+            self.sock = context.wrap_socket(sock, server_hostname=self.host)
+
+    class _Http(urllib.request.HTTPHandler):
+        def http_open(self, req: Any) -> Any:
+            return self.do_open(_Conn, req)
+
+    class _Https(urllib.request.HTTPSHandler):
+        def https_open(self, req: Any) -> Any:
+            return self.do_open(_TLSConn, req, context=getattr(self, "_context", None))
+
+    return _Http(), _Https()
 
 
 # ── built-in handler implementations ─────────────────────────────────────

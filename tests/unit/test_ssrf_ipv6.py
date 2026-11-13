@@ -75,25 +75,22 @@ def test_redirect_to_mapped_loopback_is_blocked(monkeypatch) -> None:
     port = srv.server_address[1]
     _Redirect.hits = []
     _Redirect.target = f"http://[::ffff:127.0.0.1]:{port}/internal"
-    # The first hop (a local test server) must pass validation, so only the
-    # validator's view of DNS is faked: 127.0.0.1 "resolves" to a public IP
-    # for validate_url, while urllib still connects to the real local server.
-    # Every other host resolves normally, so the redirect target is checked
-    # against its real (mapped loopback) address. No external connection.
-    import socket as real_socket
-    import types
+    # The first hop (the local test server) must pass validation, so it is
+    # approved and pinned to 127.0.0.1 by a fake; every other URL goes
+    # through the real check, so the redirect target is judged by its real
+    # (mapped loopback) address. No external connection.
+    from urllib.parse import urlsplit
 
     import symbiote.security.network as net
 
-    def fake_getaddrinfo(host, *a, **kw):
-        if host == "127.0.0.1":
-            return [(2, 1, 6, "", ("93.184.216.34", port))]
-        return real_socket.getaddrinfo(host, *a, **kw)
+    real_validated = net.validated_addresses
 
-    fake_socket = types.SimpleNamespace(
-        getaddrinfo=fake_getaddrinfo, gaierror=real_socket.gaierror
-    )
-    monkeypatch.setattr(net, "socket", fake_socket)
+    def fake_validated(url: str) -> list[str]:
+        if urlsplit(url).hostname == "127.0.0.1":
+            return ["127.0.0.1"]
+        return real_validated(url)
+
+    monkeypatch.setattr(net, "validated_addresses", fake_validated)
     handler = _make_http_handler(HttpToolConfig(url_template="{url}"))
     try:
         with pytest.raises(Exception):  # noqa: B017 — SSRFError or wrapped

@@ -46,6 +46,17 @@ def validate_url(url: str) -> str:
         SSRFError: If the URL resolves to a blocked IP range.
         ValueError: If the URL is malformed.
     """
+    validated_addresses(url)
+    return url
+
+
+def validated_addresses(url: str) -> list[str]:
+    """Resolve *url*'s host, check every address, return the approved IPs.
+
+    Connect to one of these instead of the hostname: resolving again at
+    connection time lets a DNS answer that changed in between (DNS
+    rebinding) point the request at an internal address.
+    """
     parsed = urlparse(url)
     hostname = parsed.hostname
 
@@ -62,15 +73,19 @@ def validate_url(url: str) -> str:
     except socket.gaierror as exc:
         raise ValueError(f"DNS resolution failed for {hostname}: {exc}") from exc
 
+    approved: list[str] = []
     for _family, _, _, _, sockaddr in addr_infos:
-        ip_str = sockaddr[0]
+        ip_str = str(sockaddr[0])
         try:
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             continue
         _check_ip(url, ip)
-
-    return url
+        if ip_str not in approved:
+            approved.append(ip_str)
+    if not approved:
+        raise ValueError(f"No usable address for {hostname}")
+    return approved
 
 
 def _check_ip(url: str, ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> None:

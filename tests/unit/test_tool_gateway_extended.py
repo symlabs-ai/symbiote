@@ -132,7 +132,7 @@ class TestHttpTools:
         mock_response.__enter__ = lambda s: s
         mock_response.__exit__ = lambda s, *a: None
 
-        with patch("symbiote.security.network.validate_url", return_value="http://localhost:12345/items/42"), \
+        with patch("symbiote.security.network.validated_addresses", return_value=["127.0.0.1"]), \
              patch("urllib.request.OpenerDirector.open", return_value=mock_response):
             result = gw.execute(
                 symbiote_id=symbiote_id,
@@ -297,7 +297,7 @@ class TestHeaderFactory:
             body.__exit__ = lambda s, *a: None
             return body
 
-        with patch("symbiote.security.network.validate_url", return_value=None), \
+        with patch("symbiote.security.network.validated_addresses", return_value=["127.0.0.1"]), \
              patch("urllib.request.OpenerDirector.open", side_effect=lambda *a, **kw: make_mock()):
             gw.execute(symbiote_id=symbiote_id, session_id=None, tool_id="dyn_get", params={"id": "1"})
             gw.execute(symbiote_id=symbiote_id, session_id=None, tool_id="dyn_get", params={"id": "2"})
@@ -323,7 +323,7 @@ class TestHeaderFactory:
         body.__enter__ = lambda s: s
         body.__exit__ = lambda s, *a: None
 
-        with patch("symbiote.security.network.validate_url", return_value=None), \
+        with patch("symbiote.security.network.validated_addresses", return_value=["127.0.0.1"]), \
              patch("urllib.request.OpenerDirector.open", return_value=body):
             result = gw.execute(
                 symbiote_id=symbiote_id, session_id=None, tool_id="static_get", params={}
