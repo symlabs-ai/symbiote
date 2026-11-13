@@ -15,9 +15,19 @@ from uuid import uuid4
 
 from symbiote.core.ports import StoragePort
 
+_UNSET = object()
+
 
 class HarnessVersionRepository:
-    """CRUD for harness text versions with score tracking and rollback."""
+    """CRUD for harness text versions with score tracking and rollback.
+
+    Version 0 of a component is the *baseline*: a never-active row that
+    accumulates the scores of sessions run with the built-in default text,
+    so the first evolved version (whose parent is the default) can be
+    compared and rolled back like any other.
+    """
+
+    BASELINE_VERSION = 0
 
     def __init__(self, storage: StoragePort) -> None:
         self._storage = storage
@@ -67,13 +77,20 @@ class HarnessVersionRepository:
         symbiote_id: str,
         component: str,
         content: str,
-        parent_version: int | None = None,
+        parent_version: int | None | object = _UNSET,
     ) -> int:
         """Create a new version. Returns the version number.
 
         The new version is immediately active. Previous versions for the
-        same (symbiote_id, component) are deactivated.
+        same (symbiote_id, component) are deactivated. ``parent_version``
+        defaults to the version active right now (or the default text when
+        none is); ``None`` means "derived from the default text".
         """
+        if parent_version is _UNSET:
+            active = self.get_active_version(symbiote_id, component)
+            parent_version = active["version"] if active else None
+        if parent_version is None:
+            parent_version = self.BASELINE_VERSION
         # Determine next version number
         row = self._storage.fetch_one(
             "SELECT MAX(version) as max_v FROM harness_versions "
@@ -119,7 +136,8 @@ class HarnessVersionRepository:
         """
         row = self.get_active_version(symbiote_id, component)
         if row is None:
-            return
+            # Session ran with the built-in default text: score the baseline.
+            row = self._baseline(symbiote_id, component, create=True)
 
         old_avg = row["avg_score"] or 0.0
         count = row["session_count"] or 0
@@ -132,37 +150,63 @@ class HarnessVersionRepository:
         )
 
     def rollback(self, symbiote_id: str, component: str) -> bool:
-        """Deactivate the current version and reactivate the previous one.
+        """Deactivate the current version and reactivate its parent.
 
-        Returns True if rollback succeeded, False if no previous version exists.
+        The parent is the version this one was derived from — not "the
+        previous number": after rolling v2 back to v1 and evolving v3 from
+        v1, rolling v3 back returns to v1, never to the rejected v2. When the
+        parent is the default text, no version stays active and the default
+        applies again.
+
+        Returns True if a version was rolled back, False if none is active.
         """
         current = self.get_active_version(symbiote_id, component)
         if current is None:
             return False
 
-        current_version = current["version"]
+        parent = current.get("parent_version") or self.BASELINE_VERSION
+        parent_row = None
+        if parent != self.BASELINE_VERSION:
+            parent_row = self._storage.fetch_one(
+                "SELECT id FROM harness_versions "
+                "WHERE symbiote_id = ? AND component = ? AND version = ?",
+                (symbiote_id, component, parent),
+            )
 
-        # Deactivate current
         self._storage.execute(
             "UPDATE harness_versions SET is_active = 0 WHERE id = ?",
             (current["id"],),
         )
-
-        # Reactivate previous version
-        prev = self._storage.fetch_one(
-            "SELECT id FROM harness_versions "
-            "WHERE symbiote_id = ? AND component = ? AND version < ? "
-            "ORDER BY version DESC LIMIT 1",
-            (symbiote_id, component, current_version),
-        )
-        if prev is None:
-            return False
-
-        self._storage.execute(
-            "UPDATE harness_versions SET is_active = 1 WHERE id = ?",
-            (prev["id"],),
-        )
+        if parent_row is not None:
+            self._storage.execute(
+                "UPDATE harness_versions SET is_active = 1 WHERE id = ?",
+                (parent_row["id"],),
+            )
         return True
+
+    def get_baseline(self, symbiote_id: str, component: str) -> dict | None:
+        """Score row of the built-in default text (version 0), if any."""
+        return self._baseline(symbiote_id, component, create=False)
+
+    def _baseline(self, symbiote_id: str, component: str, *, create: bool) -> dict | None:
+        row = self._storage.fetch_one(
+            "SELECT * FROM harness_versions "
+            "WHERE symbiote_id = ? AND component = ? AND version = ?",
+            (symbiote_id, component, self.BASELINE_VERSION),
+        )
+        if row is None and create:
+            self._storage.execute(
+                "INSERT INTO harness_versions "
+                "(id, symbiote_id, component, version, content, "
+                "avg_score, session_count, is_active, created_at, parent_version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(uuid4()), symbiote_id, component, self.BASELINE_VERSION, "",
+                    0.0, 0, 0, datetime.now(tz=UTC).isoformat(), None,
+                ),
+            )
+            return self._baseline(symbiote_id, component, create=False)
+        return dict(row) if row else None
 
     def list_versions(
         self, symbiote_id: str, component: str, limit: int = 10
@@ -170,7 +214,7 @@ class HarnessVersionRepository:
         """Return version history for a component, most recent first."""
         return self._storage.fetch_all(
             "SELECT * FROM harness_versions "
-            "WHERE symbiote_id = ? AND component = ? "
+            "WHERE symbiote_id = ? AND component = ? AND version > 0 "
             "ORDER BY version DESC LIMIT ?",
             (symbiote_id, component, limit),
         )

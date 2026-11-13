@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from symbiote.harness.versions import HarnessVersionRepository
@@ -149,6 +150,27 @@ class HarnessEvolver:
         # Get current text (version or default)
         current_text = self._versions.get_active(symbiote_id, component) or default_text
 
+        # Give the active version time and sessions before replacing it.
+        active = self._versions.get_active_version(symbiote_id, component)
+        if active is not None:
+            created = datetime.fromisoformat(active["created_at"])
+            if datetime.now(tz=UTC) - created < timedelta(days=MIN_EVOLUTION_INTERVAL_DAYS):
+                return EvolutionResult(
+                    symbiote_id=symbiote_id, component=component, success=False,
+                    reason=(
+                        f"Minimum interval of {MIN_EVOLUTION_INTERVAL_DAYS} days since "
+                        f"version {active['version']} not reached"
+                    ),
+                )
+            if (active["session_count"] or 0) < MIN_SESSIONS_FOR_VERDICT:
+                return EvolutionResult(
+                    symbiote_id=symbiote_id, component=component, success=False,
+                    reason=(
+                        f"Version {active['version']} has {active['session_count']} scored "
+                        f"sessions; {MIN_SESSIONS_FOR_VERDICT} needed before evolving again"
+                    ),
+                )
+
         # Collect session data
         failed = self._get_failed_sessions(symbiote_id, days)
         successful = self._get_successful_sessions(symbiote_id, days)
@@ -247,24 +269,19 @@ class HarnessEvolver:
                 session_count=current["session_count"],
             )
 
-        parent_version = current.get("parent_version")
-        if parent_version is None:
-            return RollbackCheck(
-                should_rollback=False,
-                reason="No parent version to compare against",
-                new_avg=current["avg_score"],
-                session_count=current["session_count"],
-            )
-
-        # Find parent's avg_score
+        # Parent 0/None = the built-in default text, scored in the baseline row.
+        parent_version = current.get("parent_version") or self._versions.BASELINE_VERSION
         parent_row = self._storage.fetch_one(
-            "SELECT avg_score FROM harness_versions "
+            "SELECT avg_score, session_count FROM harness_versions "
             "WHERE symbiote_id = ? AND component = ? AND version = ?",
             (symbiote_id, component, parent_version),
         )
-        if parent_row is None:
+        if parent_row is None or not parent_row["session_count"]:
             return RollbackCheck(
-                should_rollback=False, reason="Parent version not found",
+                should_rollback=False,
+                reason="Parent version has no scored sessions to compare against",
+                new_avg=current["avg_score"],
+                session_count=current["session_count"],
             )
 
         old_avg = parent_row["avg_score"]
@@ -335,13 +352,21 @@ class HarnessEvolver:
 
     # ── Data collection ──────────────────────────────────────────────────
 
+    # One row per session: the session's latest trace, not one row per trace
+    # (a JOIN on execution_traces counted a session once per message).
+    _SESSIONS_WITH_LATEST_TRACE = (
+        "SELECT ss.*, et.stop_reason as trace_stop, et.steps_json, "
+        "et.total_iterations as trace_iters "
+        "FROM session_scores ss "
+        "LEFT JOIN (SELECT session_id, stop_reason, steps_json, total_iterations, "
+        "MAX(created_at) AS latest FROM execution_traces GROUP BY session_id) et "
+        "ON ss.session_id = et.session_id "
+    )
+
     def _get_failed_sessions(self, symbiote_id: str, days: int) -> list[dict]:
         return self._storage.fetch_all(
-            "SELECT ss.*, et.stop_reason as trace_stop, et.steps_json, "
-            "et.total_iterations as trace_iters "
-            "FROM session_scores ss "
-            "LEFT JOIN execution_traces et ON ss.session_id = et.session_id "
-            "WHERE ss.symbiote_id = ? AND ss.final_score < 0.5 "
+            self._SESSIONS_WITH_LATEST_TRACE
+            + "WHERE ss.symbiote_id = ? AND ss.final_score < 0.5 "
             "AND ss.computed_at >= datetime('now', ?) "
             "ORDER BY ss.final_score ASC LIMIT 20",
             (symbiote_id, f"-{days} days"),
@@ -349,11 +374,8 @@ class HarnessEvolver:
 
     def _get_successful_sessions(self, symbiote_id: str, days: int) -> list[dict]:
         return self._storage.fetch_all(
-            "SELECT ss.*, et.stop_reason as trace_stop, et.steps_json, "
-            "et.total_iterations as trace_iters "
-            "FROM session_scores ss "
-            "LEFT JOIN execution_traces et ON ss.session_id = et.session_id "
-            "WHERE ss.symbiote_id = ? AND ss.final_score >= 0.8 "
+            self._SESSIONS_WITH_LATEST_TRACE
+            + "WHERE ss.symbiote_id = ? AND ss.final_score >= 0.8 "
             "AND ss.computed_at >= datetime('now', ?) "
             "ORDER BY ss.final_score DESC LIMIT 10",
             (symbiote_id, f"-{days} days"),

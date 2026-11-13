@@ -143,10 +143,11 @@ class TestHarnessVersions:
         assert ok is True
         assert versions.get_active(symbiote_id, "tool_instructions") == "V1 good"
 
-    def test_rollback_no_previous_returns_false(self, versions, symbiote_id) -> None:
+    def test_rollback_of_first_version_restores_default(self, versions, symbiote_id) -> None:
         versions.create_version(symbiote_id, "tool_instructions", "V1 only")
         ok = versions.rollback(symbiote_id, "tool_instructions")
-        assert ok is False
+        assert ok is True
+        assert versions.get_active(symbiote_id, "tool_instructions") is None
 
     def test_rollback_no_active_returns_false(self, versions, symbiote_id) -> None:
         ok = versions.rollback(symbiote_id, "tool_instructions")

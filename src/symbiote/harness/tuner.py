@@ -193,6 +193,10 @@ class ParameterTuner:
         """
         if not traces:
             return
+        if "max_tool_iterations" in result.adjustments:
+            # too_low already decided to raise it: sessions are hitting the
+            # limit, so lowering it would contradict the evidence.
+            return
 
         successful = [t for t in traces if t["stop_reason"] == "end_turn"]
         if len(successful) < TIER_1_MIN:

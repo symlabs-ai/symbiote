@@ -613,8 +613,13 @@ class TestHarnessEndpoints:
         assert "tool_instructions" in comps
         assert comps["tool_instructions"]["has_versions"] is False
 
-    def test_rollback_without_previous_returns_404(self, client: TestClient) -> None:
+    def test_rollback_of_only_version_restores_default(self, client: TestClient) -> None:
         sid = "sym-harness-single"
         client.post(f"/symbiotes/{sid}/harness/tool_instructions", json={"content": "only"})
         rb = client.post(f"/symbiotes/{sid}/harness/tool_instructions/rollback")
+        assert rb.status_code == 200
+        assert rb.json()["active_version"] is None
+
+    def test_rollback_without_active_version_returns_404(self, client: TestClient) -> None:
+        rb = client.post("/symbiotes/sym-none/harness/tool_instructions/rollback")
         assert rb.status_code == 404

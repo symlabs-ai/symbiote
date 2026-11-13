@@ -1612,10 +1612,10 @@ def rollback_harness_version(
     auth: Annotated[APIKey, Depends(require_admin)],
     repo: Annotated[HarnessVersionRepository, Depends(get_harness_repo)],
 ) -> dict:
-    """Reactivate the previous version of a harness component."""
+    """Roll the active version back to its parent (or to the default text)."""
     ok = repo.rollback(symbiote_id, component)
     if not ok:
-        raise HTTPException(status_code=404, detail="No previous version to roll back to")
+        raise HTTPException(status_code=404, detail="No active version to roll back")
     active = repo.get_active_version(symbiote_id, component)
     return {"rolled_back": True, "active_version": active["version"] if active else None}
 
