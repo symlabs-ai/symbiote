@@ -24,6 +24,7 @@ Context strategy between blocks is configurable:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -49,6 +50,16 @@ if TYPE_CHECKING:
     from symbiote.memory.working import WorkingMemory
 
 _HANDLED_INTENTS = frozenset({"chat", "ask", "question", "talk"})
+# How much of a previous block's output the "compaction" strategy carries.
+_CARRIED_OUTPUT_CHARS = 2000
+
+
+def _response_text(response: object) -> str:
+    """Text of an adapter response (``str`` or ``LLMResponse``)."""
+    if isinstance(response, str):
+        return response
+    content = getattr(response, "content", None)
+    return content if isinstance(content, str) else str(response)
 
 _DEFAULT_PLANNER_PROMPT = """\
 You are a project planner. Given the user's request, create a structured plan
@@ -126,14 +137,36 @@ class LongRunRunner:
     def can_handle(self, intent: str) -> bool:
         return intent in _HANDLED_INTENTS
 
+    async def run_async(
+        self,
+        context: AssembledContext,
+        on_token: Callable[[str], None] | None = None,
+        llm_config: dict | None = None,
+    ) -> RunResult:
+        """Run the (synchronous) long-run in a worker thread.
+
+        ``on_token`` is called from that thread.
+        """
+        return await asyncio.to_thread(
+            self.run, context, on_token=on_token, llm_config=llm_config
+        )
+
     def run(
         self,
         context: AssembledContext,
         on_token: Callable[[str], None] | None = None,
+        llm_config: dict | None = None,
     ) -> RunResult:
-        """Execute a long-run project: plan -> generate blocks -> evaluate."""
+        """Execute a long-run project: plan -> generate blocks -> evaluate.
+
+        ``llm_config`` (per-call overrides, e.g. effort) is merged over
+        ``context.generation_settings`` for the planner and evaluator calls
+        and forwarded to every block.
+        """
         loop_start = time.monotonic()
         trace = LoopTrace(tool_mode="long_run")
+        self._llm_config = llm_config
+        self._call_config = {**(context.generation_settings or {}), **(llm_config or {})} or None
 
         # ── Phase 1: Planning ───────────────────────────────────────────
         plan = self._run_planner(context)
@@ -156,7 +189,6 @@ class LongRunRunner:
         # ── Phase 2: Execute blocks ─────────────────────────────────────
         block_results: list[BlockResult] = []
         max_blocks = min(context.max_blocks, plan.total_blocks)
-        accumulated_messages: list[dict] = []
 
         # B3: Pre-flight — verify tools with health_check before spending tokens
         preflight_error = self._preflight_tools(context)
@@ -184,8 +216,7 @@ class LongRunRunner:
             # Execute the block using a brief-mode ChatRunner
             block_start = time.monotonic()
             block_result = self._execute_block(
-                context, block_prompt, block_idx, block_name,
-                accumulated_messages, on_token,
+                context, block_prompt, block_idx, block_name, on_token,
             )
             block_result.elapsed_ms = int((time.monotonic() - block_start) * 1000)
 
@@ -217,8 +248,7 @@ class LongRunRunner:
                         block_prompt, eval_result
                     )
                     block_result = self._execute_block(
-                        context, retry_prompt, block_idx, block_name,
-                        accumulated_messages, on_token,
+                        context, retry_prompt, block_idx, block_name, on_token,
                     )
                     block_result.elapsed_ms += int((time.monotonic() - block_start) * 1000)
 
@@ -229,6 +259,11 @@ class LongRunRunner:
                     block_result.evaluator_score = eval_result.get("overall_score")
                     block_result.evaluator_feedback = eval_result.get("feedback")
 
+                if not eval_result.get("passed", True):
+                    # Rejected even after the retry: the evaluator's verdict
+                    # wins over the generator's own claim of success.
+                    block_result.success = False
+
             block_results.append(block_result)
 
             if self._on_block_complete is not None:
@@ -236,10 +271,6 @@ class LongRunRunner:
 
             if self._on_progress is not None:
                 self._on_progress("block_end", block_idx + 1, max_blocks)
-
-            # Context strategy between blocks
-            if context.context_strategy in ("reset", "hybrid"):
-                accumulated_messages.clear()
 
             # Stop early if block failed and no evaluator to retry
             if not block_result.success and context.evaluator_prompt is None:
@@ -293,12 +324,19 @@ class LongRunRunner:
                 }
                 for b in block_results
             ],
-            "pending_blocks": plan.blocks[completed:] if completed < plan.total_blocks else [],
+            # Blocks not completed successfully, in plan order (failures may
+            # be anywhere, not only at the tail).
+            "pending_blocks": [
+                block
+                for idx, block in enumerate(plan.blocks)
+                if idx not in {b.block_index for b in block_results if b.success}
+            ],
             "output_summary": output,
         }
 
         return RunResult(
             success=completed > 0,
+            error=None if completed > 0 else output,
             output=output,
             runner_type=self.runner_type,
             loop_trace=trace,
@@ -334,8 +372,8 @@ class LongRunRunner:
         ]
 
         try:
-            response = self._llm.complete(messages, config=context.generation_settings)
-            raw = response if isinstance(response, str) else str(response)
+            response = self._llm.complete(messages, config=self._config_for(context))
+            raw = _response_text(response)
         except Exception as exc:
             logger.warning("[long-run] planner failed: %s", exc)
             return LongRunPlan(raw_spec=str(exc))
@@ -392,7 +430,6 @@ class LongRunRunner:
         block_prompt: str,
         block_index: int,
         block_name: str,
-        accumulated_messages: list[dict],
         on_token: Callable[[str], None] | None = None,
     ) -> BlockResult:
         """Execute a single block of work using the LLM with tool loop."""
@@ -432,7 +469,9 @@ class LongRunRunner:
             generation_settings=context.generation_settings,
         )
 
-        result = runner.run(block_context, on_token=on_token)
+        result = runner.run(
+            block_context, on_token=on_token, llm_config=getattr(self, "_llm_config", None)
+        )
 
         tool_calls = 0
         iterations = 0
@@ -472,12 +511,18 @@ class LongRunRunner:
         ]
 
         if completed_blocks:
+            # context_strategy: "compaction" carries each previous block's
+            # output forward; "reset" / "hybrid" start each block fresh with
+            # only the status and evaluator feedback of earlier blocks.
+            carry_output = context.context_strategy == "compaction"
             progress = []
             for b in completed_blocks:
                 status = "DONE" if b.success else "FAILED"
                 progress.append(f"- {b.block_name}: {status}")
                 if b.evaluator_feedback:
                     progress.append(f"  Feedback: {b.evaluator_feedback}")
+                if carry_output and b.output:
+                    progress.append(f"  Output: {b.output[:_CARRIED_OUTPUT_CHARS]}")
             parts.append("\n## Progress So Far\n" + "\n".join(progress))
 
         parts.append(
@@ -508,26 +553,32 @@ class LongRunRunner:
 
     # ── Pre-flight ───────────────────────────────────────────────────────
 
-    @staticmethod
-    def _preflight_tools(context: AssembledContext) -> str | None:
+    def _preflight_tools(self, context: AssembledContext) -> str | None:
         """B3: Check tool availability before starting blocks.
 
-        Only verifies tools that expose a ``health_check()`` method — existing
-        tools without it are silently skipped (non-breaking).
+        For every tool offered to the model (``context.available_tools``),
+        the handler registered in the gateway is checked; handlers exposing a
+        ``health_check()`` callable are called. Tools without one are skipped
+        (non-breaking).
 
         Returns an error message if any check fails, otherwise None.
         """
-        tools = getattr(context, "tools", None)
-        if not tools:
+        if self._tool_gateway is None or not context.available_tools:
             return None
-        for tool in tools:
-            if hasattr(tool, "health_check"):
+        registry = getattr(self._tool_gateway, "_registry", {})
+        for tool in context.available_tools:
+            tool_id = tool.get("tool_id") or tool.get("name")
+            handler = registry.get(tool_id)
+            check = getattr(handler, "health_check", None)
+            if callable(check):
                 try:
-                    tool.health_check()
+                    check()
                 except Exception as exc:
-                    name = getattr(tool, "name", repr(tool))
-                    return f"Tool '{name}' unavailable: {exc}"
+                    return f"Tool '{tool_id}' unavailable: {exc}"
         return None
+
+    def _config_for(self, context: AssembledContext) -> dict | None:
+        return getattr(self, "_call_config", None) or context.generation_settings
 
     # ── Evaluator ────────────────────────────────────────────────────────
 
@@ -563,10 +614,9 @@ class LongRunRunner:
 
         try:
             response = self._evaluator_llm.complete(
-                eval_messages, config=context.generation_settings
+                eval_messages, config=self._config_for(context)
             )
-            raw = response if isinstance(response, str) else str(response)
-            return self._parse_eval_json(raw)
+            return self._parse_eval_json(_response_text(response))
         except Exception as exc:
             logger.warning("[long-run] evaluator failed: %s", exc)
             return {"passed": True, "overall_score": 0.5, "feedback": f"Evaluator error: {exc}"}

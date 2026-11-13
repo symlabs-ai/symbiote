@@ -115,6 +115,13 @@ class RunnerRegistry:
                 return runner
         return None
 
+    def get(self, runner_type: str) -> Runner | None:
+        """Return the registered runner whose ``runner_type`` matches, or None."""
+        for runner in self._runners:
+            if getattr(runner, "runner_type", None) == runner_type:
+                return runner
+        return None
+
     def list_runners(self) -> list[str]:
         """Return the runner_type name of every registered runner."""
         return [r.runner_type for r in self._runners]

@@ -41,6 +41,7 @@ from symbiote.memory.store import MemoryStore
 from symbiote.process.engine import ProcessEngine
 from symbiote.runners.base import LoopTrace, RunnerRegistry, RunResult
 from symbiote.runners.chat import ChatRunner
+from symbiote.runners.long_run import LongRunRunner
 from symbiote.runners.process import ProcessRunner
 from symbiote.runners.subagent import SubagentManager
 from symbiote.skills import tool as skill_tool_module
@@ -155,6 +156,16 @@ class SymbioteKernel:
                     background_review=self._background_review_for,
                     agent_protocol=resolved_agent_protocol,
                     protocol_registry=active_protocol_registry,
+                )
+            )
+
+        if llm is not None:
+            # Selected by CapabilitySurface when tool_mode == "long_run".
+            self._runner_registry.register(
+                LongRunRunner(
+                    llm,
+                    tool_gateway=self._tool_gateway,
+                    context_budget=config.loop_context_budget,
                 )
             )
 
@@ -318,6 +329,9 @@ class SymbioteKernel:
                 "(kernel was constructed without an LLM)."
             )
         runner._native_tools = enabled  # type: ignore[attr-defined]
+        long_run = self._runner_registry.get("long_run")
+        if long_run is not None:
+            long_run._native_tools = enabled  # type: ignore[attr-defined]
 
     def set_agent_protocol(
         self,

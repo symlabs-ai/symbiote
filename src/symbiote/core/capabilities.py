@@ -163,6 +163,7 @@ class CapabilitySurface:
             user_input=content,
             extra_context=extra_context,
         )
+        runner = self._runner_for_mode(context, runner)
 
         result = runner.run(context, llm_config=llm_config)
         self._last_loop_trace = getattr(result, "loop_trace", None)
@@ -215,6 +216,7 @@ class CapabilitySurface:
             extra_context=extra_context,
         )
 
+        runner = self._runner_for_mode(context, runner)
         if not hasattr(runner, "run_async"):
             raise CapabilityError("chat", "Runner does not support async execution")
 
@@ -222,6 +224,14 @@ class CapabilitySurface:
         self._last_loop_trace = getattr(result, "loop_trace", None)
         self._last_handoff_data = getattr(result, "handoff_data", None)
         return result
+
+    def _runner_for_mode(self, context: Any, default: Any) -> Any:
+        """``tool_mode="long_run"`` goes to the LongRunRunner when registered."""
+        if getattr(context, "tool_mode", None) == "long_run":
+            long_run = self._runner_registry.get("long_run")
+            if long_run is not None:
+                return long_run
+        return default
 
     # ── work ─────────────────────────────────────────────────────────────
 
