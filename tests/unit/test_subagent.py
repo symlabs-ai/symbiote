@@ -132,13 +132,17 @@ class TestSpawnExecution:
     def test_recursion_guard_blocks_deep_nesting(self, kernel: SymbioteKernel) -> None:
         kernel.create_symbiote(name="Recursive", role="assistant")
 
-        mgr = SubagentManager(kernel)
-        mgr._depth = SubagentManager.MAX_DEPTH  # simulate deep nesting
+        from symbiote.runners.subagent import _spawn_depth
 
-        result = mgr.spawn({
-            "target_symbiote": "Recursive",
-            "task": "Do work",
-        })
+        mgr = SubagentManager(kernel)
+        token = _spawn_depth.set(SubagentManager.MAX_DEPTH)  # simulate deep nesting
+        try:
+            result = mgr.spawn({
+                "target_symbiote": "Recursive",
+                "task": "Do work",
+            })
+        finally:
+            _spawn_depth.reset(token)
 
         assert result["success"] is False
         assert "depth" in result["error"].lower()
@@ -146,15 +150,17 @@ class TestSpawnExecution:
     def test_depth_resets_after_spawn(self, kernel: SymbioteKernel) -> None:
         kernel.create_symbiote(name="DepthBot", role="assistant")
 
+        from symbiote.runners.subagent import _spawn_depth
+
         mgr = SubagentManager(kernel)
-        assert mgr._depth == 0
+        assert _spawn_depth.get() == 0
 
         mgr.spawn({
             "target_symbiote": "DepthBot",
             "task": "Quick task",
         })
 
-        assert mgr._depth == 0  # reset after completion
+        assert _spawn_depth.get() == 0  # reset after completion
 
     def test_spawn_session_has_subagent_goal(self, kernel: SymbioteKernel) -> None:
         kernel.create_symbiote(name="GoalBot", role="assistant")

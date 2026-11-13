@@ -1,7 +1,9 @@
-"""SubagentManager — delegate tasks between Symbiotas with restricted tool sets."""
+"""SubagentManager — delegate tasks between Symbiotas."""
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
@@ -68,10 +70,15 @@ SPAWN_DESCRIPTOR = ToolDescriptor(
 _VALID_EFFORTS = frozenset({"normal", "high"})
 
 
-# ── Restricted tools ─────────────────────────────────────────────────────────
+# ── Delegation depth ─────────────────────────────────────────────────────────
 
-# Subagents can NOT use these tools (prevent recursion and side effects)
-_BLOCKED_TOOLS = frozenset({"spawn", "message"})
+# Depth of the current delegation chain. A ContextVar, not a counter on the
+# manager: parallel spawns and other sessions are independent chains. Tool
+# handlers run with the caller's context copied in, so a spawn made inside a
+# sub-session sees its parent's depth.
+_spawn_depth: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "symbiote_spawn_depth", default=0
+)
 
 
 # ── SubagentManager ──────────────────────────────────────────────────────────
@@ -86,14 +93,14 @@ class SubagentManager:
     3. Runs the task via the kernel's message flow
     4. Returns the result to the caller
 
-    Recursion guard: max_depth prevents infinite A→B→A loops.
+    Recursion guard: ``MAX_DEPTH`` caps how deep one delegation chain can go
+    (A→B→A loops), counted per chain — parallel spawns do not add up.
     """
 
     MAX_DEPTH = 3
 
     def __init__(self, kernel: SymbioteKernel) -> None:
         self._kernel = kernel
-        self._depth = 0
 
     def spawn(self, params: dict) -> dict[str, Any]:
         """Execute a spawn tool call.
@@ -130,8 +137,9 @@ class SubagentManager:
         effort = params.get("effort")
         extra_context = params.get("extra_context")
 
-        # Recursion guard
-        if self._depth >= self.MAX_DEPTH:
+        # Recursion guard (depth of this delegation chain)
+        depth = _spawn_depth.get()
+        if depth >= self.MAX_DEPTH:
             return SpawnResult(
                 success=False,
                 target_symbiote=target_name,
@@ -194,7 +202,9 @@ class SubagentManager:
             ).model_dump()
 
         # Create isolated session (with depth tracking)
-        self._depth += 1
+        depth_token = _spawn_depth.set(depth + 1)
+        session = None
+        closed = False
         try:
             session = self._kernel.start_session(
                 symbiote_id=target.id,
@@ -222,6 +232,7 @@ class SubagentManager:
 
             # Close the session
             self._kernel.close_session(session.id)
+            closed = True
 
             # Normalize response
             if isinstance(response, dict):
@@ -245,7 +256,11 @@ class SubagentManager:
                 error=f"{type(exc).__name__}: {exc}",
             ).model_dump()
         finally:
-            self._depth -= 1
+            if session is not None and not closed:
+                # The sub-run failed: do not leave the sub-session active.
+                with contextlib.suppress(Exception):
+                    self._kernel.close_session(session.id)
+            _spawn_depth.reset(depth_token)
 
     def _resolve_symbiote(self, name_or_id: str):
         """Resolve a Symbiota by name or ID."""
