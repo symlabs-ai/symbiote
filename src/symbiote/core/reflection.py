@@ -36,6 +36,19 @@ from symbiote.core.ports import LLMPort, MemoryPort, MessagePort, StoragePort
 _log = logging.getLogger(__name__)
 
 
+def _clamped_importance(value: object) -> float | None:
+    """Importance from LLM output as a float in [0, 1], or None if unusable."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if number != number:  # NaN
+        return None
+    return min(1.0, max(0.0, number))
+
+
 class ReflectionResult(BaseModel):
     """Result of a reflection pass over session messages."""
 
@@ -270,8 +283,11 @@ class ReflectionEngine:
                 llm_error=llm_error,
             )
 
-        persisted = self._apply_llm_facts(llm_facts, symbiote_id, session_id)
-        self._audit_log(session_id, symbiote_id, self._mode, [], llm_facts, None)
+        persisted, skipped = self._apply_llm_facts(llm_facts, symbiote_id, session_id)
+        skipped_note = (
+            f"skipped {skipped} invalid fact(s) from the LLM" if skipped else None
+        )
+        self._audit_log(session_id, symbiote_id, self._mode, [], llm_facts, skipped_note)
         return ReflectionResult(
             session_id=session_id,
             summary=summary,
@@ -606,18 +622,28 @@ class ReflectionEngine:
           - Adapters that don't implement update() also fall back to CREATE.
         """
         persisted = 0
+        skipped = 0
         has_update = hasattr(self._memory_store, "update")
         for fact in facts:
+            if not isinstance(fact, dict):
+                skipped += 1
+                continue
             content = fact.get("content")
-            if not content:
+            if not isinstance(content, str) or not content.strip():
+                skipped += 1
                 continue
             mem_type = fact.get("type", "factual")
             if mem_type not in {"preference", "constraint", "procedural", "factual", "decision"}:
                 mem_type = "reflection"
-            importance = float(fact.get("importance", 0.5))
+            importance = _clamped_importance(fact.get("importance", 0.5))
+            if importance is None:
+                _log.info("Skipping reflected fact with invalid importance %r", fact.get("importance"))
+                skipped += 1
+                continue
             tags = fact.get("tags") or []
             if not isinstance(tags, list):
                 tags = []
+            tags = [str(t) for t in tags]
 
             action = fact.get("action", "create")
             raw_target = fact.get("target_id")
@@ -650,19 +676,24 @@ class ReflectionEngine:
                         "falling back to CREATE", raw_target,
                     )
 
-            entry = MemoryEntry(
-                symbiote_id=symbiote_id,
-                session_id=session_id,
-                type=mem_type,
-                scope="global",
-                content=content,
-                tags=tags,
-                importance=importance,
-                source="reflection",
-            )
+            try:
+                entry = MemoryEntry(
+                    symbiote_id=symbiote_id,
+                    session_id=session_id,
+                    type=mem_type,
+                    scope="global",
+                    content=content,
+                    tags=tags,
+                    importance=importance,
+                    source="reflection",
+                )
+            except ValueError as exc:  # pydantic ValidationError is a ValueError
+                _log.info("Skipping reflected fact that does not validate: %s", exc)
+                skipped += 1
+                continue
             self._memory_store.store(entry)
             persisted += 1
-        return persisted
+        return persisted, skipped
 
     # ── audit ──────────────────────────────────────────────────────────
 

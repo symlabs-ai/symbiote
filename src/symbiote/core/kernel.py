@@ -641,6 +641,15 @@ class SymbioteKernel:
             tool_mode=row["tool_mode"] or "brief",
         )
 
+    @staticmethod
+    def _close_step(name: str, fn: Callable, *args) -> None:  # noqa: ANN001
+        try:
+            fn(*args)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "close_session: %s step failed; continuing", name
+            )
+
     def close_session(self, session_id: str) -> Session:
         """Run reflection, compute score, persist failure memory, then close."""
         row = self._storage.fetch_one(
@@ -648,29 +657,42 @@ class SymbioteKernel:
         )
         if row is not None:
             symbiote_id = row["symbiote_id"]
+            # Each post-processing step is isolated: one failing (bad LLM
+            # output, a host adapter error) is logged and the others still
+            # run; the session is always closed below.
 
             # 1. Compute and persist session score
             trace = self._latest_trace(session_id)
-            self._persist_score(session_id, symbiote_id, trace)
+            self._close_step("score", self._persist_score, session_id, symbiote_id, trace)
 
             # 2. Generate failure MemoryEntry if loop didn't complete
-            self._generate_failure_memory(session_id, symbiote_id, trace)
+            self._close_step(
+                "failure memory", self._generate_failure_memory, session_id, symbiote_id, trace
+            )
 
             # 3. Reflection — build engine matching this symbiote's config
-            self._reflection_for(symbiote_id).reflect_session(session_id, symbiote_id)
+            self._close_step(
+                "reflection",
+                lambda: self._reflection_for(symbiote_id).reflect_session(
+                    session_id, symbiote_id
+                ),
+            )
 
             # 4. S-02: Persist long-run handoff as memory entry
-            self._persist_handoff_memory(session_id, symbiote_id)
+            self._close_step("handoff", self._persist_handoff_memory, session_id, symbiote_id)
 
             # 5. Skill self-improvement (Sprint 4) — fire daemon thread if
             # the symbiote opted in via skill_review_enabled. Never blocks
             # close_session; failures are logged inside the engine.
-            review = self._background_review_for(symbiote_id)
-            if review is not None:
-                review.spawn_final(session_id, symbiote_id)
+            def _review() -> None:
+                review = self._background_review_for(symbiote_id)
+                if review is not None:
+                    review.spawn_final(session_id, symbiote_id)
+
+            self._close_step("skill review", _review)
 
             # 6. Dream mode — maybe trigger background dream
-            self._maybe_dream(symbiote_id)
+            self._close_step("dream", self._maybe_dream, symbiote_id)
 
         return self._sessions.close(session_id)
 

@@ -44,6 +44,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
   - **MIGRAÇÃO:** a rota fica mais lenta, na medida do que a reflexão e o review configurados custam.
 - fix(reflection)!: a reflexão por palavra-chave (modo padrão) passa a aprender só com mensagens do usuário, por palavra inteira, em inglês e português ("prefiro", "sempre", "nunca", "decidi", "regra"...), e ignora mensagens longas (M-3). Antes, só termos em inglês por substring, em qualquer papel: uma resposta do assistente com "always" virava memória `constraint`. Uma marca d'água por sessão (`sessions.reflected_until`) evita refletir de novo as mesmas mensagens quando uma sessão reaberta é fechada outra vez; `session_scores` fica com uma linha por sessão (atualizada) e o score entra uma vez só na média do harness. `kernel.get_session()` e `GET /sessions/{id}` deixam de reabrir sessões fechadas (`SessionManager.get()` é novo).
   - **MIGRAÇÃO:** coluna nova `sessions.reflected_until`, criada no boot. Mensagens do assistente deixam de gerar memórias por palavra-chave.
+- fix(reflection): na reflexão por LLM, um fato com `importance` inválida ("high", `null`, lista) é descartado e valores fora de [0, 1] são limitados, em vez de levantar exceção e deixar a sessão aberta com fatos parciais gravados; o número de fatos descartados vai para `reflection_audit.llm_error` (M-4). Cada passo de `close_session` (score, memória de falha, reflexão, handoff, review, dream) roda isolado: uma falha é logada e a sessão é fechada mesmo assim.
 
 ## [v0.7.3] - 2026-07-28
 
