@@ -235,15 +235,14 @@ class TestFailureMemory:
         session = kernel.start_session(sym.id, goal="test")
 
         # Simulate a circuit breaker trace
-        kernel._last_trace = LoopTrace(
+        kernel._persist_trace(session.id, sym.id, LoopTrace(
             steps=[
                 LoopStep(iteration=1, tool_id="flaky_api", success=False, error="timeout"),
                 LoopStep(iteration=2, tool_id="flaky_api", success=False, error="timeout"),
                 LoopStep(iteration=3, tool_id="flaky_api", success=False, error="timeout"),
             ],
             total_iterations=3, total_tool_calls=3, stop_reason="circuit_breaker",
-        )
-        kernel._last_trace_session = session.id
+        ))
 
         kernel.close_session(session.id)
 
@@ -266,14 +265,13 @@ class TestFailureMemory:
         sym = kernel.create_symbiote(name="StagBot", role="test")
         session = kernel.start_session(sym.id, goal="test")
 
-        kernel._last_trace = LoopTrace(
+        kernel._persist_trace(session.id, sym.id, LoopTrace(
             steps=[
                 LoopStep(iteration=1, tool_id="search", success=True),
                 LoopStep(iteration=2, tool_id="search", success=True),
             ],
             total_iterations=2, stop_reason="stagnation",
-        )
-        kernel._last_trace_session = session.id
+        ))
 
         kernel.close_session(session.id)
 
@@ -292,11 +290,10 @@ class TestFailureMemory:
         sym = kernel.create_symbiote(name="MaxBot", role="test")
         session = kernel.start_session(sym.id, goal="test")
 
-        kernel._last_trace = LoopTrace(
+        kernel._persist_trace(session.id, sym.id, LoopTrace(
             steps=[LoopStep(iteration=i, tool_id=f"tool_{i % 3}", success=True) for i in range(10)],
             total_iterations=10, total_tool_calls=10, stop_reason="max_iterations",
-        )
-        kernel._last_trace_session = session.id
+        ))
 
         kernel.close_session(session.id)
 
@@ -315,11 +312,10 @@ class TestFailureMemory:
         sym = kernel.create_symbiote(name="OkBot", role="test")
         session = kernel.start_session(sym.id, goal="test")
 
-        kernel._last_trace = LoopTrace(
+        kernel._persist_trace(session.id, sym.id, LoopTrace(
             steps=[LoopStep(iteration=1, tool_id="t", success=True)],
             total_iterations=1, stop_reason="end_turn",
-        )
-        kernel._last_trace_session = session.id
+        ))
 
         kernel.close_session(session.id)
 
@@ -466,11 +462,10 @@ class TestKernelIntegration:
         session = kernel.start_session(sym.id, goal="test")
 
         # Simulate trace
-        kernel._last_trace = LoopTrace(
+        kernel._persist_trace(session.id, sym.id, LoopTrace(
             steps=[LoopStep(iteration=1, tool_id="t", success=True)],
             total_iterations=1, total_tool_calls=1, stop_reason="end_turn",
-        )
-        kernel._last_trace_session = session.id
+        ))
 
         kernel.close_session(session.id)
 
@@ -482,8 +477,8 @@ class TestKernelIntegration:
         assert score_row["auto_score"] == 1.0
         assert score_row["stop_reason"] == "end_turn"
 
-        # Verify trace state cleared
-        assert kernel._last_trace is None
+        # Traces are read from execution_traces; no per-kernel slot to clear.
+        assert not hasattr(kernel, "_last_trace")
 
         kernel.shutdown()
 

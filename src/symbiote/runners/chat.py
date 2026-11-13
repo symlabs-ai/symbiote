@@ -510,6 +510,12 @@ class ChatRunner:
             try:
                 response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
             except Exception as exc:
+                # Totals are normally filled after the loop; fill them here
+                # so a failed turn still records what it did.
+                trace.total_iterations = rounds
+                trace.total_tool_calls = len(trace.steps)
+                trace.total_elapsed_ms = int((time.monotonic() - loop_start) * 1000)
+                trace.stop_reason = trace.stop_reason or "error"
                 return self._complete_protocol_run(
                     RunResult(
                         success=False,
@@ -805,6 +811,12 @@ class ChatRunner:
             try:
                 response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
             except Exception as exc:
+                # Totals are normally filled after the loop; fill them here
+                # so a failed turn still records what it did.
+                trace.total_iterations = rounds
+                trace.total_tool_calls = len(trace.steps)
+                trace.total_elapsed_ms = int((time.monotonic() - loop_start) * 1000)
+                trace.stop_reason = trace.stop_reason or "error"
                 return self._complete_protocol_run(
                     RunResult(
                         success=False,

@@ -17,7 +17,7 @@ from symbiote.agent_protocols import (
 )
 from symbiote.config.models import KernelConfig
 from symbiote.core.background_review import BackgroundReviewEngine
-from symbiote.core.capabilities import CapabilitySurface
+from symbiote.core.capabilities import CapabilityError, CapabilitySurface
 from symbiote.core.context import ContextAssembler
 from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.hooks import CompositeHook
@@ -39,7 +39,7 @@ from symbiote.harness.versions import HarnessVersionRepository
 from symbiote.knowledge.service import KnowledgeService
 from symbiote.memory.store import MemoryStore
 from symbiote.process.engine import ProcessEngine
-from symbiote.runners.base import LoopTrace, RunnerRegistry
+from symbiote.runners.base import LoopTrace, RunnerRegistry, RunResult
 from symbiote.runners.chat import ChatRunner
 from symbiote.runners.process import ProcessRunner
 from symbiote.runners.subagent import SubagentManager
@@ -180,13 +180,11 @@ class SymbioteKernel:
         # Optional session recall (host provides implementation)
         self._session_recall: SessionRecallPort | None = None
 
-        # Last loop trace — set by message(), consumed by close_session()
-        self._last_trace: LoopTrace | None = None
-        self._last_trace_session: str | None = None
-
-        # Last long-run handoff — set by message(), persisted by close_session()
-        self._last_handoff: dict | None = None
-        self._last_handoff_session: str | None = None
+        # Long-run handoff per session — set by message(), persisted by
+        # close_session(). Loop traces are not kept here: message() persists
+        # each one to execution_traces and close_session() reads them back.
+        self._handoffs: dict[str, dict] = {}
+        self._handoffs_lock = threading.Lock()
 
         # Optional evolver LLM (host provides, can be different from main LLM)
         self._evolver_llm: LLMPort | None = None
@@ -489,33 +487,12 @@ class SymbioteKernel:
 
             self._sessions.add_message(session_id, "user", content)
 
-            response = self._capabilities.chat(
+            result = self._capabilities.run_chat(
                 symbiote_id, session_id, content,
                 extra_context=extra_context,
                 llm_config=llm_config,
             )
-
-            if isinstance(response, dict):
-                text = response.get("text", str(response))
-            else:
-                text = response
-
-            self._sessions.add_message(session_id, "assistant", text)
-
-            # Capture loop trace from last RunResult for close_session()
-            trace = self._capabilities.last_loop_trace
-            if trace is not None:
-                self._last_trace = trace
-                self._last_trace_session = session_id
-                self._persist_trace(session_id, symbiote_id, trace)
-
-            # Capture handoff data from last RunResult for close_session()
-            handoff = self._capabilities.last_handoff_data
-            if handoff is not None:
-                self._last_handoff = handoff
-                self._last_handoff_session = session_id
-
-            return response
+            return self._finish_turn(session_id, symbiote_id, result)
         finally:
             _reset_active_symbiote(_scope_token)
 
@@ -563,7 +540,7 @@ class SymbioteKernel:
 
             self._sessions.add_message(session_id, "user", content)
 
-            response = await self._capabilities.chat_async(
+            result = await self._capabilities.run_chat_async(
                 symbiote_id,
                 session_id,
                 content,
@@ -571,30 +548,53 @@ class SymbioteKernel:
                 on_token=on_token,
                 llm_config=llm_config,
             )
-
-            if isinstance(response, dict):
-                text = response.get("text", str(response))
-            else:
-                text = response
-
-            self._sessions.add_message(session_id, "assistant", text)
-
-            # Capture loop trace from last RunResult for close_session()
-            trace = self._capabilities.last_loop_trace
-            if trace is not None:
-                self._last_trace = trace
-                self._last_trace_session = session_id
-                self._persist_trace(session_id, symbiote_id, trace)
-
-            # Capture handoff data from last RunResult for close_session()
-            handoff = self._capabilities.last_handoff_data
-            if handoff is not None:
-                self._last_handoff = handoff
-                self._last_handoff_session = session_id
-
-            return response
+            return self._finish_turn(session_id, symbiote_id, result)
         finally:
             _reset_active_symbiote(_scope_token)
+
+    def _finish_turn(self, session_id: str, symbiote_id: str, result: RunResult):  # noqa: ANN202
+        """Persist what this turn produced; return its output or raise.
+
+        Everything comes from this turn's own RunResult, never from state
+        shared with other sessions. The trace is persisted even when the
+        run failed, so a failing turn still shows up in scoring.
+        """
+        if result.loop_trace is not None:
+            self._persist_trace(session_id, symbiote_id, result.loop_trace)
+        if result.handoff_data is not None:
+            with self._handoffs_lock:
+                self._handoffs[session_id] = result.handoff_data
+        if not result.success:
+            raise CapabilityError("chat", result.error or "Chat runner failed")
+
+        response = result.output
+        text = response.get("text", str(response)) if isinstance(response, dict) else response
+        self._sessions.add_message(session_id, "assistant", text)
+        return response
+
+    def _latest_trace(self, session_id: str) -> LoopTrace | None:
+        """Most recent loop trace persisted for ``session_id``."""
+        import json
+
+        from symbiote.runners.base import LoopStep
+
+        row = self._storage.fetch_one(
+            "SELECT total_iterations, total_tool_calls, total_elapsed_ms, "
+            "stop_reason, steps_json, tool_mode FROM execution_traces "
+            "WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (session_id,),
+        )
+        if row is None:
+            return None
+        steps = [LoopStep(**s) for s in json.loads(row["steps_json"] or "[]")]
+        return LoopTrace(
+            steps=steps,
+            total_iterations=row["total_iterations"] or 0,
+            total_tool_calls=row["total_tool_calls"] or 0,
+            total_elapsed_ms=row["total_elapsed_ms"] or 0,
+            stop_reason=row["stop_reason"],
+            tool_mode=row["tool_mode"] or "brief",
+        )
 
     def close_session(self, session_id: str) -> Session:
         """Run reflection, compute score, persist failure memory, then close."""
@@ -605,7 +605,7 @@ class SymbioteKernel:
             symbiote_id = row["symbiote_id"]
 
             # 1. Compute and persist session score
-            trace = self._last_trace if self._last_trace_session == session_id else None
+            trace = self._latest_trace(session_id)
             self._persist_score(session_id, symbiote_id, trace)
 
             # 2. Generate failure MemoryEntry if loop didn't complete
@@ -626,11 +626,6 @@ class SymbioteKernel:
 
             # 6. Dream mode — maybe trigger background dream
             self._maybe_dream(symbiote_id)
-
-            # Clear trace state
-            if self._last_trace_session == session_id:
-                self._last_trace = None
-                self._last_trace_session = None
 
         return self._sessions.close(session_id)
 
@@ -935,7 +930,9 @@ class SymbioteKernel:
 
     def _persist_handoff_memory(self, session_id: str, symbiote_id: str) -> None:
         """S-02: Persist long-run handoff_data as a MemoryEntry(category='handoff')."""
-        if self._last_handoff is None or self._last_handoff_session != session_id:
+        with self._handoffs_lock:
+            handoff = self._handoffs.pop(session_id, None)
+        if handoff is None:
             return
 
         import json
@@ -951,13 +948,11 @@ class SymbioteKernel:
             category="handoff",
             scope="global",
             source="system",
-            content=json.dumps(self._last_handoff, ensure_ascii=False),
+            content=json.dumps(handoff, ensure_ascii=False),
             importance=1.0,
             created_at=_utcnow(),
         )
         self._memory.store(entry)
-        self._last_handoff = None
-        self._last_handoff_session = None
 
     # ── Dream Mode ─────────────────────────────────────────────────────
 

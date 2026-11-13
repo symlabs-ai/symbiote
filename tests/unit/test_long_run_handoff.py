@@ -158,8 +158,7 @@ class TestHandoffPersistedOnCloseSession:
             "pending_blocks": [],
             "output_summary": "All done.",
         }
-        kernel._last_handoff = fake_handoff
-        kernel._last_handoff_session = session_id
+        kernel._handoffs[session_id] = fake_handoff
 
         kernel.close_session(session_id)
 
@@ -177,8 +176,7 @@ class TestHandoffPersistedOnCloseSession:
             "pending_blocks": [],
             "output_summary": "Done.",
         }
-        kernel._last_handoff = fake_handoff
-        kernel._last_handoff_session = session_id
+        kernel._handoffs[session_id] = fake_handoff
 
         kernel.close_session(session_id)
 
@@ -188,20 +186,18 @@ class TestHandoffPersistedOnCloseSession:
         assert parsed["blocks_completed"] == 1
 
     def test_handoff_cleared_after_close(self, kernel, symbiote_id, session_id):
-        kernel._last_handoff = {"user_input": "x", "blocks_completed": 1,
-                                 "blocks_total": 1, "plan_blocks": [],
-                                 "block_results": [], "pending_blocks": [],
-                                 "output_summary": ""}
-        kernel._last_handoff_session = session_id
+        kernel._handoffs[session_id] = {"user_input": "x", "blocks_completed": 1,
+                                        "blocks_total": 1, "plan_blocks": [],
+                                        "block_results": [], "pending_blocks": [],
+                                        "output_summary": ""}
 
         kernel.close_session(session_id)
 
-        assert kernel._last_handoff is None
-        assert kernel._last_handoff_session is None
+        assert session_id not in kernel._handoffs
 
     def test_no_handoff_for_regular_session(self, kernel, symbiote_id, session_id):
-        """close_session without _last_handoff must not create any handoff memory."""
-        assert kernel._last_handoff is None
+        """close_session without a handoff must not create any handoff memory."""
+        assert session_id not in kernel._handoffs
 
         kernel.close_session(session_id)
 
@@ -212,15 +208,14 @@ class TestHandoffPersistedOnCloseSession:
         self, kernel, symbiote_id, session_id
     ):
         """Handoff from a different session must not be persisted on close."""
-        kernel._last_handoff = {"user_input": "other"}
-        kernel._last_handoff_session = "different-session-id"
+        kernel._handoffs["different-session-id"] = {"user_input": "other"}
 
         kernel.close_session(session_id)
 
         entries = kernel._memory.get_by_category(symbiote_id, "handoff", limit=10)
         assert len(entries) == 0
-        # Handoff state must remain intact (not cleared)
-        assert kernel._last_handoff is not None
+        # The other session's handoff stays until that session closes
+        assert "different-session-id" in kernel._handoffs
 
 
 # ── S-01: inject handoff on session resume ───────────────────────────────────

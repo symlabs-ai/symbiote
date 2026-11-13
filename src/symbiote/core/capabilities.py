@@ -11,7 +11,7 @@ from symbiote.core.identity import IdentityManager
 from symbiote.core.models import MemoryEntry
 from symbiote.core.ports import KnowledgePort, MemoryPort
 from symbiote.core.session import SessionManager
-from symbiote.runners.base import RunnerRegistry
+from symbiote.runners.base import RunnerRegistry, RunResult
 
 
 class CapabilityError(SymbioteError):
@@ -50,12 +50,20 @@ class CapabilitySurface:
 
     @property
     def last_loop_trace(self):
-        """Return the LoopTrace from the last chat/chat_async call, or None."""
+        """LoopTrace of the most recent chat call on this surface, or None.
+
+        Deprecated: shared by every session, so concurrent turns overwrite
+        each other. Use ``run_chat()`` / ``run_chat_async()``, which return
+        the RunResult (with its trace) of that call only.
+        """
         return self._last_loop_trace
 
     @property
     def last_handoff_data(self) -> dict | None:
-        """Return the handoff artifact from the last long-run call, or None."""
+        """Handoff artifact of the most recent long-run call, or None.
+
+        Deprecated for the same reason as ``last_loop_trace``.
+        """
         return self._last_handoff_data
 
     # ── learn ────────────────────────────────────────────────────────────
@@ -128,6 +136,23 @@ class CapabilitySurface:
         (e.g. ``{"mode": "high"}`` for effort escalation) reach the LLM
         adapter via the ``config`` kwarg of ``stream()``.
         """
+        result = self.run_chat(
+            symbiote_id, session_id, content, extra_context, llm_config
+        )
+        if not result.success:
+            raise CapabilityError("chat", result.error or "Chat runner failed")
+        return result.output
+
+    def run_chat(
+        self,
+        symbiote_id: str,
+        session_id: str,
+        content: str,
+        extra_context: dict | None = None,
+        llm_config: dict | None = None,
+    ) -> RunResult:
+        """Like ``chat()`` but returns the RunResult (trace, handoff) of this
+        call and does not raise when the run fails."""
         runner = self._runner_registry.select("chat")
         if runner is None:
             raise CapabilityError("chat", "No runner available for intent 'chat'")
@@ -142,10 +167,7 @@ class CapabilitySurface:
         result = runner.run(context, llm_config=llm_config)
         self._last_loop_trace = getattr(result, "loop_trace", None)
         self._last_handoff_data = getattr(result, "handoff_data", None)
-        if not result.success:
-            raise CapabilityError("chat", result.error or "Chat runner failed")
-
-        return result.output
+        return result
 
     async def chat_async(
         self,
@@ -164,6 +186,24 @@ class CapabilitySurface:
                 called once with the full response text.
             llm_config: Per-call LLM overrides forwarded to the runner.
         """
+        result = await self.run_chat_async(
+            symbiote_id, session_id, content, extra_context, on_token, llm_config
+        )
+        if not result.success:
+            raise CapabilityError("chat", result.error or "Chat runner failed")
+        return result.output
+
+    async def run_chat_async(
+        self,
+        symbiote_id: str,
+        session_id: str,
+        content: str,
+        extra_context: dict | None = None,
+        on_token: Callable[[str], None] | None = None,
+        llm_config: dict | None = None,
+    ) -> RunResult:
+        """Async ``run_chat()``: returns the RunResult and does not raise on a
+        failed run."""
         runner = self._runner_registry.select("chat")
         if runner is None:
             raise CapabilityError("chat", "No runner available for intent 'chat'")
@@ -181,10 +221,7 @@ class CapabilitySurface:
         result = await runner.run_async(context, on_token=on_token, llm_config=llm_config)
         self._last_loop_trace = getattr(result, "loop_trace", None)
         self._last_handoff_data = getattr(result, "handoff_data", None)
-        if not result.success:
-            raise CapabilityError("chat", result.error or "Chat runner failed")
-
-        return result.output
+        return result
 
     # ── work ─────────────────────────────────────────────────────────────
 
