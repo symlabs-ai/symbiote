@@ -166,6 +166,7 @@ class TestToolTimeoutSync:
         )
         gateway.register_descriptor(desc, slow_handler)
 
+        start = time.monotonic()
         result = gateway.execute(
             symbiote_id=symbiote_id,
             session_id=None,
@@ -175,6 +176,8 @@ class TestToolTimeoutSync:
         )
         assert result.success is False
         assert "timed out" in result.error
+        # Control returns at the timeout, not when the handler finishes.
+        assert time.monotonic() - start < 1.5
 
     def test_fast_tool_succeeds(
         self,

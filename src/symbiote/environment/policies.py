@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextvars
 import inspect
 import json
+import logging
+import threading
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import UTC, datetime
 from typing import Any
@@ -17,6 +19,45 @@ from pydantic import BaseModel
 
 from symbiote.core.ports import StoragePort
 from symbiote.environment.manager import EnvironmentManager
+
+logger = logging.getLogger(__name__)
+
+
+def run_in_daemon_thread(
+    fn: Callable[[dict], Any], params: dict, *, name: str = "symbiote-tool"
+) -> concurrent.futures.Future:
+    """Start ``fn(params)`` in a daemon thread and return its future.
+
+    Used to bound tool execution with a timeout. A Python thread cannot be
+    killed: after a timeout the handler keeps running in the background and
+    its side effects may still happen. The thread is a daemon, so a hung
+    handler neither blocks the caller past its timeout nor keeps the process
+    alive at exit. The caller's ``contextvars`` (host auth, current user,
+    tool execution context) are copied into the thread.
+    """
+    future: concurrent.futures.Future = concurrent.futures.Future()
+    ctx = contextvars.copy_context()
+
+    def target() -> None:
+        if not future.set_running_or_notify_cancel():
+            return
+        try:
+            future.set_result(ctx.run(fn, params))
+        except BaseException as exc:  # noqa: BLE001 — delivered to the caller
+            future.set_exception(exc)
+
+    threading.Thread(target=target, name=name, daemon=True).start()
+    return future
+
+
+def log_tool_timeout(tool_id: str, timeout: float) -> None:
+    logger.warning(
+        "Tool %s timed out after %ss; its handler keeps running in the "
+        "background (threads cannot be cancelled)",
+        tool_id,
+        timeout,
+    )
+
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
@@ -91,10 +132,8 @@ class PolicyGate:
             # Propagate the caller's contextvars (e.g. host auth /
             # current-user state) into the worker thread so handlers and
             # header_factory observe them — a bare pool thread starts empty.
-            ctx = contextvars.copy_context()
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(ctx.run, action_fn, params)
-                output = future.result(timeout=timeout)
+            future = run_in_daemon_thread(action_fn, params, name=f"tool-{tool_id}")
+            output = future.result(timeout=timeout)
             self._write_audit(
                 symbiote_id=symbiote_id,
                 session_id=session_id,
@@ -105,6 +144,7 @@ class PolicyGate:
             )
             return ToolResult(success=True, tool_id=tool_id, output=output)
         except FuturesTimeoutError:
+            log_tool_timeout(tool_id, timeout)
             self._write_audit(
                 symbiote_id=symbiote_id,
                 session_id=session_id,
@@ -165,7 +205,12 @@ class PolicyGate:
             if inspect.iscoroutinefunction(action_fn):
                 coro = action_fn(params)
             else:
-                coro = asyncio.to_thread(action_fn, params)
+                # Daemon thread instead of asyncio.to_thread: a hung sync
+                # handler must not hold the loop's default executor (which
+                # asyncio.run() waits for on exit).
+                coro = asyncio.wrap_future(
+                    run_in_daemon_thread(action_fn, params, name=f"tool-{tool_id}")
+                )
             output = await asyncio.wait_for(coro, timeout=timeout)
             if inspect.isawaitable(output):
                 # A sync wrapper returning a coroutine (e.g. a lambda around
@@ -181,6 +226,7 @@ class PolicyGate:
             )
             return ToolResult(success=True, tool_id=tool_id, output=output)
         except TimeoutError:
+            log_tool_timeout(tool_id, timeout)
             self._write_audit(
                 symbiote_id=symbiote_id,
                 session_id=session_id,

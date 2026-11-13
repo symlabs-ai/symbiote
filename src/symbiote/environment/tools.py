@@ -13,8 +13,8 @@ import os
 import signal
 import subprocess
 import threading
+import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +24,12 @@ from symbiote.environment.descriptors import (
     ToolDescriptor,
 )
 from symbiote.environment.exec_context import current_tool_context, tool_exec_context
-from symbiote.environment.policies import PolicyGate, ToolResult
+from symbiote.environment.policies import (
+    PolicyGate,
+    ToolResult,
+    log_tool_timeout,
+    run_in_daemon_thread,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -496,21 +501,26 @@ class ToolGateway:
                 pre_results.append(None)  # placeholder — will run in pool
                 handler_fns.append(self._sync_callable(self._registry[call.tool_id]))
 
-        # Dispatch authorised handlers to the pool
-        max_workers = min(sum(1 for h in handler_fns if h is not None), 4)
+        # Dispatch authorised handlers, at most _MAX_PARALLEL_TOOLS at once.
+        # Each runs in a daemon thread (contextvars copied in, see
+        # run_in_daemon_thread) and every call shares one deadline counted
+        # from submission, so N slow calls cost ``timeout``, not N x timeout.
+        deadline = time.monotonic() + timeout
+        slots = threading.BoundedSemaphore(_MAX_PARALLEL_TOOLS)
+
+        def _limited(fn: Callable[[dict], Any]) -> Callable[[dict], Any]:
+            def run(params: dict) -> Any:
+                with slots:
+                    return fn(params)
+
+            return run
+
         futures: dict[int, Any] = {}
-        if max_workers > 0:
-            pool = ThreadPoolExecutor(max_workers=max_workers)
-            for idx, (call, fn) in enumerate(zip(calls, handler_fns, strict=False)):
-                if fn is not None:
-                    # Propagate the caller's contextvars (e.g. host auth /
-                    # current-user state) into the worker thread so handlers
-                    # and header_factory see them. Without copy_context the
-                    # pool thread starts with empty context.
-                    ctx = contextvars.copy_context()
-                    futures[idx] = pool.submit(ctx.run, fn, call.params)
-            # Don't wait=True here — we collect results with timeout below
-            pool.shutdown(wait=False)
+        for idx, (call, fn) in enumerate(zip(calls, handler_fns, strict=False)):
+            if fn is not None:
+                futures[idx] = run_in_daemon_thread(
+                    _limited(fn), call.params, name=f"tool-{call.tool_id}"
+                )
 
         # Collect results and write audit logs (main thread)
         results: list[ToolCallResult] = []
@@ -521,7 +531,7 @@ class ToolGateway:
 
             fut = futures[idx]
             try:
-                output = fut.result(timeout=timeout)
+                output = fut.result(timeout=max(0.0, deadline - time.monotonic()))
                 self._gate._write_audit(
                     symbiote_id=symbiote_id, session_id=session_id,
                     tool_id=call.tool_id, action="execute",
@@ -531,6 +541,7 @@ class ToolGateway:
                     success=True, tool_id=call.tool_id, output=output,
                 )))
             except TimeoutError:
+                log_tool_timeout(call.tool_id, timeout)
                 self._gate._write_audit(
                     symbiote_id=symbiote_id, session_id=session_id,
                     tool_id=call.tool_id, action="execute",
@@ -931,6 +942,7 @@ def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
 
 
 MAX_BASH_TIMEOUT_SECONDS = 300
+_MAX_PARALLEL_TOOLS = 4
 _unrooted_warned = False
 
 
