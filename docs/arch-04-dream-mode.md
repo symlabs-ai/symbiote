@@ -96,21 +96,22 @@ flowchart LR
 
 ### Phase 2 — Reconcile (Deterministic)
 
-Detecta memorias conflitantes (mesmos tags, conteudo divergente) e resolve mantendo a de maior importance.
+Une quase-duplicatas: memorias ativas do mesmo tipo, com tags parecidas e praticamente as mesmas palavras, sao o mesmo fato gravado duas vezes; a copia de menor importance e desativada. Memorias com tags parecidas mas conteudo diferente **nao** sao tocadas: decidir que uma contradiz a outra exige o LLM (modo `full`). Tipos protegidos (`constraint`, `handoff`) nunca sao desativados.
 
 ```mermaid
 flowchart TB
-    A[(Memorias ativas<br/>com 2+ tags)] --> B[Agrupar por<br/>tag overlap]
-    B --> C{Para cada par}
-    C --> D["tag_overlap = |A∩B| / |A∪B|"]
+    A[(Memorias ativas<br/>com 2+ tags)] --> B{Mesmo tipo?}
+    B -- Nao --> F[Skip]
+    B -- Sim --> D["tag_overlap = |A∩B| / |A∪B|"]
     D --> E{tag_overlap >= 0.6?}
-    E -- Nao --> F[Nao e conflito]
+    E -- Nao --> F
     E -- Sim --> G["content_sim = token_overlap"]
-    G --> H{content_sim < 0.3?}
-    H -- Nao --> I["Conteudo similar<br/>(concordam) — skip"]
-    H -- Sim --> J["CONFLITO!<br/>Tags parecidas,<br/>conteudo divergente"]
-    J --> K[Deactivate menor importance]
-    K --> L["Tag winner com<br/>'dream:reconciled'"]
+    G --> H{content_sim >= 0.8?}
+    H -- Nao --> I["Fatos diferentes — skip<br/>(contradicao e com o LLM)"]
+    H -- Sim --> J{Perdedor e tipo protegido?}
+    J -- Sim --> F
+    J -- Nao --> K[Deactivate menor importance]
+    K --> L["Tag winner com<br/>'dream:reconciled' (uma vez)"]
 ```
 
 ### Phase 3 — Generalize (LLM)

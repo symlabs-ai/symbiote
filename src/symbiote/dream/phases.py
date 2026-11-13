@@ -218,7 +218,16 @@ class PrunePhase:
 
 
 class ReconcilePhase:
-    """Detect and resolve conflicting memories with overlapping tags."""
+    """Merge near-duplicate memories (deterministic, no LLM).
+
+    Two active memories of the same type, with overlapping tags and nearly
+    the same words, are one fact stated twice: the lower-importance copy is
+    deactivated. Memories that share tags but say different things are left
+    alone — deciding that one contradicts the other needs the LLM (dream
+    mode "full"); doing it by word overlap deleted distinct rules that
+    merely shared tags. Protected types (constraints, handoffs) are never
+    deactivated.
+    """
 
     name = "reconcile"
     requires_llm = False
@@ -226,10 +235,10 @@ class ReconcilePhase:
     def __init__(
         self,
         tag_overlap_threshold: float = 0.6,
-        content_similarity_threshold: float = 0.3,
+        duplicate_similarity_threshold: float = 0.8,
     ) -> None:
         self._tag_thresh = tag_overlap_threshold
-        self._content_thresh = content_similarity_threshold
+        self._dup_thresh = duplicate_similarity_threshold
 
     def run(self, ctx: DreamContext) -> DreamPhaseResult:
         start = datetime.now(tz=UTC)
@@ -246,21 +255,26 @@ class ReconcilePhase:
         deactivated: set[str] = set()
         applied = 0
 
+        reconciled_tag = "dream:reconciled"
         for i, a in enumerate(tagged):
             if a.id in deactivated:
                 continue
             for b in tagged[i + 1 :]:
-                if b.id in deactivated:
+                if a.id in deactivated:
+                    break  # a lost an earlier pair; it cannot win again
+                if b.id in deactivated or a.type != b.type:
                     continue
                 tag_ov = _overlap_ratio(set(a.tags), set(b.tags))
                 if tag_ov < self._tag_thresh:
                     continue
                 content_sim = _overlap_ratio(_token_set(a.content), _token_set(b.content))
-                if content_sim >= self._content_thresh:
-                    continue  # similar content = not a conflict
+                if content_sim < self._dup_thresh:
+                    continue  # different statements: not for a deterministic merge
 
-                # Conflict found — keep the higher-importance entry
+                # Near-duplicate — keep the higher-importance copy
                 loser, winner = (a, b) if a.importance < b.importance else (b, a)
+                if loser.type in _PROTECTED_TYPES:
+                    continue
                 detail = {
                     "winner_id": winner.id,
                     "loser_id": loser.id,
@@ -274,12 +288,13 @@ class ReconcilePhase:
                 if not ctx.dry_run:
                     ctx.memory.deactivate(loser.id)
                     deactivated.add(loser.id)
-                    # Tag the winner
-                    new_tags = list(winner.tags) + ["dream:reconciled"]
-                    ctx.storage.execute(
-                        "UPDATE memory_entries SET tags_json = ? WHERE id = ?",
-                        (json.dumps(new_tags), winner.id),
-                    )
+                    # Tag the winner once (not again on every dream cycle)
+                    if reconciled_tag not in winner.tags:
+                        winner.tags.append(reconciled_tag)
+                        ctx.storage.execute(
+                            "UPDATE memory_entries SET tags_json = ? WHERE id = ?",
+                            (json.dumps(winner.tags), winner.id),
+                        )
                     applied += 1
                 else:
                     deactivated.add(loser.id)

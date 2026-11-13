@@ -148,8 +148,10 @@ class TestPrunePhase:
 
 
 class TestReconcilePhase:
-    def test_detects_conflicting_memories(self, ctx, memory):
-        # Same tags, very different content — overlap 3/3 = 1.0 > 0.6
+    def test_divergent_memories_are_kept(self, ctx, memory):
+        # Same tags, different content: the deterministic phase cannot tell
+        # a contradiction from two distinct facts, so it keeps both (the LLM
+        # "full" mode decides contradictions).
         memory.store(_make_entry(
             content="launch typora using nohup typora in background",
             tags=["app_launch", "typora", "gui"],
@@ -164,10 +166,7 @@ class TestReconcilePhase:
         result = ReconcilePhase().run(ctx)
 
         assert result.phase == "reconcile"
-        assert result.actions_proposed == 1
-        assert result.actions_applied == 1
-        # The lower-importance entry should be deactivated
-        assert result.details[0]["loser_importance"] == 0.7
+        assert result.actions_proposed == 0
 
     def test_no_conflict_when_tags_differ(self, ctx, memory):
         memory.store(_make_entry(
@@ -185,8 +184,8 @@ class TestReconcilePhase:
 
         assert result.actions_proposed == 0
 
-    def test_no_conflict_when_content_similar(self, ctx, memory):
-        # Same tags AND similar content = not a conflict (they agree)
+    def test_near_duplicates_are_merged(self, ctx, memory):
+        # Same tags AND nearly the same words = one fact stored twice
         memory.store(_make_entry(
             content="open typora with nohup background",
             tags=["app_launch", "typora", "gui"],
@@ -200,17 +199,19 @@ class TestReconcilePhase:
 
         result = ReconcilePhase().run(ctx)
 
-        assert result.actions_proposed == 0
+        assert result.actions_proposed == 1
+        assert result.actions_applied == 1
+        assert result.details[0]["loser_importance"] == 0.7
 
     def test_dry_run_reports_without_action(self, ctx, memory):
         ctx.dry_run = True
         m1 = memory.store(_make_entry(
-            content="launch typora using nohup typora in background",
+            content="open typora with nohup background",
             tags=["app_launch", "typora", "gui"],
             importance=0.7,
         ))
         memory.store(_make_entry(
-            content="use flatpak run com.typora.Typora for opening the editor",
+            content="open typora with nohup in background",
             tags=["app_launch", "typora", "gui"],
             importance=0.9,
         ))
