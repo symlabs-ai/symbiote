@@ -10,8 +10,16 @@ from fastapi.testclient import TestClient
 import symbiote.api.http as http_mod
 from symbiote.adapters.storage.sqlite import SQLiteAdapter
 from symbiote.api.auth import APIKeyManager
-from symbiote.api.http import _ensure_local_admin_key, _resolve_config, app, get_adapter
+from symbiote.api.http import (
+    _ensure_local_admin_key,
+    _resolve_config,
+    app,
+    get_adapter,
+    get_kernel,
+)
+from symbiote.config.models import KernelConfig
 from symbiote.core.identity import IdentityManager
+from symbiote.core.kernel import SymbioteKernel
 from symbiote.core.models import MemoryEntry
 from symbiote.core.session import SessionManager
 from symbiote.memory.store import MemoryStore
@@ -210,10 +218,13 @@ def client(adapter: SQLiteAdapter) -> TestClient:
     def _override_adapter() -> SQLiteAdapter:
         return adapter
 
+    kernel = SymbioteKernel(KernelConfig(db_path=adapter._db_path))
     app.dependency_overrides[get_adapter] = _override_adapter
+    app.dependency_overrides[get_kernel] = lambda: kernel
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
+    kernel.shutdown()
 
 
 # ── POST /symbiotes ───────────────────────────────────────────────────────

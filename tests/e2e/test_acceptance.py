@@ -15,7 +15,7 @@ from typer.testing import CliRunner
 from symbiote.adapters.llm.base import MockLLMAdapter
 from symbiote.adapters.storage.sqlite import SQLiteAdapter
 from symbiote.api.http import app as fastapi_app
-from symbiote.api.http import get_adapter
+from symbiote.api.http import get_adapter, get_kernel
 from symbiote.cli.main import app as cli_app
 from symbiote.config.models import KernelConfig
 from symbiote.core.kernel import SymbioteKernel
@@ -45,9 +45,12 @@ def http_client(db_path: Path) -> TestClient:
     """TestClient with overridden adapter pointing to tmp DB."""
     adapter = SQLiteAdapter(db_path=db_path, check_same_thread=False)
     adapter.init_schema()
+    kernel = SymbioteKernel(KernelConfig(db_path=db_path))
     fastapi_app.dependency_overrides[get_adapter] = lambda: adapter
+    fastapi_app.dependency_overrides[get_kernel] = lambda: kernel
     client = TestClient(fastapi_app)
     yield client
+    kernel.shutdown()
     adapter.close()
     fastapi_app.dependency_overrides.clear()
 

@@ -774,11 +774,13 @@ def close_session(
     session_id: str,
     auth: Annotated[APIKey, Depends(require_auth)],
     adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
-    sessions: Annotated[SessionManager, Depends(get_session_manager)],
+    kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
 ) -> SessionResponse:
+    """Close a session through the kernel: score, failure memory, reflection,
+    handoff, skill review and dream run exactly as in kernel.close_session()."""
     _require_session_access(adapter, session_id, auth)
     try:
-        sess = sessions.close(session_id)
+        sess = kernel.close_session(session_id)
     except EntityNotFoundError:
         raise HTTPException(status_code=404, detail="Session not found") from None
     return SessionResponse(
