@@ -296,7 +296,8 @@ class TestIndexTool:
         gw.register_descriptor(d, lambda p: None)
         gw.register_index_tool()
 
-        env_manager.configure(symbiote_id=symbiote_id, tools=["get_tool_schema"])
+        # Only authorized tools are described (T-3).
+        env_manager.configure(symbiote_id=symbiote_id, tools=["get_tool_schema", "yn_publish"])
         result = gw.execute(
             symbiote_id=symbiote_id,
             session_id=None,

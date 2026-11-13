@@ -281,6 +281,10 @@ class ContextAssembler:
             tool_dicts = self._build_tool_dicts(
                 symbiote_id, user_input, effective_tags, loading_mode
             )
+            if context_mode == "on_demand":
+                # Memory/knowledge come only through these tools in this
+                # mode, so offer them even when tool_tags would hide them.
+                tool_dicts = self._with_on_demand_tools(tool_dicts)
 
         # 6. Trim to fit budget (using configurable shares)
         persona, wm_snapshot, memories_dicts, knowledge_dicts = self._trim_to_budget(
@@ -498,6 +502,23 @@ class ContextAssembler:
 
         # Default
         return "brief"
+
+    def _with_on_demand_tools(self, tool_dicts: list[dict]) -> list[dict]:
+        from symbiote.environment.policies import ON_DEMAND_META_TOOLS
+
+        assert self._tool_gateway is not None
+        present = {t["tool_id"] for t in tool_dicts}
+        extra = []
+        for tool_id in ON_DEMAND_META_TOOLS:
+            desc = self._tool_gateway.get_descriptor(tool_id)
+            if desc is not None and tool_id not in present:
+                extra.append({
+                    "tool_id": desc.tool_id,
+                    "name": desc.name,
+                    "description": desc.description,
+                    "parameters": desc.parameters,
+                })
+        return tool_dicts + extra
 
     def _build_tool_dicts(
         self,

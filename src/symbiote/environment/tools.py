@@ -665,7 +665,10 @@ class ToolGateway:
         def _get_tool_schema(params: dict) -> dict:
             tid = params.get("tool_id", "")
             desc = self._descriptors.get(tid)
-            if desc is None:
+            ctx = current_tool_context()
+            if desc is None or ctx is None or not self._visible_to(ctx.symbiote_id, desc):
+                # Same answer for "missing" and "not yours": no schema of a
+                # tool the caller may not use or was not shown.
                 return {"error": f"Tool '{tid}' not found"}
             return {
                 "tool_id": desc.tool_id,
@@ -675,6 +678,13 @@ class ToolGateway:
             }
 
         self.register_descriptor(descriptor, _get_tool_schema)
+
+    def _visible_to(self, symbiote_id: str, desc: ToolDescriptor) -> bool:
+        """The symbiote may call *desc* and its ``tool_tags`` include it."""
+        if not self._gate.check(symbiote_id, desc.tool_id).allowed:
+            return False
+        tags = self._gate._env.get_tool_tags(symbiote_id)
+        return not tags or bool(set(tags) & set(desc.tags))
 
     def get_risk_level(self, tool_id: str) -> str:
         """Return the risk_level for a tool, defaulting to 'low'."""

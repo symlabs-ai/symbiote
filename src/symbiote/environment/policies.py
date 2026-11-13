@@ -77,6 +77,11 @@ class ToolResult(BaseModel):
 # ── PolicyGate ────────────────────────────────────────────────────────────────
 
 
+# Meta-tools that a mode turns on by itself (see PolicyGate.check).
+INDEX_META_TOOL = "get_tool_schema"
+ON_DEMAND_META_TOOLS = ("search_memories", "search_knowledge")
+
+
 class PolicyGate:
     """Checks tool authorization against EnvironmentManager configs and logs to audit_log."""
 
@@ -92,9 +97,23 @@ class PolicyGate:
         tool_id: str,
         workspace_id: str | None = None,
     ) -> PolicyResult:
-        """Check if a tool is authorized for a symbiote (+ optional workspace)."""
+        """Check if a tool is authorized for a symbiote (+ optional workspace).
+
+        The meta-tools of a mode need no manual authorization while that mode
+        is on: ``get_tool_schema`` with ``tool_loading="index"``, and
+        ``search_memories`` / ``search_knowledge`` with
+        ``context_mode="on_demand"`` (the prompt tells the model to use them).
+        """
         if self._env.is_tool_enabled(symbiote_id, tool_id, workspace_id):
             return PolicyResult(allowed=True, reason=f"Tool '{tool_id}' is authorized")
+        if tool_id == INDEX_META_TOOL and (
+            self._env.get_tool_loading(symbiote_id, workspace_id) == "index"
+        ):
+            return PolicyResult(allowed=True, reason="index mode meta-tool")
+        if tool_id in ON_DEMAND_META_TOOLS and (
+            self._env.get_context_mode(symbiote_id, workspace_id) == "on_demand"
+        ):
+            return PolicyResult(allowed=True, reason="on_demand mode meta-tool")
         return PolicyResult(
             allowed=False,
             reason=f"Tool '{tool_id}' is not allowed (deny by default)",

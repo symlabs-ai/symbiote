@@ -682,11 +682,12 @@ class TestSystemPromptRendering:
 class TestIndexMetaToolRoundTrip:
     """Verify the full workflow: index prompt → get_tool_schema → execute."""
 
-    def test_meta_tool_returns_full_schema_for_any_registered_tool(
+    def test_meta_tool_returns_full_schema_for_an_authorized_tool(
         self, gw, env, symbiote_id,
     ) -> None:
+        # get_tool_schema only describes tools the symbiote may call (T-3).
         gw.register_index_tool()
-        env.configure(symbiote_id=symbiote_id, tools=["get_tool_schema"])
+        env.configure(symbiote_id=symbiote_id, tools=["get_tool_schema", "items_000"])
 
         # Pick a tool from the registered set
         result = gw.execute(
@@ -704,10 +705,14 @@ class TestIndexMetaToolRoundTrip:
     def test_meta_tool_works_for_tools_across_all_tags(
         self, gw, env, symbiote_id,
     ) -> None:
+        tags = ("items", "admin", "journals", "newsletter", "compose")
         gw.register_index_tool()
-        env.configure(symbiote_id=symbiote_id, tools=["get_tool_schema"])
+        env.configure(
+            symbiote_id=symbiote_id,
+            tools=["get_tool_schema", *(f"{tag}_000" for tag in tags)],
+        )
 
-        for tag in ("items", "admin", "journals", "newsletter", "compose"):
+        for tag in tags:
             result = gw.execute(
                 symbiote_id=symbiote_id, session_id=None,
                 tool_id="get_tool_schema",
