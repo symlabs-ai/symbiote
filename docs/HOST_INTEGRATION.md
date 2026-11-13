@@ -600,6 +600,20 @@ class MetricsHook(BaseHook):
 kernel.hooks.add(MetricsHook())
 ```
 
+When they fire:
+
+- `before_tool` / `after_tool` — around every execution of a registered tool
+  by the `ToolGateway` (chat loop, `tool_gateway.execute()`, the HTTP exec
+  route), including calls the policy blocks; `result` has `success`,
+  `output` and `error`.
+- `before_turn` / `after_turn` — once per `kernel.message()` /
+  `message_async()`. `messages` holds the user message of the turn;
+  `response` is the final text. `after_turn` does not fire when the turn
+  raises.
+
+A hook that raises is logged and skipped; the turn continues. On the sync
+paths hooks run on the `ToolGateway` event loop.
+
 ---
 
 ## Session Recall (Host-Provided)

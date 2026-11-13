@@ -190,6 +190,9 @@ class ToolGateway:
         self._async_loop: asyncio.AbstractEventLoop | None = None
         self._async_thread: threading.Thread | None = None
         self._async_lock = threading.Lock()
+        # Lifecycle hooks (``kernel.hooks``); set by the kernel. before_tool /
+        # after_tool fire around every execution of a registered tool.
+        self.hooks: Any = None
         self._registry: dict[str, Callable[[dict], Any]] = {}
         self._descriptors: dict[str, ToolDescriptor] = {}
         self._http_configs: dict[str, HttpToolConfig] = {}
@@ -242,6 +245,21 @@ class ToolGateway:
             return result
 
         return call
+
+    def run_coroutine_sync(self, coro: Any) -> Any:
+        """Run a coroutine to completion from sync code, on the gateway loop."""
+        return self._run_awaitable(coro, contextvars.copy_context())
+
+    def _has_hooks(self) -> bool:
+        return self.hooks is not None and bool(self.hooks.hooks)
+
+    def _fire_hook_sync(self, event: str, **kwargs: Any) -> None:
+        if self._has_hooks():
+            self.run_coroutine_sync(getattr(self.hooks, event)(**kwargs))
+
+    async def _fire_hook_async(self, event: str, **kwargs: Any) -> None:
+        if self._has_hooks():
+            await getattr(self.hooks, event)(**kwargs)
 
     def close(self) -> None:
         """Stop the loop used for async handlers (idempotent)."""
@@ -301,7 +319,8 @@ class ToolGateway:
                 error="Tool not registered",
             )
         with tool_exec_context(symbiote_id, session_id):
-            return await self._gate.execute_with_policy_async(
+            await self._fire_hook_async("before_tool", tool_id=tool_id, params=params)
+            result = await self._gate.execute_with_policy_async(
                 symbiote_id=symbiote_id,
                 session_id=session_id,
                 tool_id=tool_id,
@@ -310,6 +329,10 @@ class ToolGateway:
                 workspace_id=workspace_id,
                 timeout=timeout,
             )
+            await self._fire_hook_async(
+                "after_tool", tool_id=tool_id, params=params, result=result
+            )
+            return result
 
     async def execute_tool_calls_async(
         self,
@@ -396,7 +419,8 @@ class ToolGateway:
             )
 
         with tool_exec_context(symbiote_id, session_id):
-            return self._gate.execute_with_policy(
+            self._fire_hook_sync("before_tool", tool_id=tool_id, params=params)
+            result = self._gate.execute_with_policy(
                 symbiote_id=symbiote_id,
                 session_id=session_id,
                 tool_id=tool_id,
@@ -405,6 +429,10 @@ class ToolGateway:
                 workspace_id=workspace_id,
                 timeout=timeout,
             )
+            self._fire_hook_sync(
+                "after_tool", tool_id=tool_id, params=params, result=result
+            )
+            return result
 
     def execute_tool_calls(
         self,
@@ -477,6 +505,8 @@ class ToolGateway:
         handler_fns: list[Callable | None] = []
         pre_results: list[ToolResult | None] = []
         for call in calls:
+            if call.tool_id in self._registry:
+                self._fire_hook_sync("before_tool", tool_id=call.tool_id, params=call.params)
             if call.tool_id not in self._registry:
                 pre_results.append(
                     ToolResult(success=False, tool_id=call.tool_id, error="Tool not registered"),
@@ -561,6 +591,11 @@ class ToolGateway:
                     success=False, tool_id=call.tool_id,
                     error=f"{type(exc).__name__}: {exc}",
                 )))
+        for call, call_result in zip(calls, results, strict=False):
+            if call.tool_id in self._registry:
+                self._fire_hook_sync(
+                    "after_tool", tool_id=call.tool_id, params=call.params, result=call_result
+                )
         return results
 
     def list_tools(self) -> list[str]:

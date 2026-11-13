@@ -55,6 +55,10 @@ from symbiote.skills.store import SkillsStore
 from symbiote.workspace.manager import WorkspaceManager
 
 
+def _response_text(response) -> str:  # noqa: ANN001
+    return response.get("text", str(response)) if isinstance(response, dict) else response
+
+
 def _warn_if_results_exceed_loop_budget(config: KernelConfig) -> None:
     """A single tool result larger than about half the loop budget is cut by
     autocompact (and its tail lost). Tell the host which knob to turn."""
@@ -174,8 +178,10 @@ class SymbioteKernel:
         # Export
         self._export = ExportService(self._storage)
 
-        # Lifecycle hooks
+        # Lifecycle hooks: tool events fire in the ToolGateway, turn events
+        # in message() / message_async().
         self._hooks = CompositeHook()
+        self._tool_gateway.hooks = self._hooks
 
         # Optional session recall (host provides implementation)
         self._session_recall: SessionRecallPort | None = None
@@ -487,12 +493,22 @@ class SymbioteKernel:
 
             self._sessions.add_message(session_id, "user", content)
 
+            turn_messages = [{"role": "user", "content": content}]
+            if self._hooks.hooks:
+                self._tool_gateway.run_coroutine_sync(
+                    self._hooks.before_turn(turn_messages)
+                )
             result = self._capabilities.run_chat(
                 symbiote_id, session_id, content,
                 extra_context=extra_context,
                 llm_config=llm_config,
             )
-            return self._finish_turn(session_id, symbiote_id, result)
+            response = self._finish_turn(session_id, symbiote_id, result)
+            if self._hooks.hooks:
+                self._tool_gateway.run_coroutine_sync(
+                    self._hooks.after_turn(turn_messages, _response_text(response))
+                )
+            return response
         finally:
             _reset_active_symbiote(_scope_token)
 
@@ -540,6 +556,8 @@ class SymbioteKernel:
 
             self._sessions.add_message(session_id, "user", content)
 
+            turn_messages = [{"role": "user", "content": content}]
+            await self._hooks.before_turn(turn_messages)
             result = await self._capabilities.run_chat_async(
                 symbiote_id,
                 session_id,
@@ -548,7 +566,9 @@ class SymbioteKernel:
                 on_token=on_token,
                 llm_config=llm_config,
             )
-            return self._finish_turn(session_id, symbiote_id, result)
+            response = self._finish_turn(session_id, symbiote_id, result)
+            await self._hooks.after_turn(turn_messages, _response_text(response))
+            return response
         finally:
             _reset_active_symbiote(_scope_token)
 
@@ -568,8 +588,7 @@ class SymbioteKernel:
             raise CapabilityError("chat", result.error or "Chat runner failed")
 
         response = result.output
-        text = response.get("text", str(response)) if isinstance(response, dict) else response
-        self._sessions.add_message(session_id, "assistant", text)
+        self._sessions.add_message(session_id, "assistant", _response_text(response))
         return response
 
     def _latest_trace(self, session_id: str) -> LoopTrace | None:
