@@ -9,6 +9,18 @@ from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.models import MemoryEntry
 from symbiote.core.ports import StoragePort
 
+_LIKE_ESCAPE = "\\"
+
+
+def _like_contains(text: str) -> str:
+    """Build a ``LIKE ... ESCAPE '\\'`` pattern matching ``text`` literally."""
+    escaped = (
+        text.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)
+        .replace("%", _LIKE_ESCAPE + "%")
+        .replace("_", _LIKE_ESCAPE + "_")
+    )
+    return f"%{escaped}%"
+
 
 class MemoryStore:
     """Manages persistence and retrieval of MemoryEntry objects."""
@@ -45,11 +57,15 @@ class MemoryStore:
         )
         return entry.id
 
-    def get(self, memory_id: str) -> MemoryEntry | None:
-        """Fetch a memory entry by ID, returning None if not found."""
-        row = self._storage.fetch_one(
-            "SELECT * FROM memory_entries WHERE id = ?", (memory_id,)
-        )
+    def get(
+        self, memory_id: str, *, symbiote_id: str | None = None
+    ) -> MemoryEntry | None:
+        """Fetch a memory entry by ID, returning None if not found.
+
+        With ``symbiote_id``, entries owned by another symbiote are treated as
+        not found.
+        """
+        row = self._fetch_row(memory_id, symbiote_id)
         if row is None:
             return None
         return self._row_to_entry(row)
@@ -60,13 +76,19 @@ class MemoryStore:
         scope: str | None = None,
         tags: list[str] | None = None,
         limit: int = 10,
+        *,
+        symbiote_id: str,
     ) -> list[MemoryEntry]:
-        """Search active entries by content, optionally filtering by scope and tags."""
+        """Search one symbiote's active entries by content.
+
+        ``query`` is matched literally (``%`` and ``_`` are not wildcards).
+        Optionally filters by scope and tags.
+        """
         sql = (
             "SELECT * FROM memory_entries "
-            "WHERE is_active = 1 AND content LIKE ?"
+            "WHERE is_active = 1 AND symbiote_id = ? AND content LIKE ? ESCAPE '\\'"
         )
-        params: list = [f"%{query}%"]
+        params: list = [symbiote_id, _like_contains(query)]
 
         if scope is not None:
             sql += " AND scope = ?"
@@ -91,11 +113,14 @@ class MemoryStore:
         intent: str,
         session_id: str | None = None,
         limit: int = 5,
+        *,
+        symbiote_id: str,
     ) -> list[MemoryEntry]:
-        """Return relevant memories, prioritising session proximity then content match.
+        """Return one symbiote's relevant memories, session matches first.
 
         Updates last_used_at for all returned entries.
         """
+        pattern = _like_contains(intent)
         results: list[MemoryEntry] = []
         seen_ids: set[str] = set()
 
@@ -103,9 +128,10 @@ class MemoryStore:
         if session_id is not None:
             session_rows = self._storage.fetch_all(
                 "SELECT * FROM memory_entries "
-                "WHERE is_active = 1 AND session_id = ? AND content LIKE ? "
+                "WHERE is_active = 1 AND symbiote_id = ? AND session_id = ? "
+                "AND content LIKE ? ESCAPE '\\' "
                 "ORDER BY importance DESC, last_used_at DESC LIMIT ?",
-                (session_id, f"%{intent}%", limit),
+                (symbiote_id, session_id, pattern, limit),
             )
             for row in session_rows:
                 entry = self._row_to_entry(row)
@@ -117,9 +143,9 @@ class MemoryStore:
         if remaining > 0:
             content_rows = self._storage.fetch_all(
                 "SELECT * FROM memory_entries "
-                "WHERE is_active = 1 AND content LIKE ? "
+                "WHERE is_active = 1 AND symbiote_id = ? AND content LIKE ? ESCAPE '\\' "
                 "ORDER BY importance DESC, last_used_at DESC LIMIT ?",
-                (f"%{intent}%", limit),
+                (symbiote_id, pattern, limit),
             )
             for row in content_rows:
                 if row["id"] not in seen_ids:
@@ -162,11 +188,12 @@ class MemoryStore:
         )
         return [self._row_to_entry(r) for r in rows]
 
-    def deactivate(self, memory_id: str) -> None:
-        """Set is_active=False. Raises EntityNotFoundError if not found."""
-        existing = self._storage.fetch_one(
-            "SELECT id FROM memory_entries WHERE id = ?", (memory_id,)
-        )
+    def deactivate(self, memory_id: str, *, symbiote_id: str | None = None) -> None:
+        """Set is_active=False. Raises EntityNotFoundError if not found.
+
+        With ``symbiote_id``, an entry owned by another symbiote is not found.
+        """
+        existing = self._fetch_row(memory_id, symbiote_id)
         if existing is None:
             raise EntityNotFoundError("MemoryEntry", memory_id)
 
@@ -182,8 +209,12 @@ class MemoryStore:
         content: str | None = None,
         importance: float | None = None,
         tags: list[str] | None = None,
+        symbiote_id: str | None = None,
     ) -> bool:
         """Update a memory entry in place. Returns True if updated, False if id not found.
+
+        With ``symbiote_id``, an entry owned by another symbiote counts as not
+        found and is left untouched.
 
         Only non-None kwargs are written. ``last_used_at`` is intentionally NOT
         touched here — a PATCH from reflection refines the entry, it doesn't
@@ -193,10 +224,7 @@ class MemoryStore:
         Inactive entries (``is_active=0``) are not patched and return False —
         prune/reconcile already decided this entry is dead.
         """
-        row = self._storage.fetch_one(
-            "SELECT id, is_active FROM memory_entries WHERE id = ?",
-            (memory_id,),
-        )
+        row = self._fetch_row(memory_id, symbiote_id)
         if row is None or not row["is_active"]:
             return False
 
@@ -225,6 +253,16 @@ class MemoryStore:
         return True
 
     # ── private helpers ────────────────────────────────────────────────
+
+    def _fetch_row(self, memory_id: str, symbiote_id: str | None) -> dict | None:
+        if symbiote_id is None:
+            return self._storage.fetch_one(
+                "SELECT * FROM memory_entries WHERE id = ?", (memory_id,)
+            )
+        return self._storage.fetch_one(
+            "SELECT * FROM memory_entries WHERE id = ? AND symbiote_id = ?",
+            (memory_id, symbiote_id),
+        )
 
     @staticmethod
     def _row_to_entry(row: dict) -> MemoryEntry:

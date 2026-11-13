@@ -448,13 +448,18 @@ def reflect(
 @memory_app.command("search")
 def memory_search(
     query: str = typer.Argument(help="Search query"),
+    symbiote_id: str = typer.Option(
+        ..., "--symbiote", help="Symbiote whose memory is searched"
+    ),
     scope: str | None = typer.Option(None, "--scope", help="Memory scope filter"),
     limit: int = typer.Option(10, "--limit", help="Max results"),
 ) -> None:
-    """Search memory entries."""
+    """Search one symbiote's memory entries."""
     kernel = _make_kernel()
     try:
-        results = kernel._memory.search(query=query, scope=scope, limit=limit)
+        results = kernel._memory.search(
+            query=query, scope=scope, limit=limit, symbiote_id=symbiote_id
+        )
         if not results:
             console.print("No memories found.")
             return

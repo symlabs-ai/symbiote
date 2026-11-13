@@ -16,6 +16,7 @@ from symbiote.environment.descriptors import (
     ToolCallResult,
     ToolDescriptor,
 )
+from symbiote.environment.exec_context import current_tool_context, tool_exec_context
 from symbiote.environment.policies import PolicyGate, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -202,15 +203,16 @@ class ToolGateway:
                 tool_id=tool_id,
                 error="Tool not registered",
             )
-        return await self._gate.execute_with_policy_async(
-            symbiote_id=symbiote_id,
-            session_id=session_id,
-            tool_id=tool_id,
-            params=params,
-            action_fn=self._registry[tool_id],
-            workspace_id=workspace_id,
-            timeout=timeout,
-        )
+        with tool_exec_context(symbiote_id, session_id):
+            return await self._gate.execute_with_policy_async(
+                symbiote_id=symbiote_id,
+                session_id=session_id,
+                tool_id=tool_id,
+                params=params,
+                action_fn=self._registry[tool_id],
+                workspace_id=workspace_id,
+                timeout=timeout,
+            )
 
     async def execute_tool_calls_async(
         self,
@@ -296,17 +298,36 @@ class ToolGateway:
                 error="Tool not registered",
             )
 
-        return self._gate.execute_with_policy(
-            symbiote_id=symbiote_id,
-            session_id=session_id,
-            tool_id=tool_id,
-            params=params,
-            action_fn=self._registry[tool_id],
-            workspace_id=workspace_id,
-            timeout=timeout,
-        )
+        with tool_exec_context(symbiote_id, session_id):
+            return self._gate.execute_with_policy(
+                symbiote_id=symbiote_id,
+                session_id=session_id,
+                tool_id=tool_id,
+                params=params,
+                action_fn=self._registry[tool_id],
+                workspace_id=workspace_id,
+                timeout=timeout,
+            )
 
     def execute_tool_calls(
+        self,
+        symbiote_id: str,
+        session_id: str | None,
+        calls: list,
+        workspace_id: str | None = None,
+        timeout: float = 30.0,
+    ) -> list[ToolCallResult]:
+        """Execute a list of ToolCall objects in parallel via ThreadPoolExecutor.
+
+        See ``_execute_tool_calls``; this wrapper binds the execution context
+        (calling symbiote/session) that builtin handlers rely on.
+        """
+        with tool_exec_context(symbiote_id, session_id):
+            return self._execute_tool_calls(
+                symbiote_id, session_id, calls, workspace_id, timeout
+            )
+
+    def _execute_tool_calls(
         self,
         symbiote_id: str,
         session_id: str | None,
@@ -559,6 +580,16 @@ class ToolGateway:
 # ── Memory / Knowledge handler factories ─────────────────────────────────────
 
 
+def _calling_symbiote() -> str:
+    """Symbiote executing the current tool call, as set by the ToolGateway."""
+    ctx = current_tool_context()
+    if ctx is None:
+        raise RuntimeError(
+            "memory/knowledge tools must be executed through ToolGateway"
+        )
+    return ctx.symbiote_id
+
+
 def _make_memory_search_handler(memory_store: Any) -> Callable[[dict], Any]:
     """Create a handler that searches the memory store."""
 
@@ -566,7 +597,9 @@ def _make_memory_search_handler(memory_store: Any) -> Callable[[dict], Any]:
         query = params.get("query", "")
         scope = params.get("scope")
         limit = params.get("limit", 5)
-        results = memory_store.search(query, scope=scope, limit=limit)
+        results = memory_store.search(
+            query, scope=scope, limit=limit, symbiote_id=_calling_symbiote()
+        )
         return [
             {"content": m.content, "type": m.type, "importance": m.importance}
             for m in results
@@ -579,7 +612,8 @@ def _make_knowledge_search_handler(knowledge_service: Any) -> Callable[[dict], A
     """Create a handler that queries the knowledge service."""
 
     def handler(params: dict) -> Any:
-        symbiote_id = params.get("symbiote_id", "")
+        # Never trust a symbiote_id coming from the LLM's params.
+        symbiote_id = _calling_symbiote()
         query = params.get("query", "")
         limit = params.get("limit", 5)
         results = knowledge_service.query(symbiote_id, query, limit=limit)

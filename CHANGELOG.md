@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 ## [Unreleased]
 
 - test(support): helpers compartilhados em `tests/support` (`ScriptedLLM`, `make_kernel`, `add_tool`, `tool_call_block`) e fixture `api_client` com autenticação real (sem `SYMBIOTE_DEV_MODE`), base dos testes de regressão do relatório de melhorias (Q-2).
+- fix(memory)!: memória isolada por symbiote (S-1). `MemoryStore.search` e `get_relevant` passam a filtrar por `symbiote_id`; `%` e `_` deixam de ser curingas. As tools `search_memories` e `search_knowledge` usam o symbiote do contexto de execução do `ToolGateway` e ignoram `symbiote_id` vindo do LLM. A reflexão LLM não aplica PATCH em memória de outro symbiote.
+  - **MIGRAÇÃO:** `MemoryStore.search()` e `get_relevant()` exigem o argumento nomeado `symbiote_id` (e quem implementa `MemoryPort` deve aceitá-lo); `get`, `update` e `deactivate` aceitam `symbiote_id` opcional. `GET /memory/search` exige o query param `symbiote_id`, `SymbioteClient.search_memory` o argumento `symbiote_id` e `symbiote memory search` a opção `--symbiote`.
 
 ## [v0.7.3] - 2026-07-28
 

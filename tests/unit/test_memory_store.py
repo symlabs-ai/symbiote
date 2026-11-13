@@ -114,7 +114,7 @@ class TestSearch:
         store.store(_make_entry(symbiote_id, "Python is great"))
         store.store(_make_entry(symbiote_id, "Rust is fast"))
 
-        results = store.search("Python")
+        results = store.search("Python", symbiote_id=symbiote_id)
         assert len(results) == 1
         assert results[0].content == "Python is great"
 
@@ -124,7 +124,7 @@ class TestSearch:
         store.store(_make_entry(symbiote_id, "global fact", scope="global"))
         store.store(_make_entry(symbiote_id, "project fact", scope="project"))
 
-        results = store.search("fact", scope="project")
+        results = store.search("fact", scope="project", symbiote_id=symbiote_id)
         assert len(results) == 1
         assert results[0].scope == "project"
 
@@ -141,7 +141,7 @@ class TestSearch:
             _make_entry(symbiote_id, "entry C", tags=["python", "ml"])
         )
 
-        results = store.search("entry", tags=["rust"])
+        results = store.search("entry", tags=["rust"], symbiote_id=symbiote_id)
         assert len(results) == 1
         assert results[0].content == "entry B"
 
@@ -151,7 +151,7 @@ class TestSearch:
         for i in range(5):
             store.store(_make_entry(symbiote_id, f"item {i}"))
 
-        results = store.search("item", limit=3)
+        results = store.search("item", limit=3, symbiote_id=symbiote_id)
         assert len(results) == 3
 
     def test_search_only_returns_active(
@@ -164,7 +164,7 @@ class TestSearch:
         # Deactivate the first entry
         store.deactivate(entry.id)
 
-        results = store.search("memory")
+        results = store.search("memory", symbiote_id=symbiote_id)
         assert len(results) == 0
 
     def test_search_ordered_by_importance_desc(
@@ -174,7 +174,7 @@ class TestSearch:
         store.store(_make_entry(symbiote_id, "high imp", importance=0.9))
         store.store(_make_entry(symbiote_id, "mid imp", importance=0.5))
 
-        results = store.search("imp")
+        results = store.search("imp", symbiote_id=symbiote_id)
         assert results[0].content == "high imp"
         assert results[1].content == "mid imp"
         assert results[2].content == "low imp"
@@ -206,7 +206,8 @@ class TestGetRelevant:
         )
 
         results = store.get_relevant(
-            "note", session_id=session_id, limit=5
+            "note", session_id=session_id, limit=5,
+            symbiote_id=symbiote_id,
         )
         # Session match should come first even with lower importance
         assert len(results) == 2
@@ -219,7 +220,7 @@ class TestGetRelevant:
         store.store(entry)
         original_used_at = entry.last_used_at
 
-        results = store.get_relevant("recall")
+        results = store.get_relevant("recall", symbiote_id=symbiote_id)
         assert len(results) == 1
 
         fetched = store.get(entry.id)
@@ -233,7 +234,7 @@ class TestGetRelevant:
         store.store(entry)
         store.deactivate(entry.id)
 
-        results = store.get_relevant("inactive")
+        results = store.get_relevant("inactive", symbiote_id=symbiote_id)
         assert len(results) == 0
 
 

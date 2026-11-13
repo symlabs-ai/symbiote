@@ -707,11 +707,14 @@ def close_session(
 @app.get("/memory/search", response_model=list[MemoryEntryResponse])
 def search_memory(
     query: Annotated[str, Query()],
+    symbiote_id: Annotated[str, Query()],
     memory: Annotated[MemoryStore, Depends(get_memory_store)],
     scope: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 10,
 ) -> list[MemoryEntryResponse]:
-    entries = memory.search(query=query, scope=scope, limit=limit)
+    entries = memory.search(
+        query=query, scope=scope, limit=limit, symbiote_id=symbiote_id
+    )
     return [
         MemoryEntryResponse(
             id=e.id,

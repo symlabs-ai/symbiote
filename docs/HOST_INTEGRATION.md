@@ -487,6 +487,28 @@ kernel.environment.configure(symbiote_id=sym.id, context_mode="packed")
 kernel.environment.configure(symbiote_id=sym.id, context_mode="on_demand")
 ```
 
+### Memory is scoped per symbiote
+
+Every memory read is filtered by symbiote. `MemoryStore.search()` and
+`MemoryStore.get_relevant()` take a mandatory keyword-only `symbiote_id`;
+calling them without it raises `TypeError`. `get()`, `update()` and
+`deactivate()` accept an optional `symbiote_id` that makes an entry owned by
+another symbiote behave as not found. The query is matched literally (`%` and
+`_` are not wildcards).
+
+```python
+kernel._memory.search("deploy", symbiote_id=sym.id)
+kernel._memory.get_relevant("deploy", session.id, symbiote_id=sym.id)
+```
+
+Hosts that implement their own `MemoryPort` must accept the same signatures.
+The builtin `search_memories` / `search_knowledge` tools resolve the calling
+symbiote from the tool execution context set by `ToolGateway`; a
+`symbiote_id` passed in the tool params is ignored. Handlers you write can read
+the same context with `symbiote.environment.exec_context.current_tool_context()`.
+The HTTP route `GET /memory/search` and the CLI `memory search` now require
+the symbiote (`symbiote_id` query param / `--symbiote` option).
+
 ---
 
 ## Timeout Configuration
@@ -722,7 +744,7 @@ The CLI accepts a global `--db-path` flag (before the subcommand):
 ```bash
 symbiote --db-path /path/to/host-app/.symbiote/symbiote.db list
 symbiote --db-path /path/to/host-app/.symbiote/symbiote.db show <SYMBIOTE_ID>
-symbiote --db-path /path/to/host-app/.symbiote/symbiote.db memory search "..."
+symbiote --db-path /path/to/host-app/.symbiote/symbiote.db memory search "..." --symbiote <SYMBIOTE_ID>
 symbiote --db-path /path/to/host-app/.symbiote/symbiote.db export session <SESSION_ID>
 ```
 

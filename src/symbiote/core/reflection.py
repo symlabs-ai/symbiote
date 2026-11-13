@@ -416,8 +416,13 @@ class ReflectionEngine:
             return None
         # If it looks like a full UUID, use it directly.
         if len(short_or_full) >= 32:
+            # Ownership is checked here rather than via a ``symbiote_id``
+            # kwarg so host MemoryPort implementations keep working: an LLM
+            # must never be able to patch another symbiote's memory.
             existing = self._memory_store.get(short_or_full)
-            return short_or_full if existing is not None else None
+            if existing is None or getattr(existing, "symbiote_id", None) != symbiote_id:
+                return None
+            return short_or_full
         # Short prefix — look up the unique active match.
         try:
             for t in self._PATCH_CANDIDATE_TYPES:

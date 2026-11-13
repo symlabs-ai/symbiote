@@ -44,15 +44,31 @@ class MemoryPort(Protocol):
 
     def store(self, entry: Any) -> str: ...
 
-    def get(self, memory_id: str) -> Any: ...
+    def get(self, memory_id: str, *, symbiote_id: str | None = None) -> Any: ...
 
-    def search(self, query: str, scope: str | None = None, tags: list[str] | None = None, limit: int = 10) -> list: ...
+    # ``symbiote_id`` is mandatory: memory must never be read across symbiotes.
+    def search(
+        self,
+        query: str,
+        scope: str | None = None,
+        tags: list[str] | None = None,
+        limit: int = 10,
+        *,
+        symbiote_id: str,
+    ) -> list: ...
 
-    def get_relevant(self, intent: str, session_id: str | None = None, limit: int = 5) -> list: ...
+    def get_relevant(
+        self,
+        intent: str,
+        session_id: str | None = None,
+        limit: int = 5,
+        *,
+        symbiote_id: str,
+    ) -> list: ...
 
     def get_by_type(self, symbiote_id: str, entry_type: str, limit: int = 20) -> list: ...
 
-    def deactivate(self, memory_id: str) -> None: ...
+    def deactivate(self, memory_id: str, *, symbiote_id: str | None = None) -> None: ...
 
     def update(
         self,

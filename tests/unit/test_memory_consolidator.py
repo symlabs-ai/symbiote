@@ -155,7 +155,7 @@ class TestConsolidation:
 
         consolidator.consolidate_sync(wm, symbiote_id)
 
-        entries = store.search("Python")
+        entries = store.search("Python", symbiote_id=symbiote_id)
         assert len(entries) >= 1
         assert entries[0].source == "system"
         assert entries[0].type == "session_summary"
@@ -228,7 +228,7 @@ class TestCompression:
         _fill_working_memory(wm, 10, chars_per_msg=200)
 
         consolidator.consolidate_sync(wm, symbiote_id)
-        entries = store.search("x")
+        entries = store.search("x", symbiote_id=symbiote_id)
         # _MAX_SUMMARY_CHARS = 2400
         assert all(len(e.content) <= 2400 for e in entries)
 

@@ -185,7 +185,9 @@ class ContextAssembler:
         # 3. Relevant memories (skipped in on_demand mode)
         memories_dicts: list[dict] = []
         if context_mode != "on_demand":
-            raw_memories = self._memory.get_relevant(user_input, session_id)
+            raw_memories = self._memory.get_relevant(
+                user_input, session_id, symbiote_id=symbiote_id
+            )
             memories_dicts = [
                 {
                     "content": m.content,

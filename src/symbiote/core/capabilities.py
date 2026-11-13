@@ -91,7 +91,7 @@ class CapabilitySurface:
     ) -> str:
         """Query knowledge + relevant memories, return a structured explanation."""
         knowledge_entries = self._knowledge.query(symbiote_id, query)
-        memories = self._memory.get_relevant(query, session_id)
+        memories = self._memory.get_relevant(query, session_id, symbiote_id=symbiote_id)
 
         parts: list[str] = []
 
@@ -230,7 +230,7 @@ class CapabilitySurface:
         query: str,
     ) -> str:
         """Format and return relevant data as readable Markdown."""
-        memories = self._memory.get_relevant(query, session_id)
+        memories = self._memory.get_relevant(query, session_id, symbiote_id=symbiote_id)
         knowledge_entries = self._knowledge.query(symbiote_id, query)
         messages = self._sessions.get_messages(session_id, limit=20)
 

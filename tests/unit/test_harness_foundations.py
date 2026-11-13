@@ -248,7 +248,7 @@ class TestFailureMemory:
         kernel.close_session(session.id)
 
         # Check that a procedural memory was created
-        memories = kernel._memory.search("flaky_api", tags=["harness_failure"])
+        memories = kernel._memory.search("flaky_api", tags=["harness_failure"], symbiote_id=sym.id)
         assert len(memories) >= 1
         mem = memories[0]
         assert mem.type == "procedural"
@@ -277,7 +277,7 @@ class TestFailureMemory:
 
         kernel.close_session(session.id)
 
-        memories = kernel._memory.search("search", tags=["harness_failure"])
+        memories = kernel._memory.search("search", tags=["harness_failure"], symbiote_id=sym.id)
         assert len(memories) >= 1
         assert "estagnou" in memories[0].content
 
@@ -300,7 +300,7 @@ class TestFailureMemory:
 
         kernel.close_session(session.id)
 
-        memories = kernel._memory.search("esgotou", tags=["harness_failure"])
+        memories = kernel._memory.search("esgotou", tags=["harness_failure"], symbiote_id=sym.id)
         assert len(memories) >= 1
         assert "10 iterações" in memories[0].content
 
@@ -323,7 +323,7 @@ class TestFailureMemory:
 
         kernel.close_session(session.id)
 
-        memories = kernel._memory.search("harness_failure", tags=["harness_failure"])
+        memories = kernel._memory.search("harness_failure", tags=["harness_failure"], symbiote_id=sym.id)
         assert len(memories) == 0
 
         kernel.shutdown()
@@ -340,7 +340,7 @@ class TestFailureMemory:
         # No trace set
         kernel.close_session(session.id)
 
-        memories = kernel._memory.search("harness_failure", tags=["harness_failure"])
+        memories = kernel._memory.search("harness_failure", tags=["harness_failure"], symbiote_id=sym.id)
         assert len(memories) == 0
 
         kernel.shutdown()

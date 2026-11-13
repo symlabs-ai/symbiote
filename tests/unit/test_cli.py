@@ -196,7 +196,10 @@ class TestReflect:
 
 class TestMemorySearch:
     def test_no_results(self, tmp_path: Path) -> None:
-        result = invoke("memory", "search", "nonexistent", db_path=tmp_path / "test.db")
+        result = invoke(
+            "memory", "search", "nonexistent", "--symbiote", "any",
+            db_path=tmp_path / "test.db",
+        )
         assert result.exit_code == 0
 
 

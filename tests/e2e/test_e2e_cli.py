@@ -136,7 +136,7 @@ class TestMVPScenario:
         session2 = kernel2.start_session(sym.id, goal="Continue Python help")
 
         # Memory search should find previously learned facts
-        results = kernel2._memory.search("dark mode")
+        results = kernel2._memory.search("dark mode", symbiote_id=sym.id)
         assert len(results) >= 1
         assert any("dark mode" in r.content for r in results)
 
@@ -184,7 +184,7 @@ class TestStateSurvivesRestart:
         k1.shutdown()
 
         k2 = make_kernel(db_path, mock_llm)
-        results = k2._memory.search("persistence")
+        results = k2._memory.search("persistence", symbiote_id=sym.id)
         assert len(results) >= 1
         k2.shutdown()
 
@@ -299,10 +299,12 @@ class TestRuntimeWithoutVectorDB:
         kernel.capabilities.learn(sym.id, sess.id, "Python uses indentation for blocks")
         kernel.capabilities.learn(sym.id, sess.id, "Always use virtual environments")
 
-        results = kernel._memory.search("Python")
+        results = kernel._memory.search("Python", symbiote_id=sym.id)
         assert len(results) >= 1
 
-        relevant = kernel._memory.get_relevant("indentation", sess.id)
+        relevant = kernel._memory.get_relevant(
+            "indentation", sess.id, symbiote_id=sym.id
+        )
         assert len(relevant) >= 1
 
         kernel.shutdown()

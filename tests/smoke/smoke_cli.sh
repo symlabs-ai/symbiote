@@ -65,7 +65,7 @@ $CLI reflect "$SESS_ID"
 # 9. Memory search
 echo ""
 echo "── 9. Memory Search ──"
-$CLI memory search "concise"
+$CLI memory search "concise" --symbiote "$SYM_ID"
 
 # 10. Export session
 echo ""

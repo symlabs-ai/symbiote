@@ -119,10 +119,19 @@ class SymbioteClient:
     # ── Memory ────────────────────────────────────────────────────────────
 
     def search_memory(
-        self, query: str, scope: str | None = None, limit: int = 10
+        self,
+        query: str,
+        scope: str | None = None,
+        limit: int = 10,
+        *,
+        symbiote_id: str,
     ) -> list[dict]:
-        """Search memory entries."""
-        params: dict[str, Any] = {"query": query, "limit": limit}
+        """Search one symbiote's memory entries."""
+        params: dict[str, Any] = {
+            "query": query,
+            "limit": limit,
+            "symbiote_id": symbiote_id,
+        }
         if scope:
             params["scope"] = scope
         return self._get("/memory/search", params=params)

@@ -390,7 +390,9 @@ class TestGetSession:
 
 class TestMemorySearch:
     def test_search_returns_200_empty_list(self, client: TestClient) -> None:
-        resp = client.get("/memory/search", params={"query": "anything"})
+        resp = client.get(
+            "/memory/search", params={"query": "anything", "symbiote_id": "any"}
+        )
         assert resp.status_code == 200
         assert resp.json() == []
 
@@ -412,7 +414,9 @@ class TestMemorySearch:
         )
         store.store(entry)
 
-        resp = client.get("/memory/search", params={"query": "Python"})
+        resp = client.get(
+            "/memory/search", params={"query": "Python", "symbiote_id": sym["id"]}
+        )
         assert resp.status_code == 200
         results = resp.json()
         assert len(results) >= 1
@@ -437,7 +441,7 @@ class TestMemorySearch:
 
         resp = client.get(
             "/memory/search",
-            params={"query": "Rust", "scope": "project"},
+            params={"query": "Rust", "scope": "project", "symbiote_id": sym["id"]},
         )
         assert resp.status_code == 200
         assert len(resp.json()) >= 1
@@ -445,7 +449,7 @@ class TestMemorySearch:
         # Different scope should not match
         resp2 = client.get(
             "/memory/search",
-            params={"query": "Rust", "scope": "session"},
+            params={"query": "Rust", "scope": "session", "symbiote_id": sym["id"]},
         )
         assert resp2.status_code == 200
         assert len(resp2.json()) == 0
@@ -470,7 +474,7 @@ class TestMemorySearch:
 
         resp = client.get(
             "/memory/search",
-            params={"query": "fact", "limit": 2},
+            params={"query": "fact", "limit": 2, "symbiote_id": sym["id"]},
         )
         assert resp.status_code == 200
         assert len(resp.json()) == 2
