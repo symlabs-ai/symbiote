@@ -17,6 +17,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
   - **MIGRAÇÃO:** valores com `/`, `?` ou `&` em placeholders deixam de alterar a URL. Exceção: um placeholder no início do template (`{base_url}/...` ou `{url}`) é inserido sem codificação.
 - fix(tools): num redirect para outra origem (esquema, host ou porta), a HTTP tool deixa de reenviar `Authorization`, `Cookie`, `Proxy-Authorization` e os headers definidos em `headers` e `header_factory` (S-8).
 - fix(console): `esc()` passa a escapar aspas simples e duplas, então um valor vindo de memória, mensagem ou nome de symbiote não injeta atributos HTML (como `onmouseover`) no Console. Os botões que recebiam dados em `onclick` inline usam atributos `data-*` com um handler delegado (S-6).
+- fix(tools): novo `KernelConfig.fs_allowed_root` confina `fs_read`, `fs_write` e `fs_list` (o caminho é resolvido com symlinks e comparado por `Path.is_relative_to`; `allowed_root` nos parâmetros só restringe) e define o diretório inicial do `bash`, cujo `_cwd` não pode sair da raiz. O timeout do `bash` mata o grupo de processos inteiro e é limitado a 300 s. A checagem por prefixo de string, que aceitava `ws-evil` com raiz `ws`, foi substituída (S-9).
+  - **MIGRAÇÃO:** com `fs_allowed_root` definido, caminhos fora dele são recusados e caminhos relativos passam a ser relativos à raiz. Sem ele, o comportamento anterior se mantém (com aviso no log).
 
 ## [v0.7.3] - 2026-07-28
 

@@ -96,7 +96,9 @@ class SymbioteKernel:
 
         # Policies and tools
         self._policy_gate = PolicyGate(self._environment, self._storage)
-        self._tool_gateway = ToolGateway(self._policy_gate)
+        self._tool_gateway = ToolGateway(
+            self._policy_gate, fs_allowed_root=config.fs_allowed_root
+        )
 
         # Register memory/knowledge on-demand tools (always available,
         # authorized per-symbiote only when context_mode == "on_demand")

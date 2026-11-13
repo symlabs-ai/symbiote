@@ -50,6 +50,13 @@ class KernelConfig(BaseModel):
     # rejects per-symbiote values above it. Default 50 preserves the historical
     # hardcoded cap. Bounded by the EnvironmentConfig absolute backstop (10000).
     max_tool_iterations_ceiling: int = 50
+    # Root directory for the builtin filesystem tools (fs_read / fs_write /
+    # fs_list) and the default working directory of ``bash``. When set, every
+    # path must resolve (symlinks included) inside it and an ``allowed_root``
+    # passed in the tool params can only narrow it. ``None`` keeps the legacy
+    # unrestricted behaviour and logs a warning on first use. ``bash`` is not a
+    # sandbox: the root only fixes its starting directory.
+    fs_allowed_root: Path | None = None
 
     # ── validators ────────────────────────────────────────────────────
 

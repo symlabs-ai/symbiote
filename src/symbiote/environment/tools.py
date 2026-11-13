@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
+import functools
 import logging
 import os
+import signal
+import subprocess
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -166,8 +170,11 @@ _BUILTIN_DESCRIPTORS: dict[str, ToolDescriptor] = {
 class ToolGateway:
     """Manages tool registration and delegates execution through PolicyGate."""
 
-    def __init__(self, policy_gate: PolicyGate) -> None:
+    def __init__(
+        self, policy_gate: PolicyGate, *, fs_allowed_root: Path | None = None
+    ) -> None:
         self._gate = policy_gate
+        self._fs_root = Path(fs_allowed_root) if fs_allowed_root is not None else None
         self._registry: dict[str, Callable[[dict], Any]] = {}
         self._descriptors: dict[str, ToolDescriptor] = {}
         self._http_configs: dict[str, HttpToolConfig] = {}
@@ -585,10 +592,19 @@ class ToolGateway:
     # ── built-in tools ────────────────────────────────────────────────────
 
     def _register_builtins(self) -> None:
-        self.register_descriptor(_BUILTIN_DESCRIPTORS["fs_read"], _fs_read)
-        self.register_descriptor(_BUILTIN_DESCRIPTORS["fs_write"], _fs_write)
-        self.register_descriptor(_BUILTIN_DESCRIPTORS["fs_list"], _fs_list)
-        self.register_descriptor(_BUILTIN_DESCRIPTORS["bash"], _bash)
+        root = self._fs_root
+        self.register_descriptor(
+            _BUILTIN_DESCRIPTORS["fs_read"], functools.partial(_fs_read, root=root)
+        )
+        self.register_descriptor(
+            _BUILTIN_DESCRIPTORS["fs_write"], functools.partial(_fs_write, root=root)
+        )
+        self.register_descriptor(
+            _BUILTIN_DESCRIPTORS["fs_list"], functools.partial(_fs_list, root=root)
+        )
+        self.register_descriptor(
+            _BUILTIN_DESCRIPTORS["bash"], functools.partial(_bash, root=root)
+        )
 
 
 # ── Memory / Knowledge handler factories ─────────────────────────────────────
@@ -843,45 +859,81 @@ def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
 # ── built-in handler implementations ─────────────────────────────────────
 
 
-def _validate_path(params: dict) -> Path:
-    """Resolve and validate path against allowed_root if provided."""
-    p = Path(params["path"]).resolve()
-    allowed_root = params.get("allowed_root")
-    if allowed_root:
-        root = Path(allowed_root).resolve()
-        if not str(p).startswith(str(root)):
-            raise PermissionError(f"Path {p} is outside allowed root {root}")
-    if p.is_symlink():
-        real = p.resolve()
-        if allowed_root and not str(real).startswith(str(Path(allowed_root).resolve())):
-            raise PermissionError(f"Symlink {p} escapes allowed root")
-    return p
+MAX_BASH_TIMEOUT_SECONDS = 300
+_unrooted_warned = False
 
 
-def _fs_read(params: dict) -> str:
+def _warn_unrooted() -> None:
+    global _unrooted_warned
+    if not _unrooted_warned:
+        _unrooted_warned = True
+        logger.warning(
+            "Filesystem/bash tools are running without KernelConfig.fs_allowed_root; "
+            "any path the process can reach is allowed."
+        )
+
+
+def _validate_path(params: dict, root: Path | None = None) -> Path:
+    """Resolve ``params["path"]`` and check it stays inside the allowed root.
+
+    ``root`` comes from the host (``KernelConfig.fs_allowed_root``). An
+    ``allowed_root`` in the params can only narrow it. Relative paths are
+    taken relative to the effective root. The path is fully resolved first,
+    so a symlink pointing outside the root is refused as well.
+    """
+    base = root.resolve() if root is not None else None
+    requested = params.get("allowed_root")
+    if requested:
+        req = Path(requested)
+        if base is not None and not req.is_absolute():
+            req = base / req
+        req = req.resolve()
+        if base is not None and not req.is_relative_to(base):
+            raise PermissionError(
+                f"allowed_root {req} is outside the configured root {base}"
+            )
+        base = req
+
+    raw = Path(params["path"])
+    if base is not None and not raw.is_absolute():
+        raw = base / raw
+    path = raw.resolve()
+    if base is None:
+        _warn_unrooted()
+    elif not path.is_relative_to(base):
+        raise PermissionError(f"Path {path} is outside allowed root {base}")
+    return path
+
+
+def _fs_read(params: dict, root: Path | None = None) -> str:
     """Read file content. Params: {"path": str, "allowed_root": str (optional)}."""
-    p = _validate_path(params)
+    p = _validate_path(params, root)
     return p.read_text(encoding="utf-8")
 
 
-def _fs_write(params: dict) -> str:
+def _fs_write(params: dict, root: Path | None = None) -> str:
     """Write content to file. Params: {"path": str, "content": str, "allowed_root": str (optional)}."""
-    p = _validate_path(params)
+    p = _validate_path(params, root)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(params["content"], encoding="utf-8")
     return "ok"
 
 
-def _fs_list(params: dict) -> list[str]:
+def _fs_list(params: dict, root: Path | None = None) -> list[str]:
     """List filenames in directory. Params: {"path": str, "allowed_root": str (optional)}."""
-    p = _validate_path(params)
+    p = _validate_path(params, root)
     return os.listdir(str(p))
 
 
-def _bash(params: dict) -> dict:
-    """Execute a shell command. Params: {command, timeout?, description?}."""
-    import subprocess
+def _bash(params: dict, root: Path | None = None) -> dict:
+    """Execute a shell command. Params: {command, timeout?, description?}.
 
+    The command runs in its own process group; on timeout the whole group is
+    killed, so background children do not outlive the call. ``timeout`` is
+    capped at ``MAX_BASH_TIMEOUT_SECONDS``. With a configured ``root`` the
+    working directory defaults to it and ``_cwd`` must stay inside it — this
+    fixes where the command starts, it is not a sandbox.
+    """
     command = params.get("command", "")
     if not command or not command.strip():
         raise ValueError("command must be a non-empty string")
@@ -889,34 +941,46 @@ def _bash(params: dict) -> dict:
     timeout_s = params.get("timeout", 30)
     if not isinstance(timeout_s, int) or timeout_s < 1:
         timeout_s = 30
+    timeout_s = min(timeout_s, MAX_BASH_TIMEOUT_SECONDS)
 
     cwd = params.get("_cwd") or None
+    if root is not None:
+        base = root.resolve()
+        if cwd is None:
+            cwd = str(base)
+        else:
+            requested = Path(cwd)
+            if not requested.is_absolute():
+                requested = base / requested
+            requested = requested.resolve()
+            if not requested.is_relative_to(base):
+                raise PermissionError(f"cwd {requested} is outside allowed root {base}")
+            cwd = str(requested)
+    else:
+        _warn_unrooted()
 
     interrupted = False
+    proc = subprocess.Popen(
+        ["sh", "-lc", command],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=cwd,
+        start_new_session=True,
+    )
     try:
-        result = subprocess.run(
-            ["sh", "-lc", command],
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            cwd=cwd,
-        )
-        stdout = result.stdout
-        stderr = result.stderr
-        return_code = result.returncode
-    except subprocess.TimeoutExpired as exc:
+        stdout, stderr = proc.communicate(timeout=timeout_s)
+        return_code = proc.returncode
+    except subprocess.TimeoutExpired:
         interrupted = True
-        stdout = (
-            (exc.stdout or b"").decode("utf-8", errors="replace")
-            if isinstance(exc.stdout, bytes)
-            else (exc.stdout or "")
-        )
-        stderr = (
-            (exc.stderr or b"").decode("utf-8", errors="replace")
-            if isinstance(exc.stderr, bytes)
-            else (exc.stderr or "")
-        )
-        stderr += f"\nCommand exceeded timeout of {timeout_s}s"
+        killpg = getattr(os, "killpg", None)
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            if killpg is not None:
+                killpg(proc.pid, signal.SIGKILL)
+            else:  # pragma: no cover — non-POSIX
+                proc.kill()
+        stdout, stderr = proc.communicate()
+        stderr = (stderr or "") + f"\nCommand exceeded timeout of {timeout_s}s"
         return_code = -1
 
     # Exit 0 → no return_code field (Claude Code pattern: suppress noise)

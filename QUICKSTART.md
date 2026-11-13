@@ -150,8 +150,16 @@ config = KernelConfig(
     context_budget=4000,          # Token budget for context assembly
     llm_provider="forge",         # LLM provider identifier
     log_level="INFO",             # DEBUG, INFO, WARNING, ERROR, CRITICAL
+    fs_allowed_root="workspace",  # root for fs_read/fs_write/fs_list and bash cwd
 )
 ```
+
+`fs_allowed_root` confines the builtin filesystem tools: every path must
+resolve inside it (symlinks included), and an `allowed_root` passed in the
+tool params can only narrow it. It is also the default working directory of
+`bash`, whose `_cwd` must stay inside it. `bash` is still not a sandbox — a
+command can `cd` anywhere the process can. Without `fs_allowed_root` the tools
+keep the old unrestricted behaviour and log a warning on first use.
 
 ### EnvironmentConfig (per-symbiote)
 
