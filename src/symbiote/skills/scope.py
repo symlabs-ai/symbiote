@@ -125,16 +125,18 @@ class SkillScopeManager:
     def _build(self, symbiote_id: str) -> tuple[SkillsLoader, SkillsStore]:
         # Per-symbiote read-write agent root: {base}/<sid>/skills
         agent_root = self._base_root / symbiote_id / "skills"
-        # Store roots: own write root first, then any extra read+modify roots.
-        store_roots = [agent_root, *self._extra_roots]
+        # The store writes ONLY to the symbiote's own root. Extra roots are
+        # shared between symbiotes, so they are read-only here: writing to
+        # them let one tenant change a skill another tenant reads.
         store = SkillsStore(
-            roots=store_roots,
+            roots=[agent_root],
             protected_roots=self._protected_roots,
         )
         # Loader scans {root}/skills/*/SKILL.md, so pass the PARENT of each
-        # "skills" dir. Own root + shared protected catalogue + extra roots are
-        # all discoverable (read); only the own root is writable via the store.
-        loader_roots: list[Path] = [r.parent for r in store_roots]
+        # "skills" dir. Own root + extra roots + shared protected catalogue
+        # are all discoverable (read).
+        loader_roots: list[Path] = [agent_root.parent]
+        loader_roots += [r.parent for r in self._extra_roots]
         loader_roots += [r.parent for r in self._protected_roots]
         loader = SkillsLoader(
             *loader_roots, auto_promote_threshold=self._auto_promote_threshold

@@ -108,6 +108,10 @@ class SkillsLoader:
             if s.status == usage.STATUS_ACTIVE
         ]
 
+    def peek(self, name: str) -> Skill | None:
+        """The discovered skill (no content load, no use counted)."""
+        return self._skills.get(name)
+
     def get_skill(self, name: str) -> Skill | None:
         """Get a skill by name, loading content lazily.
 

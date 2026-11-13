@@ -319,13 +319,27 @@ class TestFailureModes:
 # ── patch + write_file paths ──────────────────────────────────────────────
 
 
+def _create_as_agent(store, name: str, content: str) -> None:
+    from symbiote.core.provenance import (
+        BACKGROUND_REVIEW,
+        reset_current_write_origin,
+        set_current_write_origin,
+    )
+
+    token = set_current_write_origin(BACKGROUND_REVIEW)
+    try:
+        store.create(name, content)
+    finally:
+        reset_current_write_origin(token)
+
+
 class TestPatchAndWriteFile:
     def test_patch_existing_skill(
         self, adapter, symbiote_id, session_id, store, loader, tmp_path
     ):
-        store.create(
-            "to-patch",
-            _VALID_SKILL_MD.format(name="to-patch", desc="d", body="original line"),
+        # Created by the agent: background review may only refine its own skills.
+        _create_as_agent(
+            store, "to-patch", _VALID_SKILL_MD.format(name="to-patch", desc="d", body="original line")
         )
         loader.refresh()
 
@@ -348,9 +362,9 @@ class TestPatchAndWriteFile:
     def test_write_file_adds_reference(
         self, adapter, symbiote_id, session_id, store, loader, tmp_path
     ):
-        store.create(
-            "with-refs",
-            _VALID_SKILL_MD.format(name="with-refs", desc="d", body="b"),
+        # Created by the agent: background review may only refine its own skills.
+        _create_as_agent(
+            store, "with-refs", _VALID_SKILL_MD.format(name="with-refs", desc="d", body="b")
         )
         loader.refresh()
         _insert_messages(adapter, session_id, [("user", "add a note")])

@@ -423,6 +423,16 @@ class BackgroundReviewEngine:
                             continue
                         out = self._store.create(name, op.get("content", ""))
                         quarantine_count += 1
+                    elif action in ("patch", "write_file", "edit") and not self._is_agent_skill(name):
+                        # Background review only refines skills it created.
+                        # A human/curated skill changed from an untrusted
+                        # transcript would reach the prompt with no review.
+                        result["skipped"] += 1
+                        result["ops"].append({
+                            "action": action, "name": name, "ok": False,
+                            "error": "background review may only change agent-created skills",
+                        })
+                        continue
                     elif action == "patch":
                         out = self._store.patch(
                             name,
@@ -479,6 +489,16 @@ class BackgroundReviewEngine:
                     })
         finally:
             reset_current_write_origin(token)
+
+    def _is_agent_skill(self, name: str) -> bool:
+        find = getattr(self._store, "find_skill_dir", None)
+        skill_dir = find(name) if find is not None else None
+        if skill_dir is None:
+            return True  # let the store report "not found"
+        from symbiote.skills import usage
+
+        meta = usage.read_meta(skill_dir) or {}
+        return bool(meta.get("agent_created"))
 
     def _count_skills_by_status(self) -> tuple[int, int]:
         """Return (active_count, quarantine_count) for cap enforcement.

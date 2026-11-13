@@ -240,8 +240,17 @@ def make_view_handler(loader: Any = None, *, loader_provider=None):
                 },
                 ensure_ascii=False,
             )
-        get_skill = getattr(loader, "get_skill", None)
-        skill = get_skill(name) if get_skill is not None else None
+        # Check the status BEFORE loading: get_skill() counts a use (which
+        # drives auto-promotion), so a refused view must not call it —
+        # otherwise a few refused loads promoted a quarantined skill.
+        peek = getattr(loader, "peek", None)
+        if peek is not None:
+            skill = peek(name)
+            if skill is not None and getattr(skill, "status", usage.STATUS_ACTIVE) == usage.STATUS_ACTIVE:
+                skill = loader.get_skill(name)
+        else:
+            get_skill = getattr(loader, "get_skill", None)
+            skill = get_skill(name) if get_skill is not None else None
         if skill is None:
             return json.dumps(
                 {
