@@ -1,6 +1,6 @@
 # SPEC.md — Symbiote
 
-> Versão: 0.7.3 (+ mudanças em `[Unreleased]` no CHANGELOG)
+> Versão: 0.8.0 (+ mudanças em `[Unreleased]` no CHANGELOG)
 > MVP entregue em: 2026-03-16
 > Última atualização: 2026-11-13
 > Status: maintenance
