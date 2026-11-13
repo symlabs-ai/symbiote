@@ -316,12 +316,12 @@ class SymbioteKernel:
                 without an LLM).
         """
         runner = self._runner_registry.select("chat")
-        if runner is None or not hasattr(runner, "_on_before_tool_call"):
+        if not isinstance(runner, ChatRunner):
             raise RuntimeError(
                 "No chat runner available to attach an approval callback "
                 "(kernel was constructed without an LLM)."
             )
-        runner._on_before_tool_call = callback  # type: ignore[attr-defined]
+        runner.set_approval_callback(callback)
 
     def set_native_tools(self, enabled: bool) -> None:
         """Enable/disable native function-calling on the internal chat runner.
@@ -337,15 +337,15 @@ class SymbioteKernel:
                 without an LLM).
         """
         runner = self._runner_registry.select("chat")
-        if runner is None or not hasattr(runner, "_native_tools"):
+        if not isinstance(runner, ChatRunner):
             raise RuntimeError(
                 "No chat runner available to set native_tools "
                 "(kernel was constructed without an LLM)."
             )
-        runner._native_tools = enabled  # type: ignore[attr-defined]
+        runner.set_native_tools(enabled)
         long_run = self._runner_registry.get("long_run")
-        if long_run is not None:
-            long_run._native_tools = enabled  # type: ignore[attr-defined]
+        if isinstance(long_run, LongRunRunner):
+            long_run.set_native_tools(enabled)
 
     def set_agent_protocol(
         self,
@@ -363,12 +363,12 @@ class SymbioteKernel:
             RuntimeError: if the kernel was constructed without an LLM.
         """
         runner = self._runner_registry.select("chat")
-        if runner is None or not hasattr(runner, "set_agent_protocol"):
+        if not isinstance(runner, ChatRunner):
             raise RuntimeError(
                 "No chat runner available to set agent_protocol "
                 "(kernel was constructed without an LLM)."
             )
-        runner.set_agent_protocol(protocol)  # type: ignore[attr-defined]
+        runner.set_agent_protocol(protocol)
 
     @property
     def environment(self) -> EnvironmentManager:

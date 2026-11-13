@@ -134,6 +134,10 @@ class LongRunRunner:
         self._on_progress = on_progress
         self._on_block_complete = on_block_complete
 
+    def set_native_tools(self, enabled: bool) -> None:
+        """Use the provider's structured tool calls instead of text parsing."""
+        self._native_tools = enabled
+
     def can_handle(self, intent: str) -> bool:
         return intent in _HANDLED_INTENTS
 

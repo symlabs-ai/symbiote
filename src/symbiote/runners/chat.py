@@ -209,6 +209,17 @@ class ChatRunner:
         """Return the exact protocol ID selected for subsequent turns."""
         return self._agent_protocol.protocol_id
 
+    def set_approval_callback(
+        self, callback: Callable[[str, dict, str], bool] | None
+    ) -> None:
+        """Gate for high-risk tools: ``callback(tool_id, params, risk_level)``
+        returns True to allow. ``None`` removes the gate."""
+        self._on_before_tool_call = callback
+
+    def set_native_tools(self, enabled: bool) -> None:
+        """Use the provider's structured tool calls instead of text parsing."""
+        self._native_tools = enabled
+
     def set_agent_protocol(
         self,
         protocol: str | AgentProtocol | None,
