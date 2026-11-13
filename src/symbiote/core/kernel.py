@@ -1174,9 +1174,7 @@ class SymbioteKernel:
         descriptor = descriptor.model_copy(update={"handler_type": "http"})
         self._http_tools.save(symbiote_id, descriptor, http_config)
         self._tool_gateway.register_http_tool(descriptor, http_config)
-        current = self._environment.list_tools(symbiote_id)
-        if tool_id not in current:
-            self._environment.configure(symbiote_id=symbiote_id, tools=[*current, tool_id])
+        self._environment.add_tools(symbiote_id, [tool_id])
 
     def remove_http_tool(self, symbiote_id: str, tool_id: str) -> bool:
         """Take a tool away from a symbiote.
@@ -1186,11 +1184,7 @@ class SymbioteKernel:
         builtins and other symbiotes' tools stay for everyone else.
         Returns True if the tool was deleted.
         """
-        current = self._environment.list_tools(symbiote_id)
-        if tool_id in current:
-            self._environment.configure(
-                symbiote_id=symbiote_id, tools=[t for t in current if t != tool_id]
-            )
+        self._environment.remove_tools(symbiote_id, [tool_id])
         if self._http_tools.owner(tool_id) != symbiote_id:
             return False
         self._http_tools.delete(tool_id)

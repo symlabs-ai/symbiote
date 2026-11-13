@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import threading
@@ -341,6 +342,7 @@ class SQLiteAdapter:
                 pass  # column already exists
 
         self._ensure_unique_external_key()
+        self._ensure_unique_environment_config()
 
     def _ensure_unique_external_key(self) -> None:
         """One session per (symbiote_id, external_key).
@@ -366,6 +368,49 @@ class SQLiteAdapter:
                 "unique index was not created. Merge or close the duplicates to enable it.",
                 dup,
             )
+
+    def _ensure_unique_environment_config(self) -> None:
+        """One environment config per (symbiote_id, workspace_id).
+
+        Concurrent ``configure()`` calls used to insert duplicate rows, and
+        reads picked one of them arbitrarily. Duplicates are merged: the most
+        recent row (highest rowid) is kept and the tools of all of them are
+        united into it; then a unique index prevents new duplicates.
+        """
+        groups = self._conn.execute(
+            "SELECT symbiote_id, COALESCE(workspace_id, '') FROM environment_configs "
+            "GROUP BY symbiote_id, COALESCE(workspace_id, '') HAVING COUNT(*) > 1"
+        ).fetchall()
+        for symbiote_id, workspace in groups:
+            rows = self._conn.execute(
+                "SELECT id, tools_json FROM environment_configs "
+                "WHERE symbiote_id = ? AND COALESCE(workspace_id, '') = ? ORDER BY rowid DESC",
+                (symbiote_id, workspace),
+            ).fetchall()
+            tools: list[str] = []
+            for row in rows:
+                for tool in json.loads(row[1] or "[]"):
+                    if tool not in tools:
+                        tools.append(tool)
+            keep = rows[0][0]
+            self._conn.execute(
+                "UPDATE environment_configs SET tools_json = ? WHERE id = ?",
+                (json.dumps(tools), keep),
+            )
+            self._conn.execute(
+                "DELETE FROM environment_configs WHERE symbiote_id = ? "
+                "AND COALESCE(workspace_id, '') = ? AND id != ?",
+                (symbiote_id, workspace, keep),
+            )
+            logger.warning(
+                "Merged %d duplicated environment configs of symbiote %s (workspace %r) into %s",
+                len(rows), symbiote_id, workspace or None, keep,
+            )
+        self._conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_environment_configs_scope "
+            "ON environment_configs(symbiote_id, COALESCE(workspace_id, ''))"
+        )
+        self._conn.commit()
 
     def execute(self, sql: str, params: tuple | None = None) -> sqlite3.Cursor:
         """Run an INSERT / UPDATE / DELETE and auto-commit.
