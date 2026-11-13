@@ -196,6 +196,10 @@ class SQLiteAdapter:
 
         # Enable WAL mode and foreign key enforcement.
         self._conn.execute("PRAGMA journal_mode=WAL")
+        # With WAL, NORMAL is safe against application crashes (only an OS
+        # crash / power loss can drop the last commits) and avoids an fsync
+        # per commit — the default FULL made every write wait for the disk.
+        self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
 
     # ── public API ─────────────────────────────────────────────────────

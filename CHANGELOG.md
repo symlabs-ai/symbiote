@@ -78,6 +78,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
   - **MIGRAÇÃO:** quem roda o servidor local em 8000 precisa passar `--server` ou gravá-lo com `symbiote init`.
 - perf(storage): índices para as consultas que rodam a cada turno e a cada fechamento de sessão (P-1): `messages(session_id, created_at)`, `memory_entries(symbiote_id, is_active, type)`, `sessions(symbiote_id, status, ended_at)` e `execution_traces(session_id)`. Antes essas consultas varriam a tabela inteira, e o tempo de `kernel.message()` crescia com o total de mensagens de todas as sessões. Os índices são criados ao abrir o banco.
 - feat(kernel): retenção opcional de mensagens e traces (P-2, D-12). `KernelConfig.message_retention_days` e `trace_retention_days` (padrão `None`, desligado) e `kernel.prune(dry_run=...)` removem as mensagens e os traces de sessões fechadas há mais de N dias; sessões ativas nunca são tocadas, e memórias, resumos e scores ficam. Nada roda sozinho: o novo `symbiote prune --messages-days N --traces-days N [--dry-run]` é para um cron.
+- perf(storage): conexões SQLite com `PRAGMA synchronous=NORMAL` junto do WAL (P-3, D-13). Com WAL, `NORMAL` não perde dados num crash da aplicação; só uma queda do sistema operacional ou de energia pode perder os últimos commits. Em troca, cada commit deixa de esperar um fsync.
 
 ## [v0.7.3] - 2026-07-28
 
