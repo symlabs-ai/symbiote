@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -111,6 +112,23 @@ _INDEX_INSTRUCTIONS = """\
 The tool list below shows only names and descriptions — parameters are NOT shown.
 You MUST call `get_tool_schema` to fetch the full parameter schema \
 BEFORE calling any other tool. Calling a tool with invented parameters will fail."""
+
+
+def _on_loop_thread(
+    loop: asyncio.AbstractEventLoop, callback: Callable[[str], None] | None
+) -> Callable[[str], None] | None:
+    """Wrap ``callback`` so calls from a worker thread run on ``loop``.
+
+    ``call_soon_threadsafe`` keeps the order, and the callbacks queued by the
+    worker run before the coroutine awaiting that worker resumes.
+    """
+    if callback is None:
+        return None
+
+    def forward(token: str) -> None:
+        loop.call_soon_threadsafe(callback, token)
+
+    return forward
 
 
 class ChatRunner:
@@ -770,11 +788,23 @@ class ChatRunner:
         on_token: Callable[[str], None] | None = None,
         llm_config: dict | None = None,
     ) -> RunResult:
-        """Async variant of run() with tool-loop support."""
-        # Instant mode uses sync fast-path (no async tool execution needed
-        # for a single call) — avoids duplicating the instant logic.
+        """Async variant of run() with tool-loop support.
+
+        The LLM adapter is synchronous; every model call runs in a worker
+        thread (``asyncio.to_thread``) so other sessions and tasks on the
+        event loop keep running meanwhile. ``on_token`` is still called on
+        the event loop thread.
+        """
         if context.tool_mode == "instant":
-            return self._run_instant(context, on_token, llm_config=llm_config)
+            # The instant path is synchronous end to end (model call, one
+            # tool round, final call): run all of it in a worker thread and
+            # hand tokens back to the loop thread in order.
+            return await asyncio.to_thread(
+                self._run_instant,
+                context,
+                _on_loop_thread(asyncio.get_running_loop(), on_token),
+                llm_config=llm_config,
+            )
         prepared = self._prepare_protocol_turn(context, llm_config)
         protocol_state = prepared.state
         messages = self._build_messages(
@@ -809,7 +839,9 @@ class ChatRunner:
                 self._on_progress("iteration_start", iteration + 1, max_iters)
 
             try:
-                response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
+                response, buffered_chunks = await asyncio.to_thread(
+                    self._call_llm_with_retry, messages, kwargs, on_token
+                )
             except Exception as exc:
                 # Totals are normally filled after the loop; fill them here
                 # so a failed turn still records what it did.
@@ -837,7 +869,8 @@ class ChatRunner:
 
             # ── Response validation ───────────────────────────────────────
             if not tool_calls:
-                clean_text, buffered_chunks = self._validate_and_fix(
+                clean_text, buffered_chunks = await asyncio.to_thread(
+                    self._validate_and_fix,
                     clean_text,
                     buffered_chunks,
                     messages,
@@ -966,7 +999,9 @@ class ChatRunner:
                     inj_kwargs = dict(kwargs)
                     inj_kwargs.pop("tools", None)
                     try:
-                        inj_response, inj_chunks = self._call_llm_sync(messages, inj_kwargs, on_token)
+                        inj_response, inj_chunks = await asyncio.to_thread(
+                            self._call_llm_sync, messages, inj_kwargs, on_token
+                        )
                     except Exception:
                         pass  # keep the last final_text
                     else:
