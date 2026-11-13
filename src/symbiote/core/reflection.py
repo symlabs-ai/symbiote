@@ -50,7 +50,47 @@ class ReflectionResult(BaseModel):
 
 # ── Keyword path (legacy) ──────────────────────────────────────────────────
 
-# Keywords that signal durable facts, mapped to fact type
+# Whole words that signal a durable fact stated by the user (English and
+# Portuguese), mapped to the fact type. Checked in this order; one fact per
+# message.
+_KEYWORD_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (
+        re.compile(
+            r"\b(prefer|prefers|preferred|preference|prefiro|prefere|preferimos|"
+            r"preferem|prefer[eê]ncia)\b",
+            re.IGNORECASE,
+        ),
+        "preference",
+    ),
+    (
+        re.compile(
+            r"\b(decided|decision|decidi|decidimos|decidiu|decidiram|decis[aã]o)\b",
+            re.IGNORECASE,
+        ),
+        "decision",
+    ),
+    (
+        re.compile(
+            r"\b(always|never|sempre|nunca|jamais|rules?|regras?|constraints?|"
+            r"restri[cç][aã]o|restri[cç][oõ]es)\b",
+            re.IGNORECASE,
+        ),
+        "constraint",
+    ),
+    (
+        re.compile(
+            r"\b(conventions?|procedures?|conven[cç][aã]o|conven[cç][oõ]es|procedimentos?)\b",
+            re.IGNORECASE,
+        ),
+        "procedural",
+    ),
+]
+
+# Longer messages are not stored whole as a fact (the keyword path keeps the
+# entire message as the memory text).
+_MAX_KEYWORD_FACT_CHARS = 500
+
+# Kept for callers that imported the old map; no longer used for matching.
 _KEYWORD_MAP: dict[str, str] = {
     "prefer": "preference",
     "always": "constraint",
@@ -153,8 +193,24 @@ class ReflectionEngine:
     def reflect_session(
         self, session_id: str, symbiote_id: str, *, limit: int = 50
     ) -> ReflectionResult:
-        """Run reflection on a session's messages, dispatching by mode."""
-        messages = self._fetch_messages(session_id, limit)
+        """Run reflection on a session's messages, dispatching by mode.
+
+        Only messages not reflected before are considered (when the message
+        store tracks a watermark), so closing a reopened session does not
+        learn the same messages twice.
+        """
+        get_mark = getattr(self._messages, "get_reflection_watermark", None)
+        since = get_mark(session_id) if get_mark is not None else None
+        messages = self._fetch_messages(session_id, limit, since=since)
+        result = self._reflect_messages(messages, session_id, symbiote_id)
+        set_mark = getattr(self._messages, "set_reflection_watermark", None)
+        if set_mark is not None and messages and messages[-1].get("created_at"):
+            set_mark(session_id, messages[-1]["created_at"])
+        return result
+
+    def _reflect_messages(
+        self, messages: list[dict], session_id: str, symbiote_id: str
+    ) -> ReflectionResult:
         discarded_count = sum(1 for m in messages if self._is_noise(m["content"]))
         summary = self._generate_summary(messages)
 
@@ -274,15 +330,21 @@ class ReflectionEngine:
     # ── keyword extraction (legacy) ────────────────────────────────────
 
     def _extract_keyword(self, messages: list[dict]) -> list[dict]:
-        """Heuristic extraction: look for keyword signals in message content."""
+        """Heuristic extraction: user messages that state a durable fact.
+
+        Only the user's own messages count (an assistant reply saying "I
+        always double-check" is not a fact about the user), keywords must be
+        whole words, and long messages are skipped.
+        """
         facts: list[dict] = []
         for msg in messages:
-            content = msg["content"]
-            if self._is_noise(content):
+            if msg.get("role", "user") != "user":
                 continue
-            content_lower = content.lower()
-            for keyword, fact_type in _KEYWORD_MAP.items():
-                if keyword in content_lower:
+            content = msg["content"]
+            if self._is_noise(content) or len(content) > _MAX_KEYWORD_FACT_CHARS:
+                continue
+            for pattern, fact_type in _KEYWORD_PATTERNS:
+                if pattern.search(content):
                     importance = 0.8 if fact_type == "constraint" else 0.6
                     facts.append(
                         {
@@ -638,6 +700,10 @@ class ReflectionEngine:
 
     # ── private helpers ────────────────────────────────────────────────
 
-    def _fetch_messages(self, session_id: str, limit: int) -> list[dict]:
+    def _fetch_messages(
+        self, session_id: str, limit: int, *, since: str | None = None
+    ) -> list[dict]:
         """Fetch last N messages for a session via MessagePort."""
-        return self._messages.get_messages(session_id, limit)
+        if since is None:
+            return self._messages.get_messages(session_id, limit)
+        return self._messages.get_messages(session_id, limit, since=since)

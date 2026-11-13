@@ -710,7 +710,7 @@ def get_session(
     sessions: Annotated[SessionManager, Depends(get_session_manager)],
 ) -> SessionResponse:
     _require_session_access(adapter, session_id, auth)
-    sess = sessions.resume(session_id)
+    sess = sessions.get(session_id)
     if sess is None:
         raise HTTPException(status_code=404, detail="Session not found") from None
     return SessionResponse(

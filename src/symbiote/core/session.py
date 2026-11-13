@@ -90,6 +90,13 @@ class SessionManager:
             return None
         return self._row_to_session(row)
 
+    def get(self, session_id: str) -> Session | None:
+        """Fetch a session by id without changing it."""
+        row = self._storage.fetch_one(
+            "SELECT * FROM sessions WHERE id = ?", (session_id,)
+        )
+        return self._row_to_session(row) if row is not None else None
+
     def resume(self, session_id: str) -> Session | None:
         """Fetch a session by id. Reopen it if closed. Return None if not found."""
         row = self._storage.fetch_one(

@@ -454,7 +454,9 @@ class SymbioteKernel:
         )
 
     def get_session(self, session_id: str) -> Session | None:
-        return self._sessions.resume(session_id)
+        """Read a session. Does not reopen a closed one (use
+        get_or_create_session / SessionManager.resume for that)."""
+        return self._sessions.get(session_id)
 
     def message(
         self,
@@ -1258,25 +1260,37 @@ class SymbioteKernel:
         has_tools = bool(self._tool_gateway and self._tool_gateway.list_tools())
         auto = compute_auto_score(trace, tool_mode=tool_mode, has_tools=has_tools)
         final = compute_final_score(auto)
+        values = (
+            auto,
+            final,
+            trace.stop_reason if trace else None,
+            trace.total_iterations if trace else 0,
+            trace.total_tool_calls if trace else 0,
+            datetime.now(tz=UTC).isoformat(),
+        )
+        existing = self._storage.fetch_one(
+            "SELECT id FROM session_scores WHERE session_id = ?", (session_id,)
+        )
+        if existing is not None:
+            # A reopened session closed again: one score per session, updated.
+            self._storage.execute(
+                "UPDATE session_scores SET auto_score = ?, final_score = ?, "
+                "stop_reason = ?, total_iterations = ?, total_tool_calls = ?, "
+                "computed_at = ? WHERE id = ?",
+                (*values, existing["id"]),
+            )
+            return
+
         self._storage.execute(
-            "INSERT OR REPLACE INTO session_scores "
+            "INSERT INTO session_scores "
             "(id, session_id, symbiote_id, auto_score, final_score, "
             "stop_reason, total_iterations, total_tool_calls, computed_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                str(uuid4()),
-                session_id,
-                symbiote_id,
-                auto,
-                final,
-                trace.stop_reason if trace else None,
-                trace.total_iterations if trace else 0,
-                trace.total_tool_calls if trace else 0,
-                datetime.now(tz=UTC).isoformat(),
-            ),
+            (str(uuid4()), session_id, symbiote_id, *values),
         )
 
-        # Track score per active harness version (for evolution rollback)
+        # Track score per active harness version (for evolution rollback).
+        # Only on the session's first score, so re-closing does not count it twice.
         from symbiote.harness.evolver import EVOLVABLE_COMPONENTS
         for component in EVOLVABLE_COMPONENTS:
             self._harness_versions.update_score(symbiote_id, component, final)

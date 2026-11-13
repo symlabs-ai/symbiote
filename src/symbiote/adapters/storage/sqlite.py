@@ -228,6 +228,9 @@ class SQLiteAdapter:
             "ALTER TABLE environment_configs ADD COLUMN reflection_mode TEXT DEFAULT 'keyword'",
             "ALTER TABLE environment_configs ADD COLUMN reflection_max_tokens INTEGER DEFAULT 4000",
             "ALTER TABLE memory_entries ADD COLUMN updated_at TEXT DEFAULT NULL",
+            # created_at of the last message reflected for the session, so a
+            # reopened session is not reflected twice.
+            "ALTER TABLE sessions ADD COLUMN reflected_until TEXT DEFAULT NULL",
             "ALTER TABLE environment_configs ADD COLUMN skill_review_enabled INTEGER DEFAULT 0",
             "ALTER TABLE environment_configs ADD COLUMN skill_nudge_interval INTEGER DEFAULT 10",
             "ALTER TABLE environment_configs ADD COLUMN max_active_skills INTEGER DEFAULT 20",
