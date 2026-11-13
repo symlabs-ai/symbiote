@@ -6,7 +6,10 @@ import collections
 import logging
 import os
 import sqlite3
+import threading
 import time as _time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -31,6 +34,7 @@ from symbiote.api.middleware import (
     enforce_auth,
     require_admin,
     require_auth,
+    set_auth_initializer,
     set_key_manager,
 )
 from symbiote.config.models import KernelConfig
@@ -74,18 +78,43 @@ _log_buffer = _LogRingBuffer(capacity=2000)
 _log_buffer.setLevel(logging.DEBUG)
 _log_buffer.setFormatter(logging.Formatter("%(message)s"))
 
-# Attach to root logger + key symbiote loggers
-logging.basicConfig(level=logging.DEBUG, handlers=[logging.StreamHandler()])
-logging.getLogger().addHandler(_log_buffer)
-# Ensure symbiote loggers propagate at DEBUG
-for _ns in ("symbiote", "forge_llm", "httpx", "openai"):
-    logging.getLogger(_ns).setLevel(logging.DEBUG)
+
+def _configure_logging() -> None:
+    """Server-only logging: console + the Console's ring buffer at DEBUG.
+
+    Called from the app lifespan (i.e. when this app is *served*), never at
+    import time, so a host that imports symbiote.api keeps its own logging.
+    """
+    root = logging.getLogger()
+    if not root.handlers:
+        logging.basicConfig(level=logging.DEBUG, handlers=[logging.StreamHandler()])
+    if _log_buffer not in root.handlers:
+        root.addHandler(_log_buffer)
+    for ns in ("symbiote", "forge_llm", "httpx", "openai"):
+        logging.getLogger(ns).setLevel(logging.DEBUG)
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Create the kernel (storage, API keys) once at startup; close it at exit."""
+    global _kernel, _adapter, _tool_gateway
+    _configure_logging()
+    get_kernel()
+    try:
+        yield
+    finally:
+        kernel = _kernel
+        _kernel = _adapter = _tool_gateway = None
+        if kernel is not None:
+            kernel.shutdown()
 
 
 # Every route requires an API key except the public allowlist in
 # ``symbiote.api.middleware._PUBLIC_PATHS``. Route-level ``require_auth`` /
 # ``require_admin`` dependencies still decide *who* may call each route.
-app = FastAPI(title="Symbiote API", dependencies=[Depends(enforce_auth)])
+app = FastAPI(
+    title="Symbiote API", dependencies=[Depends(enforce_auth)], lifespan=_lifespan
+)
 app.add_middleware(BodySizeLimitMiddleware)
 
 
@@ -473,39 +502,52 @@ def _resolve_config() -> KernelConfig:
 
 
 def get_adapter() -> SQLiteAdapter:
-    """Return the singleton SQLiteAdapter, creating it on first call."""
-    global _adapter
-    if _adapter is None:
-        config = _resolve_config()
-        _adapter = SQLiteAdapter(db_path=config.db_path, check_same_thread=False)
-        _adapter.init_schema()
+    """The kernel's storage: one SQLite connection per process.
 
-        # Init API key schema
-        global _key_manager
-        _key_manager = APIKeyManager(_adapter)
-        _key_manager.init_schema()
-        set_key_manager(_key_manager)
-        _ensure_local_admin_key(_key_manager)
+    Kept as a separate dependency so tests can override it.
+    """
+    return get_kernel()._storage
 
-    return _adapter
+
+_init_lock = threading.Lock()
 
 
 def get_kernel() -> SymbioteKernel:
-    """Return the singleton SymbioteKernel with LLM."""
-    global _kernel
-    if _kernel is None:
-        config = _resolve_config()
-        llm = _resolve_llm()
-        _kernel = SymbioteKernel(config=config, llm=llm)
+    """Return the process-wide SymbioteKernel, creating it on first use.
 
-        # Init API key schema on the kernel's storage
-        global _key_manager
-        _key_manager = APIKeyManager(_kernel._storage)
-        _key_manager.init_schema()
-        set_key_manager(_key_manager)
-        _ensure_local_admin_key(_key_manager)
-
+    Normally created by the app lifespan; the lazy path covers TestClient
+    without ``with`` and embedded use. The API key manager lives on the same
+    storage.
+    """
+    global _kernel, _adapter, _key_manager
+    if _kernel is not None:
+        return _kernel
+    with _init_lock:
+        if _kernel is None:
+            config = _resolve_config()
+            try:
+                llm = _resolve_llm()
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "LLM adapter failed to initialise; chat is unavailable until fixed"
+                )
+                llm = None
+            kernel = SymbioteKernel(config=config, llm=llm)
+            key_manager = APIKeyManager(kernel._storage)
+            key_manager.init_schema()
+            set_key_manager(key_manager)
+            _key_manager = key_manager
+            _ensure_local_admin_key(key_manager)
+            _adapter = kernel._storage
+            _kernel = kernel
     return _kernel
+
+
+def _ensure_initialized() -> None:
+    get_kernel()
+
+
+set_auth_initializer(_ensure_initialized)
 
 
 def get_identity_manager(

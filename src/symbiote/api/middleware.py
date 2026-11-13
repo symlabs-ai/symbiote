@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from fastapi import Depends, HTTPException, Request, Security
@@ -19,6 +20,16 @@ _key_manager: APIKeyManager | None = None
 # Paths that don't require authentication. ``/`` serves the Console HTML,
 # which carries no data; the Console then calls authenticated routes.
 _PUBLIC_PATHS = frozenset({"/", "/health", "/docs", "/openapi.json", "/redoc"})
+
+
+# Called by require_auth when no key manager is set yet, so the first request
+# of a fresh process initialises the API (401 for a bad key, not 503).
+_initializer: Callable[[], None] | None = None
+
+
+def set_auth_initializer(fn: Callable[[], None] | None) -> None:
+    global _initializer
+    _initializer = fn
 
 
 def set_key_manager(manager: APIKeyManager) -> None:
@@ -48,6 +59,8 @@ async def require_auth(
             created_at="",
         )
 
+    if _key_manager is None and _initializer is not None:
+        _initializer()
     if _key_manager is None:
         raise HTTPException(
             status_code=503, detail="Authentication not configured"
