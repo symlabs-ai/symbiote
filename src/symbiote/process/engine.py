@@ -147,7 +147,7 @@ class ProcessEngine:
             )
 
         defn = self._definitions.get(instance.process_name)
-        step_index = self._instance_step_index.get(instance_id, 0)
+        step_index = self._step_index_of(defn, instance)
 
         # Log the completed step
         completed_step = instance.current_step
@@ -174,6 +174,20 @@ class ProcessEngine:
         self._cache_instance(instance)
         self._update_instance(instance)
         return instance
+
+    def _step_index_of(
+        self, defn: ProcessDefinition | None, instance: ProcessInstance
+    ) -> int:
+        """Index of the instance's current step, derived from what was persisted.
+
+        The in-memory index is lost on restart or ``invalidate_cache()``;
+        ``current_step`` is the source of truth.
+        """
+        if defn is not None and instance.current_step is not None:
+            for idx, step in enumerate(defn.steps):
+                if step.name == instance.current_step:
+                    return idx
+        return self._instance_step_index.get(instance.id, 0)
 
     def get_instance(self, instance_id: str) -> ProcessInstance | None:
         """Fetch instance by ID (cache with TTL, falls back to storage)."""

@@ -20,9 +20,16 @@ class ProcessRunner:
         return self._engine.select(intent) is not None
 
     def run(self, context: AssembledContext) -> RunResult:
-        """Select process, start instance, advance through all steps."""
-        intent = context.user_input
+        """Select process, start instance, advance through all steps.
+
+        Accepts the bare process name or ``"<name>: details"`` (the form
+        ``CapabilitySurface.work()`` uses to pick this runner).
+        """
+        intent = context.user_input.strip()
         defn = self._engine.select(intent)
+        if defn is None and ":" in intent:
+            intent = intent.split(":", 1)[0].strip()
+            defn = self._engine.select(intent)
         if defn is None:
             return RunResult(
                 success=False,
