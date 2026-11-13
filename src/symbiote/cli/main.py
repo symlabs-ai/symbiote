@@ -13,6 +13,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -45,6 +46,15 @@ app.add_typer(skills_app, name="skills")
 
 _db_path_option: Path | None = None
 _llm_provider_option: str | None = None
+
+
+def _e(value: object) -> str:
+    """Escape Rich markup in dynamic text (names, messages, errors, paths).
+
+    Without it, user data such as ``[/tmp]`` or ``[/INST]`` is parsed as a
+    closing tag and the command dies with MarkupError.
+    """
+    return escape(str(value))
 
 
 def _make_kernel(with_llm: bool = False) -> SymbioteKernel:
@@ -109,9 +119,9 @@ def create(
     try:
         persona = json.loads(persona_json) if persona_json else None
         sym = kernel.create_symbiote(name=name, role=role, persona=persona)
-        console.print(f"Created symbiote: [cyan]{sym.id}[/cyan]")
+        console.print(f"Created symbiote: [cyan]{_e(sym.id)}[/cyan]")
     except SymbioteError as exc:
-        err_console.print(f"[red]Error:[/red] {exc}")
+        err_console.print(f"[red]Error:[/red] {_e(exc)}")
         raise typer.Exit(code=1) from None
     finally:
         kernel.shutdown()
@@ -132,7 +142,7 @@ def list_symbiotes() -> None:
         table.add_column("Role")
         table.add_column("Status")
         for sym in symbiotes:
-            table.add_row(sym.id, sym.name, sym.role, sym.status)
+            table.add_row(_e(sym.id), _e(sym.name), _e(sym.role), _e(sym.status))
         console.print(table)
     finally:
         kernel.shutdown()
@@ -153,11 +163,11 @@ def session_start(
         session = kernel.start_session(
             symbiote_id=symbiote_id, goal=goal, external_key=external_key
         )
-        console.print(f"Started session: [cyan]{session.id}[/cyan]")
+        console.print(f"Started session: [cyan]{_e(session.id)}[/cyan]")
         if session.external_key:
-            console.print(f"External key: [dim]{session.external_key}[/dim]")
+            console.print(f"External key: [dim]{_e(session.external_key)}[/dim]")
     except SymbioteError as exc:
-        err_console.print(f"[red]Error:[/red] {exc}")
+        err_console.print(f"[red]Error:[/red] {_e(exc)}")
         raise typer.Exit(code=1) from None
     finally:
         kernel.shutdown()
@@ -174,10 +184,10 @@ def session_find(
         if session is None:
             console.print("No session found for that key.")
             return
-        console.print(f"Session: [cyan]{session.id}[/cyan]")
-        console.print(f"Symbiote: {session.symbiote_id}")
-        console.print(f"Status: {session.status}")
-        console.print(f"External key: [dim]{session.external_key}[/dim]")
+        console.print(f"Session: [cyan]{_e(session.id)}[/cyan]")
+        console.print(f"Symbiote: {_e(session.symbiote_id)}")
+        console.print(f"Status: {_e(session.status)}")
+        console.print(f"External key: [dim]{_e(session.external_key)}[/dim]")
     finally:
         kernel.shutdown()
 
@@ -194,12 +204,12 @@ def session_close(
     try:
         session = kernel.close_session(session_id=session_id)
         console.print(Panel(
-            f"Session [cyan]{session.id}[/cyan] closed.\n"
-            f"Summary: {session.summary or 'No messages'}",
+            f"Session [cyan]{_e(session.id)}[/cyan] closed.\n"
+            f"Summary: {_e(session.summary or 'No messages')}",
             title="Session Closed",
         ))
     except SymbioteError as exc:
-        err_console.print(f"[red]Error:[/red] {exc}")
+        err_console.print(f"[red]Error:[/red] {_e(exc)}")
         raise typer.Exit(code=1) from None
     finally:
         kernel.shutdown()
@@ -223,14 +233,14 @@ def chat(
     try:
         response = kernel.message(session_id=session_id, content=message)
         if isinstance(response, dict):
-            console.print(Panel(response.get("text", ""), title="Assistant", border_style="green"))
+            console.print(Panel(_e(response.get("text", "")), title="Assistant", border_style="green"))
             for tr in response.get("tool_results", []):
                 status = "[green]OK[/green]" if tr.get("success") else "[red]FAIL[/red]"
-                console.print(f"  Tool {tr['tool_id']}: {status} → {tr.get('output') or tr.get('error')}")
+                console.print(f"  Tool {_e(tr['tool_id'])}: {status} → {_e(tr.get('output') or tr.get('error'))}")
         else:
-            console.print(Panel(response, title="Assistant", border_style="green"))
+            console.print(Panel(_e(response), title="Assistant", border_style="green"))
     except SymbioteError as exc:
-        err_console.print(f"[red]Error:[/red] {exc}")
+        err_console.print(f"[red]Error:[/red] {_e(exc)}")
         raise typer.Exit(code=1) from None
     finally:
         kernel.shutdown()
@@ -250,13 +260,13 @@ def interactive_chat(
         # Resolve by name if not a UUID
         sym = kernel.get_symbiote(symbiote_id) or kernel.find_symbiote_by_name(symbiote_id)
         if sym is None:
-            err_console.print(f"[red]Error:[/red] Symbiote '{symbiote_id}' not found")
+            err_console.print(f"[red]Error:[/red] Symbiote '{_e(symbiote_id)}' not found")
             raise typer.Exit(code=1)
 
         session = kernel.start_session(symbiote_id=sym.id, goal=goal)
         console.print(Panel(
-            f"Symbiote: [cyan]{sym.name}[/cyan] ({sym.role})\n"
-            f"Session: [dim]{session.id[:8]}[/dim]\n"
+            f"Symbiote: [cyan]{_e(sym.name)}[/cyan] ({_e(sym.role)})\n"
+            f"Session: [dim]{_e(session.id[:8])}[/dim]\n"
             f"Type [bold]/quit[/bold] to exit, [bold]/reflect[/bold] to reflect.",
             title="Interactive Chat",
             border_style="blue",
@@ -277,8 +287,8 @@ def interactive_chat(
             if stripped == "/reflect":
                 result = kernel.capabilities.reflect(sym.id, session.id)
                 console.print(Panel(
-                    f"Messages: {result.get('message_count', 0)}\n"
-                    f"Summary: {(result.get('summary') or 'No summary')[:200]}",
+                    f"Messages: {_e(result.get('message_count', 0))}\n"
+                    f"Summary: {_e((result.get('summary') or 'No summary')[:200])}",
                     title="Reflection",
                 ))
                 continue
@@ -290,14 +300,14 @@ def interactive_chat(
                     console.print(Markdown(text))
                 for tr in response.get("tool_results", []):
                     status = "[green]OK[/green]" if tr.get("success") else "[red]FAIL[/red]"
-                    console.print(f"  Tool {tr['tool_id']}: {status}")
+                    console.print(f"  Tool {_e(tr['tool_id'])}: {status}")
             else:
                 console.print(Markdown(str(response)))
 
         kernel.close_session(session.id)
         console.print("[dim]Session closed.[/dim]")
     except SymbioteError as exc:
-        err_console.print(f"[red]Error:[/red] {exc}")
+        err_console.print(f"[red]Error:[/red] {_e(exc)}")
         raise typer.Exit(code=1) from None
     finally:
         kernel.shutdown()
@@ -324,9 +334,9 @@ def learn(
             fact_type=fact_type,
             importance=importance,
         )
-        console.print(f"Learned: [cyan]{entry.id}[/cyan] [{entry.type}, importance={entry.importance}]")
+        console.print(f"Learned: [cyan]{_e(entry.id)}[/cyan] \\[{_e(entry.type)}, importance={_e(entry.importance)}]")
     except SymbioteError as exc:
-        err_console.print(f"[red]Error:[/red] {exc}")
+        err_console.print(f"[red]Error:[/red] {_e(exc)}")
         raise typer.Exit(code=1) from None
     finally:
         kernel.shutdown()
@@ -351,7 +361,7 @@ def teach(
         )
         console.print(Markdown(explanation))
     except SymbioteError as exc:
-        err_console.print(f"[red]Error:[/red] {exc}")
+        err_console.print(f"[red]Error:[/red] {_e(exc)}")
         raise typer.Exit(code=1) from None
     finally:
         kernel.shutdown()
@@ -377,12 +387,12 @@ def work(
             intent=intent,
         )
         if result["success"]:
-            console.print(Panel(str(result["output"]), title=f"Work Result ({result['runner_type']})", border_style="green"))
+            console.print(Panel(_e(str(result["output"])), title=f"Work Result ({_e(result['runner_type'])})", border_style="green"))
         else:
-            err_console.print(f"[red]Work failed:[/red] {result['error']}")
+            err_console.print(f"[red]Work failed:[/red] {_e(result['error'])}")
             raise typer.Exit(code=1) from None
     except SymbioteError as exc:
-        err_console.print(f"[red]Error:[/red] {exc}")
+        err_console.print(f"[red]Error:[/red] {_e(exc)}")
         raise typer.Exit(code=1) from None
     finally:
         kernel.shutdown()
@@ -407,7 +417,7 @@ def show(
         )
         console.print(Markdown(output))
     except SymbioteError as exc:
-        err_console.print(f"[red]Error:[/red] {exc}")
+        err_console.print(f"[red]Error:[/red] {_e(exc)}")
         raise typer.Exit(code=1) from None
     finally:
         kernel.shutdown()
@@ -431,12 +441,12 @@ def reflect(
         table = Table(title="Reflection Result")
         table.add_column("Key", style="cyan")
         table.add_column("Value")
-        table.add_row("Messages", str(result.get("message_count", 0)))
-        table.add_row("Roles", str(result.get("role_counts", {})))
-        table.add_row("Summary", (result.get("summary") or "No summary")[:200])
+        table.add_row("Messages", _e(str(result.get("message_count", 0))))
+        table.add_row("Roles", _e(str(result.get("role_counts", {}))))
+        table.add_row("Summary", _e((result.get("summary") or "No summary")[:200]))
         console.print(table)
     except SymbioteError as exc:
-        err_console.print(f"[red]Error:[/red] {exc}")
+        err_console.print(f"[red]Error:[/red] {_e(exc)}")
         raise typer.Exit(code=1) from None
     finally:
         kernel.shutdown()
@@ -469,7 +479,7 @@ def memory_search(
         table.add_column("Scope")
         table.add_column("Content", max_width=60)
         for entry in results:
-            table.add_row(entry.id, entry.type, entry.scope, entry.content[:60])
+            table.add_row(_e(entry.id), _e(entry.type), _e(entry.scope), _e(entry.content[:60]))
         console.print(table)
     finally:
         kernel.shutdown()
@@ -487,9 +497,9 @@ def export_session(
     try:
         export_svc = ExportService(storage=kernel._storage)
         output = export_svc.export_session(session_id)
-        console.print(Panel(output, title="Session Export (Markdown)"))
+        console.print(Panel(_e(output), title="Session Export (Markdown)"))
     except SymbioteError as exc:
-        err_console.print(f"[red]Error:[/red] {exc}")
+        err_console.print(f"[red]Error:[/red] {_e(exc)}")
         raise typer.Exit(code=1) from None
     finally:
         kernel.shutdown()
@@ -526,9 +536,9 @@ def tools_add(
         http_config = HttpToolConfig(method=method, url_template=url)
         # Persisted and authorized, so the next process (and the API) sees it.
         kernel.register_http_tool(symbiote_id, descriptor, http_config)
-        console.print(f"Registered tool [cyan]{tool_id}[/cyan] for symbiote {symbiote_id[:8]}")
+        console.print(f"Registered tool [cyan]{_e(tool_id)}[/cyan] for symbiote {_e(symbiote_id[:8])}")
     except Exception as exc:
-        err_console.print(f"[red]Error:[/red] {exc}")
+        err_console.print(f"[red]Error:[/red] {_e(exc)}")
         raise typer.Exit(code=1) from None
     finally:
         kernel.shutdown()
@@ -544,7 +554,7 @@ def tools_list(
         authorized = kernel.environment.list_tools(symbiote_id)
         all_descriptors = kernel.tool_gateway.get_descriptors()
 
-        table = Table(title=f"Tools for {symbiote_id[:8]}")
+        table = Table(title=f"Tools for {_e(symbiote_id[:8])}")
         table.add_column("ID", style="cyan")
         table.add_column("Name")
         table.add_column("Type")
@@ -553,7 +563,7 @@ def tools_list(
 
         for d in all_descriptors:
             auth = "[green]yes[/green]" if d.tool_id in authorized else "[red]no[/red]"
-            table.add_row(d.tool_id, d.name, d.handler_type, auth, d.description[:50])
+            table.add_row(_e(d.tool_id), _e(d.name), _e(d.handler_type), auth, _e(d.description[:50]))
 
         console.print(table)
     finally:
@@ -569,7 +579,7 @@ def tools_remove(
     kernel = _make_kernel()
     try:
         kernel.remove_http_tool(symbiote_id, tool_id)
-        console.print(f"Removed tool [cyan]{tool_id}[/cyan]")
+        console.print(f"Removed tool [cyan]{_e(tool_id)}[/cyan]")
     finally:
         kernel.shutdown()
 
@@ -591,12 +601,12 @@ def tools_exec(
             params=params,
         )
         if result.success:
-            console.print(Panel(str(result.output), title=f"Tool: {tool_id}", border_style="green"))
+            console.print(Panel(_e(str(result.output)), title=f"Tool: {_e(tool_id)}", border_style="green"))
         else:
-            err_console.print(f"[red]Failed:[/red] {result.error}")
+            err_console.print(f"[red]Failed:[/red] {_e(result.error)}")
             raise typer.Exit(code=1) from None
     except json.JSONDecodeError as exc:
-        err_console.print(f"[red]Invalid JSON:[/red] {exc}")
+        err_console.print(f"[red]Invalid JSON:[/red] {_e(exc)}")
         raise typer.Exit(code=1) from None
     finally:
         kernel.shutdown()
@@ -614,7 +624,7 @@ def tools_audit(
         if not log:
             console.print("No audit entries found.")
             return
-        table = Table(title=f"Audit Log — {symbiote_id[:8]}")
+        table = Table(title=f"Audit Log — {_e(symbiote_id[:8])}")
         table.add_column("Time", style="dim")
         table.add_column("Tool", style="cyan")
         table.add_column("Action")
@@ -622,11 +632,11 @@ def tools_audit(
         table.add_column("Session", max_width=12)
         for entry in log:
             table.add_row(
-                entry.get("created_at", "")[:19],
-                entry["tool_id"],
-                entry["action"],
-                entry["result"],
-                (entry.get("session_id") or "")[:12],
+                _e(entry.get("created_at", "")[:19]),
+                _e(entry["tool_id"]),
+                _e(entry["action"]),
+                _e(entry["result"]),
+                _e((entry.get("session_id") or "")[:12]),
             )
         console.print(table)
     finally:
@@ -712,7 +722,7 @@ def init(
             err_console.print(f"[red]Failed to fetch symbiote:[/] HTTP {exc.code}")
             raise typer.Exit(1) from exc
         except Exception as exc:
-            err_console.print(f"[red]Connection error:[/] {exc}")
+            err_console.print(f"[red]Connection error:[/] {_e(exc)}")
             raise typer.Exit(1) from exc
     else:
         # Create new symbiote
@@ -730,10 +740,10 @@ def init(
                 data = _json.loads(resp.read())
                 symbiote_id = data["id"]
         except urllib.error.HTTPError as exc:
-            err_console.print(f"[red]Failed to create symbiote:[/] HTTP {exc.code}: {exc.read().decode()}")
+            err_console.print(f"[red]Failed to create symbiote:[/] HTTP {exc.code}: {_e(exc.read().decode())}")
             raise typer.Exit(1) from exc
         except Exception as exc:
-            err_console.print(f"[red]Connection error:[/] {exc}")
+            err_console.print(f"[red]Connection error:[/] {_e(exc)}")
             raise typer.Exit(1) from exc
 
     _write_symbiote_config({
@@ -743,9 +753,9 @@ def init(
         "name": name or symbiote_id,
     })
 
-    console.print(f"[green]✓[/] Connected to {server}")
-    console.print(f"[green]✓[/] Symbiote: [bold]{name}[/] ({symbiote_id[:8]}...)")
-    console.print(f"[green]✓[/] Config saved to [dim]{_SYMBIOTE_CONFIG_FILE}[/]")
+    console.print(f"[green]✓[/] Connected to {_e(server)}")
+    console.print(f"[green]✓[/] Symbiote: [bold]{_e(name)}[/] ({_e(symbiote_id[:8])}...)")
+    console.print(f"[green]✓[/] Config saved to [dim]{_e(_SYMBIOTE_CONFIG_FILE)}[/]")
     console.print("\nNext: [bold]symbiote discover .[/]")
 
 
@@ -793,24 +803,24 @@ def discover(
     )
 
     if url:
-        console.print(f"Scanning [dim]{abs_path}[/] + live OpenAPI from [dim]{url}[/] for [bold]{symbiote_name}[/]...")
+        console.print(f"Scanning [dim]{_e(abs_path)}[/] + live OpenAPI from [dim]{_e(url)}[/] for [bold]{_e(symbiote_name)}[/]...")
     else:
-        console.print(f"Scanning [dim]{abs_path}[/] for [bold]{symbiote_name}[/]...")
+        console.print(f"Scanning [dim]{_e(abs_path)}[/] for [bold]{_e(symbiote_name)}[/]...")
 
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = _json.loads(resp.read())
     except urllib.error.HTTPError as exc:
-        err_console.print(f"[red]Discovery failed:[/] HTTP {exc.code}: {exc.read().decode()}")
+        err_console.print(f"[red]Discovery failed:[/] HTTP {exc.code}: {_e(exc.read().decode())}")
         raise typer.Exit(1) from exc
     except Exception as exc:
-        err_console.print(f"[red]Connection error:[/] {exc}")
+        err_console.print(f"[red]Connection error:[/] {_e(exc)}")
         raise typer.Exit(1) from exc
 
     count = data.get("discovered", 0)
     errors = data.get("errors", [])
 
-    console.print(f"[green]✓[/] {count} tool(s) discovered")
+    console.print(f"[green]✓[/] {_e(count)} tool(s) discovered")
 
     if count > 0:
         table = Table(title="Discovered Tools")
@@ -820,19 +830,19 @@ def discover(
         table.add_column("Source", style="dim", max_width=40)
         for t in data.get("tools", []):
             table.add_row(
-                t["tool_id"],
-                t.get("method") or t.get("handler_type", ""),
-                t.get("url_template") or "",
-                (t.get("source_path") or "")[-40:],
+                _e(t["tool_id"]),
+                _e(t.get("method") or t.get("handler_type", "")),
+                _e(t.get("url_template") or ""),
+                _e((t.get("source_path") or "")[-40:]),
             )
         console.print(table)
 
     if errors:
         console.print(f"[yellow]Warnings:[/] {len(errors)} scan error(s)")
         for e in errors[:3]:
-            console.print(f"  [dim]{e}[/]")
+            console.print(f"  [dim]{_e(e)}[/]")
 
-    console.print(f"\nReview and approve at: [bold]{server}[/]")
+    console.print(f"\nReview and approve at: [bold]{_e(server)}[/]")
 
 
 @app.command()
@@ -871,12 +881,12 @@ def classify(
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = _json.loads(resp.read())
         except urllib.error.HTTPError as exc:
-            err_console.print(f"[red]Reset failed:[/] HTTP {exc.code}: {exc.read().decode()}")
+            err_console.print(f"[red]Reset failed:[/] HTTP {exc.code}: {_e(exc.read().decode())}")
             raise typer.Exit(1) from exc
         except Exception as exc:
-            err_console.print(f"[red]Connection error:[/] {exc}")
+            err_console.print(f"[red]Connection error:[/] {_e(exc)}")
             raise typer.Exit(1) from exc
-        console.print(f"[green]✓[/] Reset {data['reset']} tool(s) back to pending")
+        console.print(f"[green]✓[/] Reset {_e(data['reset'])} tool(s) back to pending")
         return
 
     if summary or not approve:
@@ -890,10 +900,10 @@ def classify(
             with urllib.request.urlopen(req, timeout=15) as resp:
                 tools = _json.loads(resp.read())
         except urllib.error.HTTPError as exc:
-            err_console.print(f"[red]Failed:[/] HTTP {exc.code}: {exc.read().decode()}")
+            err_console.print(f"[red]Failed:[/] HTTP {exc.code}: {_e(exc.read().decode())}")
             raise typer.Exit(1) from exc
         except Exception as exc:
-            err_console.print(f"[red]Connection error:[/] {exc}")
+            err_console.print(f"[red]Connection error:[/] {_e(exc)}")
             raise typer.Exit(1) from exc
 
         # Group by tag
@@ -910,7 +920,7 @@ def classify(
             else:
                 no_tag_status[status] += 1
 
-        table = Table(title=f"Tag Summary — {symbiote_name}")
+        table = Table(title=f"Tag Summary — {_e(symbiote_name)}")
         table.add_column("Tag", style="cyan")
         table.add_column("Pending", justify="right")
         table.add_column("Approved", justify="right", style="green")
@@ -920,12 +930,12 @@ def classify(
         for tag in sorted(tag_status):
             c = tag_status[tag]
             total = sum(c.values())
-            table.add_row(tag, str(c["pending"]), str(c["approved"]), str(c["disabled"]), str(total))
+            table.add_row(_e(tag), _e(str(c["pending"])), _e(str(c["approved"])), _e(str(c["disabled"])), _e(str(total)))
 
         if no_tag_status:
             c = no_tag_status
             total = sum(c.values())
-            table.add_row("[dim](no tag)[/]", str(c["pending"]), str(c["approved"]), str(c["disabled"]), str(total))
+            table.add_row("[dim](no tag)[/]", _e(str(c["pending"])), _e(str(c["approved"])), _e(str(c["disabled"])), _e(str(total)))
 
         console.print(table)
         console.print(f"\nTotal: {len(tools)} tool(s)")
@@ -949,13 +959,13 @@ def classify(
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = _json.loads(resp.read())
     except urllib.error.HTTPError as exc:
-        err_console.print(f"[red]Classify failed:[/] HTTP {exc.code}: {exc.read().decode()}")
+        err_console.print(f"[red]Classify failed:[/] HTTP {exc.code}: {_e(exc.read().decode())}")
         raise typer.Exit(1) from exc
     except Exception as exc:
-        err_console.print(f"[red]Connection error:[/] {exc}")
+        err_console.print(f"[red]Connection error:[/] {_e(exc)}")
         raise typer.Exit(1) from exc
 
-    console.print(f"[green]✓[/] Approved: {data['approved']}, Disabled: {data['disabled']}, Unchanged: {data['unchanged']}")
+    console.print(f"[green]✓[/] Approved: {_e(data['approved'])}, Disabled: {_e(data['disabled'])}, Unchanged: {_e(data['unchanged'])}")
 
 
 # ── audit: reflection ──────────────────────────────────────────────────────
@@ -993,7 +1003,7 @@ def audit_reflection(
             console.print("[yellow]No reflection_audit rows match.[/]")
             return
 
-        table = Table(title=f"reflection_audit (last {days}d, {len(rows)} rows)")
+        table = Table(title=f"reflection_audit (last {_e(days)}d, {len(rows)} rows)")
         table.add_column("Session", style="cyan", no_wrap=True)
         table.add_column("Mode")
         table.add_column("Keyword #", justify="right")
@@ -1007,12 +1017,12 @@ def audit_reflection(
             except Exception:
                 k_facts, l_facts = [], []
             table.add_row(
-                (r["session_id"] or "")[:8],
-                r["mode"] or "",
-                str(len(k_facts)),
-                str(len(l_facts)),
-                (r["llm_error"] or "")[:40],
-                (r["created_at"] or "")[:19],
+                _e((r["session_id"] or "")[:8]),
+                _e(r["mode"] or ""),
+                _e(str(len(k_facts))),
+                _e(str(len(l_facts))),
+                _e((r["llm_error"] or "")[:40]),
+                _e((r["created_at"] or "")[:19]),
             )
         console.print(table)
 
@@ -1025,11 +1035,11 @@ def audit_reflection(
                 except Exception:
                     continue
                 console.print(Panel(
-                    f"[cyan]session={r['session_id'][:8]} mode={r['mode']}[/]\n"
+                    f"[cyan]session={_e(r['session_id'][:8])} mode={_e(r['mode'])}[/]\n"
                     f"[yellow]keyword ({len(k_facts)}):[/] "
-                    f"{json.dumps(k_facts, ensure_ascii=False)[:300]}\n"
+                    f"{_e(json.dumps(k_facts, ensure_ascii=False)[:300])}\n"
                     f"[green]llm ({len(l_facts)}):[/] "
-                    f"{json.dumps(l_facts, ensure_ascii=False)[:300]}",
+                    f"{_e(json.dumps(l_facts, ensure_ascii=False)[:300])}",
                     expand=False,
                 ))
     finally:
@@ -1078,7 +1088,7 @@ def audit_skill_review(
             console.print("[yellow]No skill_review_audit rows match.[/]")
             return
 
-        table = Table(title=f"skill_review_audit (last {days}d, {len(rows)} rows)")
+        table = Table(title=f"skill_review_audit (last {_e(days)}d, {len(rows)} rows)")
         table.add_column("Session", style="cyan", no_wrap=True)
         table.add_column("Trigger")
         table.add_column("Applied", justify="right")
@@ -1088,13 +1098,13 @@ def audit_skill_review(
         table.add_column("When", no_wrap=True)
         for r in rows:
             table.add_row(
-                (r["session_id"] or "")[:8],
-                r["trigger"] or "",
-                str(r["applied"] or 0),
-                str(r["skipped"] or 0),
+                _e((r["session_id"] or "")[:8]),
+                _e(r["trigger"] or ""),
+                _e(str(r["applied"] or 0)),
+                _e(str(r["skipped"] or 0)),
                 "✓" if r["ok"] else "✗",
-                (r["error"] or "")[:30],
-                (r["created_at"] or "")[:19],
+                _e((r["error"] or "")[:30]),
+                _e((r["created_at"] or "")[:19]),
             )
         console.print(table)
 
@@ -1108,9 +1118,9 @@ def audit_skill_review(
                 if not ops:
                     continue
                 console.print(Panel(
-                    f"[cyan]session={(r['session_id'] or '')[:8]} "
-                    f"trigger={r['trigger']}[/]\n"
-                    f"{json.dumps(ops, ensure_ascii=False, indent=2)[:800]}",
+                    f"[cyan]session={_e((r['session_id'] or '')[:8])} "
+                    f"trigger={_e(r['trigger'])}[/]\n"
+                    f"{_e(json.dumps(ops, ensure_ascii=False, indent=2)[:800])}",
                     expand=False,
                 ))
     finally:
@@ -1176,7 +1186,7 @@ def audit_prune(
 
         table_rows = Table(
             title=f"Audit prune ({'dry-run' if dry_run else 'live'}, "
-                  f"cutoff {days}d)"
+                  f"cutoff {_e(days)}d)"
         )
         table_rows.add_column("Table", style="cyan")
         table_rows.add_column("Total rows", justify="right")
@@ -1201,7 +1211,7 @@ def audit_prune(
                     (cutoff_arg,),
                 )
             except Exception as exc:
-                err_console.print(f"[red]Cannot read {tbl}: {exc}[/]")
+                err_console.print(f"[red]Cannot read {_e(tbl)}: {_e(exc)}[/]")
                 continue
             total = int(total_row["c"] if total_row else 0)
             old = int(old_row["c"] if old_row else 0)
@@ -1216,13 +1226,13 @@ def audit_prune(
                 total_deleted += old
                 action = f"deleted {old}"
 
-            table_rows.add_row(tbl, str(total), str(old), action)
+            table_rows.add_row(_e(tbl), _e(str(total)), _e(str(old)), _e(action))
 
         console.print(table_rows)
         if dry_run:
             console.print("[dim]Dry-run — no rows were deleted.[/]")
         elif total_deleted > 0:
-            console.print(f"\n[green]✓[/] Pruned {total_deleted} row(s) total.")
+            console.print(f"\n[green]✓[/] Pruned {_e(total_deleted)} row(s) total.")
         else:
             console.print("[dim]Nothing to prune.[/]")
     finally:
@@ -1348,7 +1358,7 @@ def skills_list(
         pinned = "✓" if meta.get("pinned") else ""
         used = str(meta.get("use_count", 0))
         patched = str(meta.get("patch_count", 0))
-        table.add_row(s.name, s.status, author, used, patched, pinned, s.description[:50])
+        table.add_row(_e(s.name), _e(s.status), _e(author), _e(used), _e(patched), _e(pinned), _e(s.description[:50]))
     console.print(table)
 
 
@@ -1368,11 +1378,11 @@ def skills_promote(
     loader = SkillsLoader(*_resolve_loader_roots(roots, layout))
     skill = loader.get_skill(name)
     if skill is None:
-        err_console.print(f"[red]Skill {name!r} not found.[/]")
+        err_console.print(f"[red]Skill {_e(repr(name))} not found.[/]")
         raise typer.Exit(1)
 
     _usage.set_status(skill.path.parent, _usage.STATUS_ACTIVE)
-    console.print(f"[green]✓[/] {name} promoted to active.")
+    console.print(f"[green]✓[/] {_e(name)} promoted to active.")
 
 
 @skills_app.command("pin")
@@ -1392,12 +1402,12 @@ def skills_pin(
     loader = SkillsLoader(*_resolve_loader_roots(roots, layout))
     skill = loader.get_skill(name)
     if skill is None:
-        err_console.print(f"[red]Skill {name!r} not found.[/]")
+        err_console.print(f"[red]Skill {_e(repr(name))} not found.[/]")
         raise typer.Exit(1)
 
     _usage.set_pinned(skill.path.parent, not unpin)
     state = "unpinned" if unpin else "pinned"
-    console.print(f"[green]✓[/] {name} {state}.")
+    console.print(f"[green]✓[/] {_e(name)} {_e(state)}.")
 
 
 if __name__ == "__main__":
