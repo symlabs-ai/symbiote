@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -11,6 +12,8 @@ from symbiote.environment.descriptors import HttpToolConfig, ToolDescriptor
 if TYPE_CHECKING:
     from symbiote.environment.tools import ToolGateway
 
+
+logger = logging.getLogger(__name__)
 
 class DiscoveredToolLoader:
     """Bridges approved discovered_tools → ToolGateway.
@@ -65,14 +68,28 @@ class DiscoveredToolLoader:
         approved = self._repo.list(symbiote_id, status="approved")
         registered: list[str] = []
         base = base_url.rstrip("/")
+        base_origin = _origin(base) if base else None
 
         for tool in approved:
             if tool.handler_type == "custom":
                 continue
             if not tool.method or not tool.url_template:
                 continue
+            existing = self._gateway.get_descriptor(tool.tool_id)
+            if existing is not None and existing.handler_type != "http":
+                # A spec operationId must never replace a builtin/custom tool
+                # (e.g. "bash") for every symbiote on the gateway.
+                logger.warning(
+                    "Discovered tool %r collides with a %s tool; not loaded",
+                    tool.tool_id, existing.handler_type,
+                )
+                continue
 
             url = tool.url_template.replace("{base_url}", base)
+            # Host credentials and internal-network access only for the host's
+            # own API (same origin as base_url). With no base_url the human
+            # approval is the only gate, as before.
+            trusted = base_origin is None or _origin(url) == base_origin
 
             descriptor = ToolDescriptor(
                 tool_id=tool.tool_id,
@@ -95,8 +112,8 @@ class DiscoveredToolLoader:
             config = HttpToolConfig(
                 method=tool.method,  # type: ignore[arg-type]
                 url_template=url,
-                allow_internal=True,
-                header_factory=header_factory,
+                allow_internal=trusted,
+                header_factory=header_factory if trusted else None,
                 body_template=body_template,
                 optional_params=optional_params,
                 array_params=array_params,
@@ -106,6 +123,14 @@ class DiscoveredToolLoader:
             registered.append(tool.tool_id)
 
         return registered
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    default = {"http": 80, "https": 443}.get(parts.scheme)
+    return (parts.scheme, (parts.hostname or "").lower(), parts.port or default)
 
 
 def _derive_http_config(

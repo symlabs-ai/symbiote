@@ -54,8 +54,9 @@ class DiscoveryService:
         parameter schemas.  Live OpenAPI results take priority over file-based
         scanning in deduplication (first-seen wins).
 
-        Existing tools (same symbiote_id + tool_id) are updated without
-        changing their approval status (upsert preserves status).
+        Existing tools (same symbiote_id + tool_id) keep their approval status
+        unless their method, URL, parameters or risk changed: then they go
+        back to "pending" and need to be approved again.
         """
         root = Path(source_path).resolve()
         result = DiscoveryResult(symbiote_id=symbiote_id, source_path=str(root))
@@ -108,6 +109,11 @@ class DiscoveryService:
         """
         import urllib.error
         import urllib.request
+        from urllib.parse import urlsplit
+
+        if urlsplit(url).scheme not in ("http", "https"):
+            result.errors.append(f"openapi_url:{url}: only http(s) URLs are allowed")
+            return []
 
         base_url = url.rstrip("/")
         openapi_url = f"{base_url}/openapi.json"
@@ -126,29 +132,26 @@ class DiscoveryService:
             return []
 
         tools: list[DiscoveredTool] = []
-        for path, methods in spec.get("paths", {}).items():
-            for method, op in methods.items():
-                if method.upper() not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
-                    continue
-                op_id = op.get("operationId") or _path_to_tool_id(method, path)
-                summary = op.get("summary") or op.get("description") or f"{method.upper()} {path}"
-                parameters = _openapi_params_to_schema(
-                    op.get("parameters", []), op.get("requestBody"), spec
-                )
-                tools.append(DiscoveredTool(
-                    id=str(uuid4()),
-                    symbiote_id=symbiote_id,
-                    tool_id=_slugify(op_id),
-                    name=summary[:80],
-                    description=op.get("description") or summary,
-                    method=method.upper(),
-                    url_template=f"{base_url}{path}",
-                    parameters=parameters,
-                    tags=op.get("tags", []),
-                    risk_level=_risk_for_operation(method, op),
-                    source_path=openapi_url,
-                    discovered_at=now,
-                ))
+        for path, method, op in _iter_operations(spec, result.errors):
+            op_id = op.get("operationId") or _path_to_tool_id(method, path)
+            summary = op.get("summary") or op.get("description") or f"{method.upper()} {path}"
+            parameters = _openapi_params_to_schema(
+                op.get("parameters", []), op.get("requestBody"), spec
+            )
+            tools.append(DiscoveredTool(
+                id=str(uuid4()),
+                symbiote_id=symbiote_id,
+                tool_id=_slugify(op_id),
+                name=summary[:80],
+                description=op.get("description") or summary,
+                method=method.upper(),
+                url_template=f"{base_url}{path}",
+                parameters=parameters,
+                tags=op.get("tags", []),
+                risk_level=_risk_for_operation(method, op),
+                source_path=openapi_url,
+                discovered_at=now,
+            ))
         return tools
 
     def _scan_openapi(
@@ -171,14 +174,18 @@ class DiscoveryService:
         for spec_file in candidates:
             try:
                 tools.extend(
-                    self._parse_openapi_file(symbiote_id, spec_file, now)
+                    self._parse_openapi_file(symbiote_id, spec_file, now, result.errors)
                 )
             except Exception as exc:
                 result.errors.append(f"openapi:{spec_file}: {exc}")
         return tools
 
     def _parse_openapi_file(
-        self, symbiote_id: str, spec_file: Path, now: str
+        self,
+        symbiote_id: str,
+        spec_file: Path,
+        now: str,
+        errors: list[str] | None = None,
     ) -> list[DiscoveredTool]:
         import yaml  # optional dep — graceful fallback below
 
@@ -200,27 +207,24 @@ class DiscoveryService:
         servers = spec.get("servers", [{}])
         base_url = servers[0].get("url", "") if servers else ""
         tools: list[DiscoveredTool] = []
-        for path, methods in spec.get("paths", {}).items():
-            for method, op in methods.items():
-                if method.upper() not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
-                    continue
-                op_id = op.get("operationId") or _path_to_tool_id(method, path)
-                summary = op.get("summary") or op.get("description") or f"{method.upper()} {path}"
-                parameters = _openapi_params_to_schema(op.get("parameters", []), op.get("requestBody"), spec)
-                tools.append(DiscoveredTool(
-                    id=str(uuid4()),
-                    symbiote_id=symbiote_id,
-                    tool_id=_slugify(op_id),
-                    name=summary[:80],
-                    description=op.get("description") or summary,
-                    method=method.upper(),
-                    url_template=f"{base_url}{path}",
-                    parameters=parameters,
-                    tags=op.get("tags", []),
-                    risk_level=_risk_for_operation(method, op),
-                    source_path=str(spec_file),
-                    discovered_at=now,
-                ))
+        for path, method, op in _iter_operations(spec, errors):
+            op_id = op.get("operationId") or _path_to_tool_id(method, path)
+            summary = op.get("summary") or op.get("description") or f"{method.upper()} {path}"
+            parameters = _openapi_params_to_schema(op.get("parameters", []), op.get("requestBody"), spec)
+            tools.append(DiscoveredTool(
+                id=str(uuid4()),
+                symbiote_id=symbiote_id,
+                tool_id=_slugify(op_id),
+                name=summary[:80],
+                description=op.get("description") or summary,
+                method=method.upper(),
+                url_template=f"{base_url}{path}",
+                parameters=parameters,
+                tags=op.get("tags", []),
+                risk_level=_risk_for_operation(method, op),
+                source_path=str(spec_file),
+                discovered_at=now,
+            ))
         return tools
 
     def _scan_fastapi(
@@ -381,6 +385,30 @@ def _risk_for_operation(method: str, op: dict[str, Any]) -> str:
     if isinstance(raw, str) and raw.lower() in _VALID_RISK:
         return raw.lower()
     return _METHOD_RISK.get(method.upper(), "medium")
+
+
+def _iter_operations(spec: dict, errors: list[str] | None = None):  # noqa: ANN202
+    """(path, method, operation) for each valid operation of an OpenAPI spec.
+
+    Malformed entries (a null path item, an operation that is not an
+    object) are reported in ``errors`` and skipped instead of raising.
+    """
+    errors = errors if errors is not None else []
+    paths = spec.get("paths")
+    if not isinstance(paths, dict):
+        errors.append("openapi: 'paths' is not an object")
+        return
+    for path, methods in paths.items():
+        if not isinstance(methods, dict):
+            errors.append(f"openapi: {path}: path item is not an object")
+            continue
+        for method, op in methods.items():
+            if method.upper() not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+                continue
+            if not isinstance(op, dict):
+                errors.append(f"openapi: {method.upper()} {path}: operation is not an object")
+                continue
+            yield path, method, op
 
 
 def _path_to_tool_id(method: str, path: str) -> str:

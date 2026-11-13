@@ -26,6 +26,20 @@ class DiscoveredToolRepository:
                  status, source_path, discovered_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(symbiote_id, tool_id) DO UPDATE SET
+                -- An approved tool whose behaviour changed (method, URL,
+                -- parameters or risk) needs a human to approve it again.
+                status = CASE
+                    WHEN discovered_tools.method IS NOT excluded.method
+                      OR discovered_tools.url_template IS NOT excluded.url_template
+                      OR discovered_tools.parameters_json IS NOT excluded.parameters_json
+                      OR discovered_tools.risk_level IS NOT excluded.risk_level
+                    THEN 'pending' ELSE discovered_tools.status END,
+                approved_at = CASE
+                    WHEN discovered_tools.method IS NOT excluded.method
+                      OR discovered_tools.url_template IS NOT excluded.url_template
+                      OR discovered_tools.parameters_json IS NOT excluded.parameters_json
+                      OR discovered_tools.risk_level IS NOT excluded.risk_level
+                    THEN NULL ELSE discovered_tools.approved_at END,
                 name           = excluded.name,
                 description    = excluded.description,
                 handler_type   = excluded.handler_type,
