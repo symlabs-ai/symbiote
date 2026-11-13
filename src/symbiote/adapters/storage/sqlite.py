@@ -343,6 +343,7 @@ class SQLiteAdapter:
 
         self._ensure_unique_external_key()
         self._ensure_unique_environment_config()
+        self._ensure_hot_indexes()
 
     def _ensure_unique_external_key(self) -> None:
         """One session per (symbiote_id, external_key).
@@ -368,6 +369,23 @@ class SQLiteAdapter:
                 "unique index was not created. Merge or close the duplicates to enable it.",
                 dup,
             )
+
+    # Indexes for the queries every turn / close runs (report item P-1):
+    # messages of a session, active memories of a symbiote, closed sessions
+    # since the last dream, traces of a session.
+    _HOT_INDEXES = (
+        "CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_memory_symbiote_active "
+        "ON memory_entries(symbiote_id, is_active, type)",
+        "CREATE INDEX IF NOT EXISTS idx_sessions_symbiote_status "
+        "ON sessions(symbiote_id, status, ended_at)",
+        "CREATE INDEX IF NOT EXISTS idx_traces_session ON execution_traces(session_id)",
+    )
+
+    def _ensure_hot_indexes(self) -> None:
+        for sql in self._HOT_INDEXES:
+            self._conn.execute(sql)
+        self._conn.commit()
 
     def _ensure_unique_environment_config(self) -> None:
         """One environment config per (symbiote_id, workspace_id).
