@@ -31,3 +31,4 @@ Thumbs.db
 symbiote.db
 symbiote.db-shm
 symbiote.db-wal
+.coverage

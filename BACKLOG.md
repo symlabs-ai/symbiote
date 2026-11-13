@@ -51,6 +51,7 @@ Documentação completa em `~/dev/kb/engenharia/meta_harness.md`, seção 4 (Bac
 | B-30 | Working memory intermediária — loop summary in WorkingMemory | 2026-04-01 | 0.2.27 |
 | B-68 | Memory/Knowledge on-demand — search_memories/search_knowledge tools | 2026-04-01 | 0.2.27 |
 | B-69 | Streaming na API HTTP: `POST /sessions/{id}/chat` só responde no fim do turno. O kernel já tem `message_async(on_token=...)`; falta expor por SSE (ou um endpoint `/chat/stream`) e documentar no SDK. Fora do plano de melhorias de 2026-11 (D-17) | 2026-11-13, relatório de melhorias | média | |
+| B-70 | Container roda como root: o `Dockerfile` não define `USER`. Trocar por um usuário sem privilégios exige ajustar as permissões do volume de staging (`staging-symbiote`) antes; por isso ficou fora do plano de melhorias de 2026-11 (D-16) | 2026-11-13, relatório de melhorias | média | |
 | H-11 | BenchmarkRunner — task grading (tool_called, param_match, custom) | 2026-04-01 | 0.2.27 |
 | H-12 | StructuralEvolver — pluggable strategy registry | 2026-04-01 | 0.2.27 |
 | H-13 | CrossSymbioteLearner — tool overlap + version transfer | 2026-04-01 | 0.2.27 |
