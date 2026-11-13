@@ -1,5 +1,7 @@
 line-length = 88
 target-version = "py312"
+# Scripts de reprodução dos relatórios são descartáveis, fora do padrão do código.
+extend-exclude = ["reports"]
 
 [lint]
 # Conjunto de regras enxuto e moderno: erros/avisos básicos, import sorting,
