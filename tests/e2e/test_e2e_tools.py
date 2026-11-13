@@ -72,7 +72,11 @@ class TestToolLifecycle:
 
         # 6. Response should contain tool results
         assert isinstance(response, dict)
-        assert "calculate" in response["text"].lower() or "result" in response["text"].lower()
+        # The mock asks for the tool on every call, even after the loop tells
+        # it to stop, so its "Let me calculate that." narration is not an
+        # answer: the runner returns a non-empty fallback text instead.
+        assert response["text"].strip()
+        assert "let me calculate" not in response["text"].lower()
         assert len(response["tool_results"]) >= 1
         assert response["tool_results"][0]["success"] is True
         assert response["tool_results"][0]["output"] == 15

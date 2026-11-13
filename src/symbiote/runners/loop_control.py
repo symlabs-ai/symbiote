@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import string
 
 
 class LoopController:
@@ -45,6 +46,10 @@ class LoopController:
         "Tool '{tool_id}' is unavailable (failed {count} times). "
         "Do not retry it. Respond to the user with what you have."
     )
+    _DEFAULT_MAX_ITERATIONS_MSG = (
+        "You have reached the tool-call limit for this turn. Do not call any "
+        "more tools. Answer the user now with what you have."
+    )
 
     def __init__(
         self,
@@ -60,16 +65,23 @@ class LoopController:
         self._iteration = 0
 
     def record(self, tool_id: str, params: dict, success: bool) -> None:
-        """Record a tool call result."""
+        """Record a tool call result.
+
+        Does not advance the iteration count: one model round can emit
+        several tool calls. Call ``end_round()`` once per round.
+        """
         params_key = json.dumps(params, sort_keys=True, default=str)
         self._history.append((tool_id, params_key, success))
-        self._iteration += 1
 
         # Update consecutive failure tracking
         if success:
             self._failure_counts[tool_id] = 0
         else:
             self._failure_counts[tool_id] = self._failure_counts.get(tool_id, 0) + 1
+
+    def end_round(self) -> None:
+        """Mark the end of one model round (one LLM call and its tool calls)."""
+        self._iteration += 1
 
     def should_stop(self) -> tuple[bool, str]:
         """Return (should_stop, reason) based on loop health.
@@ -112,11 +124,16 @@ class LoopController:
     def get_injection_message(self) -> str | None:
         """Return a message to inject into the conversation when stopping.
 
-        Returns None if no injection needed (e.g. max_iterations or no stop).
+        Returns None when the loop should not stop. Every stop reason gets a
+        message, so the runner always asks the model for a final answer
+        instead of returning the narration of a tool-call turn.
         """
         should_stop, reason = self.should_stop()
         if not should_stop:
             return None
+
+        if reason == "max_iterations":
+            return self._DEFAULT_MAX_ITERATIONS_MSG
 
         if reason == "stagnation":
             return self._stagnation_msg
@@ -125,9 +142,25 @@ class LoopController:
             # Find the tool that triggered the breaker
             for tool_id, count in self._failure_counts.items():
                 if count >= 3:
-                    return self._circuit_breaker_msg.format(
-                        tool_id=tool_id, count=count,
+                    return _format_override(
+                        self._circuit_breaker_msg, tool_id=tool_id, count=count
                     )
 
-        # max_iterations — no special injection needed
         return None
+
+
+class _KeepUnknown(dict):
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _format_override(template: str, **values: object) -> str:
+    """``str.format`` that tolerates text from harness_versions overrides.
+
+    Unknown placeholders (``{tool}``) are left as-is and a template that is
+    not a valid format string (JSON, a lone brace) is returned verbatim.
+    """
+    try:
+        return string.Formatter().vformat(template, (), _KeepUnknown(values))
+    except (ValueError, IndexError):
+        return template

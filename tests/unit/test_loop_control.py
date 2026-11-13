@@ -15,12 +15,19 @@ from symbiote.runners.loop_control import LoopController
 class TestMaxIterations:
     def test_stops_at_max_iterations(self) -> None:
         ctrl = LoopController(max_iterations=3)
-        ctrl.record("tool_a", {"x": 1}, True)
-        ctrl.record("tool_b", {"y": 2}, True)
-        ctrl.record("tool_c", {"z": 3}, True)
+        for tool, params in (("tool_a", {"x": 1}), ("tool_b", {"y": 2}), ("tool_c", {"z": 3})):
+            ctrl.record(tool, params, True)
+            ctrl.end_round()
         should_stop, reason = ctrl.should_stop()
         assert should_stop is True
         assert reason == "max_iterations"
+
+    def test_tool_calls_within_one_round_do_not_count_as_iterations(self) -> None:
+        ctrl = LoopController(max_iterations=3)
+        for i in range(12):
+            ctrl.record("fetch", {"n": i}, True)
+        ctrl.end_round()
+        assert ctrl.should_stop() == (False, "")
 
     def test_does_not_stop_before_max(self) -> None:
         ctrl = LoopController(max_iterations=5)

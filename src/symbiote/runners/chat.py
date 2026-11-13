@@ -62,6 +62,15 @@ _DEFAULT_CONTEXT_BUDGET = 16000
 # After autocompact, a fresh tool result is never cut below this many chars.
 _MIN_RESULT_CHARS_AFTER_AUTOCOMPACT = 2000
 _MAX_LLM_RETRIES = 3
+# User-facing texts when the loop ends without a model answer (same language
+# as response_validator's fallback).
+_LOOP_TIMEOUT_TEXT = (
+    "Não consegui concluir a tarefa dentro do tempo limite. "
+    "Posso continuar de onde parei se você pedir."
+)
+_NO_FINAL_ANSWER_TEXT = (
+    "Não consegui chegar a uma resposta final com as ferramentas disponíveis."
+)
 _LLM_RETRY_BASE = 1  # seconds
 _LLM_RETRY_MULTIPLIER = 2
 
@@ -485,10 +494,9 @@ class ChatRunner:
         final_text = ""
         loop_start = time.monotonic()
         loop_timeout = context.loop_timeout
-        last_iteration = 0
+        rounds = 0  # model rounds actually executed (LLM calls in the loop)
 
         for iteration in range(max_iters):
-            last_iteration = iteration
             # Check loop timeout before each iteration
             if time.monotonic() - loop_start > loop_timeout:
                 logger.info("[tool-loop] loop timeout exceeded (%.1fs)", loop_timeout)
@@ -510,6 +518,7 @@ class ChatRunner:
                     ),
                     prepared,
                 )
+            rounds += 1
 
             clean_text, tool_calls = self._parse_response(response)
             self._validate_protocol_response(
@@ -614,6 +623,7 @@ class ChatRunner:
                     elapsed_ms=step_elapsed,
                 ))
                 controller.record(tc.tool_id, tc.params, tr.success)
+            controller.end_round()
 
             # Hook: let the caller decide whether tool results end the loop.
             # Returns a string to use as final text, or None to continue.
@@ -636,6 +646,10 @@ class ChatRunner:
             if should_stop:
                 trace.stop_reason = stop_reason
                 injection = controller.get_injection_message()
+                if stop_reason == "max_iterations" and not context.tool_loop:
+                    # Single-shot turn (tool_loop disabled): the host takes
+                    # the tool results as they are; no follow-up model call.
+                    injection = None
                 if injection:
                     self._append_tool_exchange(
                         messages,
@@ -668,7 +682,9 @@ class ChatRunner:
                             inj_calls,
                             protocol_state,
                         )
-                        final_text = inj_text
+                        # A reply that still asks for tools ignored the stop
+                        # instruction; its text is narration, not an answer.
+                        final_text = inj_text if not inj_calls else ""
                         if on_token is not None:
                             if inj_chunks is not None:
                                 for chunk in inj_chunks:
@@ -696,11 +712,17 @@ class ChatRunner:
                 self._on_progress("iteration_end", iteration + 1, max_iters)
 
         # Finalize trace
-        trace.total_iterations = last_iteration + 1 if context.tool_loop else 0
+        trace.total_iterations = rounds if context.tool_loop else 0
         trace.total_tool_calls = len(trace.steps)
         trace.total_elapsed_ms = int((time.monotonic() - loop_start) * 1000)
         if trace.stop_reason is None:
             trace.stop_reason = "end_turn" if trace.total_iterations > 0 else None
+        final_text = self._ensure_final_text(
+            final_text,
+            trace.stop_reason,
+            bool(all_tool_results) and context.tool_loop,
+            on_token,
+        )
 
         # Save final response (with loop summary) to working memory
         if self._working_memory is not None:
@@ -767,6 +789,7 @@ class ChatRunner:
         final_text = ""
         loop_start = time.monotonic()
         loop_timeout = context.loop_timeout
+        rounds = 0  # model rounds actually executed (LLM calls in the loop)
 
         for iteration in range(max_iters):
             # Check loop timeout before each iteration
@@ -790,6 +813,7 @@ class ChatRunner:
                     ),
                     prepared,
                 )
+            rounds += 1
 
             clean_text, tool_calls = self._parse_response(response)
             self._validate_protocol_response(
@@ -896,12 +920,17 @@ class ChatRunner:
 
                 # Record in loop controller
                 controller.record(tc.tool_id, tc.params, tr.success)
+            controller.end_round()
 
             # Check loop health — stop early on stagnation or circuit breaker
             should_stop, stop_reason = controller.should_stop()
             if should_stop:
                 trace.stop_reason = stop_reason
                 injection = controller.get_injection_message()
+                if stop_reason == "max_iterations" and not context.tool_loop:
+                    # Single-shot turn (tool_loop disabled): the host takes
+                    # the tool results as they are; no follow-up model call.
+                    injection = None
                 if injection:
                     self._append_tool_exchange(
                         messages,
@@ -934,7 +963,9 @@ class ChatRunner:
                             inj_calls,
                             protocol_state,
                         )
-                        final_text = inj_text
+                        # A reply that still asks for tools ignored the stop
+                        # instruction; its text is narration, not an answer.
+                        final_text = inj_text if not inj_calls else ""
                         if on_token is not None:
                             if inj_chunks is not None:
                                 for chunk in inj_chunks:
@@ -960,11 +991,17 @@ class ChatRunner:
             if self._on_progress is not None:
                 self._on_progress("iteration_end", iteration + 1, max_iters)
 
-        trace.total_iterations = iteration + 1 if context.tool_loop else 0
+        trace.total_iterations = rounds if context.tool_loop else 0
         trace.total_tool_calls = len(trace.steps)
         trace.total_elapsed_ms = int((time.monotonic() - loop_start) * 1000)
         if trace.stop_reason is None:
             trace.stop_reason = "end_turn" if trace.total_iterations > 0 else None
+        final_text = self._ensure_final_text(
+            final_text,
+            trace.stop_reason,
+            bool(all_tool_results) and context.tool_loop,
+            on_token,
+        )
 
         if self._working_memory is not None:
             if all_tool_results:
@@ -1030,6 +1067,30 @@ class ChatRunner:
         return approved, denied
 
     # ── Loop summary for working memory ─────────────────────────────────
+
+    @staticmethod
+    def _ensure_final_text(
+        final_text: str,
+        stop_reason: str | None,
+        tools_ran: bool,
+        on_token: Callable[[str], None] | None,
+    ) -> str:
+        """Never end a turn that ran tools with an empty or narration-only text.
+
+        On timeout the last text is the narration of a tool-call turn ("let me
+        check one more source..."), so it is replaced. Otherwise an empty text
+        (the model kept asking for tools even when told to stop) gets a
+        generic answer.
+        """
+        if stop_reason == "timeout":
+            replacement = _LOOP_TIMEOUT_TEXT
+        elif tools_ran and not final_text.strip():
+            replacement = _NO_FINAL_ANSWER_TEXT
+        else:
+            return final_text
+        if on_token is not None:
+            on_token(replacement)
+        return replacement
 
     @staticmethod
     def _build_loop_summary(tool_results: list[ToolCallResult]) -> str:
