@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -52,6 +53,21 @@ from symbiote.skills.scope import (
 )
 from symbiote.skills.store import SkillsStore
 from symbiote.workspace.manager import WorkspaceManager
+
+
+def _warn_if_results_exceed_loop_budget(config: KernelConfig) -> None:
+    """A single tool result larger than about half the loop budget is cut by
+    autocompact (and its tail lost). Tell the host which knob to turn."""
+    # Autocompact triggers at 80% of loop_context_budget tokens (~4 chars each).
+    loop_chars = int(config.loop_context_budget * 0.8) * 4
+    if config.tool_result_max_chars > loop_chars // 2:
+        logging.getLogger(__name__).warning(
+            "tool_result_max_chars=%d is large for loop_context_budget=%d tokens; "
+            "results that size will be truncated to fit the loop. Raise "
+            "loop_context_budget together with tool_result_max_chars.",
+            config.tool_result_max_chars,
+            config.loop_context_budget,
+        )
 
 
 class SymbioteKernel:
@@ -120,12 +136,14 @@ class SymbioteKernel:
 
         # Runners
         self._runner_registry = RunnerRegistry()
+        _warn_if_results_exceed_loop_budget(config)
         if llm is not None:
             self._runner_registry.register(
                 ChatRunner(
                     llm,
                     tool_gateway=self._tool_gateway,
                     tool_result_max_chars=config.tool_result_max_chars,
+                    context_budget=config.loop_context_budget,
                     # Resolver form: ChatRunner is per-kernel, but
                     # skill_review_enabled is per-symbiote. The resolver
                     # returns the engine (or None) for the symbiote driving

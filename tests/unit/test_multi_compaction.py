@@ -180,9 +180,12 @@ class TestAutocompact:
 
         result = runner._autocompact_if_needed(messages, initial)
         assert result is True
-        # After autocompact: initial messages + 1 summary
-        assert len(messages) == initial + 1
+        # After autocompact: initial messages + 1 summary of the older steps
+        # + the latest exchange, kept because the model has not read it yet.
+        assert len(messages) == initial + 3
         assert "autocompact" in messages[initial]["content"].lower()
+        assert messages[-2]["content"].startswith("call 2")
+        assert messages[-1]["content"].startswith("[Tool result: t2]")
 
     def test_autocompact_summary_contains_tool_ids(self) -> None:
         runner = ChatRunner(MockLLM("ok"), context_budget=50)
@@ -199,8 +202,8 @@ class TestAutocompact:
         runner._autocompact_if_needed(messages, initial)
         summary = messages[initial]["content"]
         assert "items_search" in summary
-        assert "items_publish" in summary
-        assert "error" in summary
+        assert "items_publish" not in summary  # latest exchange stays verbatim
+        assert messages[-1]["content"] == "[Tool error: items_publish]\nfailed"
 
     def test_autocompact_no_loop_messages(self) -> None:
         runner = ChatRunner(MockLLM("ok"), context_budget=10)

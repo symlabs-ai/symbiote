@@ -288,10 +288,14 @@ class ContextAssembler:
             memory_share=memory_share, knowledge_share=knowledge_share,
         )
 
-        # 7. Compute total token estimate
+        # 7. Compute total token estimate — includes what the runner renders
+        # into the system prompt besides the trimmed sections: tool schemas
+        # and host-provided extra_context.
         total = self._total_tokens(
             persona, wm_snapshot, memories_dicts, knowledge_dicts, user_input
         )
+        total += sum(self._estimate_tokens(json.dumps(t, default=str)) for t in tool_dicts)
+        total += self._dict_tokens(extra_context)
 
         # Build generation_settings with prompt_caching if enabled
         gen_settings: dict | None = None

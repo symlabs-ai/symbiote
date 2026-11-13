@@ -55,7 +55,12 @@ _COMPACTION_THRESHOLD = 4  # compact after this many loop-added message pairs
 _CHARS_PER_TOKEN = 4  # rough estimate for token counting
 _MICROCOMPACT_MAX_CHARS = 2000  # truncate individual tool results beyond this
 _AUTOCOMPACT_THRESHOLD = 0.80  # trigger autocompact at 80% of context budget
-_DEFAULT_CONTEXT_BUDGET = 16000  # tokens; overridden by context.total_tokens_estimate
+# Loop context budget (tokens) used by Layer 3 autocompact. The kernel passes
+# KernelConfig.loop_context_budget; this is the default for hosts that build
+# a ChatRunner directly.
+_DEFAULT_CONTEXT_BUDGET = 16000
+# After autocompact, a fresh tool result is never cut below this many chars.
+_MIN_RESULT_CHARS_AFTER_AUTOCOMPACT = 2000
 _MAX_LLM_RETRIES = 3
 _LLM_RETRY_BASE = 1  # seconds
 _LLM_RETRY_MULTIPLIER = 2
@@ -1375,89 +1380,128 @@ class ChatRunner:
             self._tool_result_max_chars,
         )
 
+    @staticmethod
+    def _message_chars(message: dict) -> int:
+        total = 0
+        for key in ("content", "tool_calls", "reasoning_content", "reasoning_state"):
+            value = message.get(key)
+            if value is None:
+                continue
+            if isinstance(value, str):
+                total += len(value)
+            else:
+                total += len(json.dumps(value, default=str, ensure_ascii=False))
+        return total
+
+    @staticmethod
+    def _summarize_step(message: dict) -> tuple[str, str] | None:
+        """(tool_id, status) for a tool-result message, else None."""
+        role = message.get("role")
+        content = message.get("content")
+        result_text = content if isinstance(content, str) else ""
+        if role == "tool":
+            tool_id = message.get("name") or message.get("tool_call_id") or "unknown"
+            status = (
+                "error"
+                if '"success":false' in result_text.replace(" ", "").lower()
+                else "ok"
+            )
+            return tool_id, status
+        if role == "user" and "[Tool result: " in result_text:
+            return result_text.split("[Tool result: ")[1].split("]")[0], "ok"
+        if role == "user" and "[Tool error: " in result_text:
+            return result_text.split("[Tool error: ")[1].split("]")[0], "error"
+        return None
+
     def _autocompact_if_needed(
         self, messages: list[dict], initial_count: int
     ) -> bool:
-        """Aggressively compact when total tokens approach context budget.
+        """Compact when total tokens approach the loop context budget.
 
-        Layer 3 of the 3-layer compaction system.  Estimates the total
-        token count of all messages and, when it exceeds
-        ``_AUTOCOMPACT_THRESHOLD`` of the budget, replaces ALL loop
-        messages (not just old ones) with a single summary.
+        Layer 3 of the 3-layer compaction system. When the estimated size of
+        all messages exceeds ``_AUTOCOMPACT_THRESHOLD`` of
+        ``self._context_budget``:
 
-        Returns True if compaction was performed.
+        1. every loop message *before* the most recent exchange (the last
+           assistant turn and the tool results that answer it) is replaced
+           by a one-line-per-step summary. The latest exchange is never
+           summarized: the model has not read those results yet, and hiding
+           them makes it repeat tools with side effects;
+        2. if that is still over budget, the tool results of the latest
+           exchange are truncated (never removed) to fit, keeping their
+           beginning.
+
+        Returns True if anything was changed.
         """
-        total_chars = 0
-        for message in messages:
-            for key in (
-                "content",
-                "tool_calls",
-                "reasoning_content",
-                "reasoning_state",
-            ):
-                value = message.get(key)
-                if value is None:
-                    continue
-                if isinstance(value, str):
-                    total_chars += len(value)
-                else:
-                    total_chars += len(
-                        json.dumps(value, default=str, ensure_ascii=False)
-                    )
-        estimated_tokens = total_chars // _CHARS_PER_TOKEN
-        threshold = int(self._context_budget * _AUTOCOMPACT_THRESHOLD)
-
-        if estimated_tokens <= threshold:
+        threshold_chars = int(self._context_budget * _AUTOCOMPACT_THRESHOLD) * _CHARS_PER_TOKEN
+        if sum(self._message_chars(m) for m in messages) <= threshold_chars:
             return False
 
         loop_messages = messages[initial_count:]
-        if len(loop_messages) < 2:
+        assistant_positions = [
+            idx for idx, m in enumerate(loop_messages) if m.get("role") == "assistant"
+        ]
+        if not assistant_positions:
             return False
+        last_start = assistant_positions[-1]
+        older = loop_messages[:last_start]
+        last_exchange = loop_messages[last_start:]
+        changed = False
 
-        logger.info(
-            "[autocompact] tokens ~%d exceed threshold %d; compacting %d loop messages",
-            estimated_tokens, threshold, len(loop_messages),
-        )
+        if older:
+            steps: list[str] = []
+            for step in older:
+                summary = self._summarize_step(step)
+                if summary is not None:
+                    tool_id, status = summary
+                    steps.append(f"{len(steps) + 1}) {tool_id} → {status}")
+            logger.info(
+                "[autocompact] over budget; summarizing %d older loop messages",
+                len(older),
+            )
+            summary_msg = {
+                "role": "user",
+                "content": (
+                    "[Autocompact — context budget pressure, earlier loop steps summarized]\n"
+                    "Steps completed:\n"
+                    + ("\n".join(steps) if steps else "Tool exchanges compacted.")
+                    + "\nThe most recent tool results follow in full. "
+                    "Do not repeat completed steps."
+                ),
+            }
+            messages[initial_count:] = [summary_msg, *last_exchange]
+            changed = True
 
-        steps: list[str] = []
-        for message in loop_messages:
-            role = message.get("role")
-            content = message.get("content")
-            result_text = content if isinstance(content, str) else ""
+        over = sum(self._message_chars(m) for m in messages) - threshold_chars
+        if over > 0:
+            changed = self._truncate_latest_results(messages, over) or changed
+        return changed
 
-            if role == "tool":
-                tool_id = (
-                    message.get("name")
-                    or message.get("tool_call_id")
-                    or "unknown"
-                )
-                status = (
-                    "error"
-                    if '"success":false' in result_text.replace(" ", "").lower()
-                    else "ok"
-                )
-            elif role == "user" and "[Tool result: " in result_text:
-                tool_id = result_text.split("[Tool result: ")[1].split("]")[0]
-                status = "ok"
-            elif role == "user" and "[Tool error: " in result_text:
-                tool_id = result_text.split("[Tool error: ")[1].split("]")[0]
-                status = "error"
-            else:
+    def _truncate_latest_results(self, messages: list[dict], excess_chars: int) -> bool:
+        """Shorten the newest tool results by about ``excess_chars`` in total."""
+        result_idx = []
+        for idx in range(len(messages) - 1, -1, -1):
+            if messages[idx].get("role") == "assistant":
+                break
+            if self._summarize_step(messages[idx]) is not None:
+                result_idx.append(idx)
+        if not result_idx:
+            return False
+        per_result_cut = excess_chars // len(result_idx) + 1
+        changed = False
+        for idx in result_idx:
+            content = messages[idx].get("content")
+            if not isinstance(content, str):
                 continue
-
-            steps.append(f"{len(steps) + 1}) {tool_id} → {status}")
-
-        summary = (
-            "[Autocompact — context budget pressure, all loop steps summarized]\n"
-            "Steps completed:\n"
-            + ("\n".join(steps) if steps else "Tool exchanges compacted.")
-            + "\n"
-            "Continue from here. Do not repeat completed steps."
-        )
-
-        del messages[initial_count:]
-        messages.append({"role": "user", "content": summary})
-        return True
+            keep = max(_MIN_RESULT_CHARS_AFTER_AUTOCOMPACT, len(content) - per_result_cut)
+            if keep < len(content):
+                messages[idx] = {
+                    **messages[idx],
+                    "content": content[:keep]
+                    + f"\n... (truncated {len(content) - keep} chars to fit the context budget)",
+                }
+                changed = True
+        return changed
 
     @staticmethod
     def _format_assistant_with_calls(text: str, calls: list[ToolCall]) -> str:

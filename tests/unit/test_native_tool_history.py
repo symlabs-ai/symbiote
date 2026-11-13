@@ -356,35 +356,46 @@ class TestNativeCorrelationAndCompaction:
 
     def test_autocompact_accepts_native_tool_messages(self) -> None:
         reasoning = "large private reasoning " * 30
+
+        def exchange(call_id: str, name: str, thought: str) -> list[dict]:
+            return [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": thought,
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": name, "arguments": "{}"},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": name,
+                    "content": '{"success":true}',
+                },
+            ]
+
         runner = ChatRunner(SequenceLLM(["done"]), context_budget=20)
         messages = [
             {"role": "system", "content": "system"},
             {"role": "user", "content": "request"},
-            {
-                "role": "assistant",
-                "content": None,
-                "reasoning_content": reasoning,
-                "tool_calls": [
-                    {
-                        "id": "call-1",
-                        "type": "function",
-                        "function": {"name": "lookup", "arguments": "{}"},
-                    }
-                ],
-            },
-            {
-                "role": "tool",
-                "tool_call_id": "call-1",
-                "name": "lookup",
-                "content": '{"success":true}',
-            },
+            *exchange("call-1", "lookup", reasoning),
+            *exchange("call-2", "fetch", "latest thought"),
         ]
 
         assert runner._autocompact_if_needed(messages, 2) is True
-        assert len(messages) == 3
-        assert messages[-1]["role"] == "user"
-        assert "lookup" in messages[-1]["content"]
+        # older native exchange summarized (its reasoning dropped) ...
+        assert messages[2]["role"] == "user"
+        assert "lookup" in messages[2]["content"]
         assert reasoning not in str(messages)
+        # ... latest assistant + tool pair kept intact, never orphaned
+        assert [m["role"] for m in messages[3:]] == ["assistant", "tool"]
+        assert messages[-1]["tool_call_id"] == "call-2"
+        assert messages[3]["reasoning_content"] == "latest thought"
 
 
 class TestForgeCanonicalBridge:
