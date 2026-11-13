@@ -35,6 +35,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - fix(llm): a decisão de retentar uma chamada ao LLM passa a usar o status HTTP e o tipo do erro, não palavras da mensagem (E-10). O `ForgeLLMAdapter` embrulhava tudo em `LLMError(str(exc))`, então erros de conexão, 500 e 504 nunca eram retentados, enquanto um 400 cuja mensagem citava "timeout" ou "503" era retentado três vezes. `LLMError` ganhou `status_code` e `retryable`, preenchidos pelo adapter a partir da exceção original; `is_transient_llm_error()` retenta 408/425/5xx e erros de conexão/timeout, e não retenta 429 (os SDKs já retentam rate limit) nem erros de arquivo.
   - **MIGRAÇÃO:** adapters de host que levantam exceções genéricas com "503" só na mensagem deixam de ser retentados; levante `LLMError(..., retryable=True)` ou uma exceção com `status_code`.
 - fix(chat): `run_async()` passa a respeitar `on_after_tool_result` (antes ignorado, gerando uma chamada de LLM a mais e outro texto) e a disparar o nudge de review de skills, como `run()` (E-11). No modo `instant`, `on_token` deixa de receber o bloco `tool_call` cru quando o texto final é outro. Um teste parametrizado roda os mesmos cenários pelos dois caminhos.
+- fix(chat): uma segunda compactação do loop deixa de perder o resumo da primeira (E-12). No modo nativo o resumo anterior era descartado inteiro; no modo texto virava um único passo truncado. As duas camadas reconhecem resumos anteriores e carregam seus passos; cada passo do resumo ocupa uma linha.
 
 ## [v0.7.3] - 2026-07-28
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -113,6 +114,26 @@ _INDEX_INSTRUCTIONS = """\
 The tool list below shows only names and descriptions — parameters are NOT shown.
 You MUST call `get_tool_schema` to fetch the full parameter schema \
 BEFORE calling any other tool. Calling a tool with invented parameters will fail."""
+
+
+_COMPACTED_PREFIX = "[Context compacted — previous tool loop steps summarized]"
+_AUTOCOMPACTED_PREFIX = "[Autocompact — context budget pressure, earlier loop steps summarized]"
+_STEP_LINE = re.compile(r"^\d+\) (.+)$")
+
+
+def _summary_steps(message: dict) -> list[str] | None:
+    """Step descriptions held by a compaction summary message, else None."""
+    content = message.get("content")
+    if message.get("role") != "user" or not isinstance(content, str):
+        return None
+    if not content.startswith((_COMPACTED_PREFIX, _AUTOCOMPACTED_PREFIX)):
+        return None
+    steps = []
+    for line in content.splitlines():
+        match = _STEP_LINE.match(line)
+        if match:
+            steps.append(match.group(1))
+    return steps
 
 
 def _on_loop_thread(
@@ -1473,6 +1494,14 @@ class ChatRunner:
             content = message.get("content")
             result_text = content if isinstance(content, str) else ""
 
+            carried = _summary_steps(message)
+            if carried is not None:
+                # A previous summary: keep its steps instead of losing them
+                # (native) or parsing the whole summary as one step (text).
+                for step in carried:
+                    steps.append(f"{len(steps) + 1}) {step}")
+                continue
+
             if role == "tool":
                 tool_id = (
                     message.get("name")
@@ -1486,7 +1515,8 @@ class ChatRunner:
             else:
                 continue
 
-            result_preview = result_text[:200]
+            # One line per step, so a later compaction can carry it as-is.
+            result_preview = " ".join(result_text[:200].split())
             if len(result_text) > 200:
                 result_preview += "... (truncated)"
             steps.append(
@@ -1494,7 +1524,7 @@ class ChatRunner:
             )
 
         summary = (
-            "[Context compacted — previous tool loop steps summarized]\n"
+            f"{_COMPACTED_PREFIX}\n"
             "Steps completed so far:\n"
             + ("\n".join(steps) if steps else "Earlier tool exchanges compacted.")
             + "\n"
@@ -1590,6 +1620,11 @@ class ChatRunner:
         if older:
             steps: list[str] = []
             for step in older:
+                carried = _summary_steps(step)
+                if carried is not None:
+                    for carried_step in carried:
+                        steps.append(f"{len(steps) + 1}) {carried_step}")
+                    continue
                 summary = self._summarize_step(step)
                 if summary is not None:
                     tool_id, status = summary
@@ -1601,7 +1636,7 @@ class ChatRunner:
             summary_msg = {
                 "role": "user",
                 "content": (
-                    "[Autocompact — context budget pressure, earlier loop steps summarized]\n"
+                    f"{_AUTOCOMPACTED_PREFIX}\n"
                     "Steps completed:\n"
                     + ("\n".join(steps) if steps else "Tool exchanges compacted.")
                     + "\nThe most recent tool results follow in full. "
