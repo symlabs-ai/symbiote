@@ -25,6 +25,15 @@ logger = logging.getLogger(__name__)
 # tool error instead of being loaded whole (and then sent to the LLM).
 MAX_HTTP_TOOL_RESPONSE_BYTES = 5 * 1024 * 1024
 _HTTP_ERROR_BODY_BYTES = 4096
+_CREDENTIAL_HEADERS = frozenset({"authorization", "proxy-authorization", "cookie"})
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    default = {"http": 80, "https": 443}.get(parts.scheme)
+    return (parts.scheme, (parts.hostname or "").lower(), parts.port or default)
 
 # ── Memory/Knowledge tool descriptors ────────────────────────────────────────
 
@@ -773,6 +782,8 @@ def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
         headers = dict(config.headers)
         if config.header_factory is not None:
             headers.update(config.header_factory())
+        # Headers that may carry credentials: never forwarded to another origin.
+        sensitive_headers = {h.lower() for h in headers} | _CREDENTIAL_HEADERS
         if body_bytes is not None and "Content-Type" not in headers:
             headers["Content-Type"] = config.content_type
 
@@ -793,7 +804,17 @@ def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
                 def redirect_request(self, req, fp, code, msg, headers, newurl):
                     if not _allow_internal:
                         validate_url(newurl)  # re-validate redirect target
-                    return super().redirect_request(req, fp, code, msg, headers, newurl)
+                    new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+                    if new_req is not None and _origin(newurl) != _origin(req.full_url):
+                        # Cross-origin hop: strip the configured / host-provided
+                        # headers (auth tokens, API keys, cookies).
+                        for name in list(new_req.headers):
+                            if name.lower() in sensitive_headers:
+                                del new_req.headers[name]
+                        for name in list(new_req.unredirected_hdrs):
+                            if name.lower() in sensitive_headers:
+                                del new_req.unredirected_hdrs[name]
+                    return new_req
 
             opener = urllib.request.build_opener(_NoRedirect)
             with opener.open(req, timeout=config.timeout) as resp:

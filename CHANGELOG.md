@@ -15,6 +15,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - fix(security): a validação de SSRF bloqueia IPv6 mapeado para IPv4 (`::ffff:127.0.0.1`, `::ffff:169.254.169.254`), o prefixo NAT64 e qualquer endereço que não seja global e unicast (`::`, multicast, reservados, faixas de benchmark), inclusive em destinos de redirect (S-3).
 - fix(tools): os valores dos placeholders de `url_template` passam a ser codificados (`quote(safe="")`), então um valor vindo do LLM não acrescenta segmentos de path, parâmetros de query nem fragmento, e valores com espaço ou acento funcionam. Placeholders opcionais com valor `False` ou `0` deixam de ser removidos (S-7).
   - **MIGRAÇÃO:** valores com `/`, `?` ou `&` em placeholders deixam de alterar a URL. Exceção: um placeholder no início do template (`{base_url}/...` ou `{url}`) é inserido sem codificação.
+- fix(tools): num redirect para outra origem (esquema, host ou porta), a HTTP tool deixa de reenviar `Authorization`, `Cookie`, `Proxy-Authorization` e os headers definidos em `headers` e `header_factory` (S-8).
 
 ## [v0.7.3] - 2026-07-28
 
