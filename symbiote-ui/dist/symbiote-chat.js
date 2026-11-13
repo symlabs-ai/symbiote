@@ -638,6 +638,24 @@ const SYMBIOTE_STYLES = `
 
 /* Hide FAB when panel is open */
 .symbiote-panel.open ~ .symbiote-fab { display: none; }
+
+/* ── Inline mode (mode="inline") ── */
+:host([mode="inline"]) {
+  display: block;
+  height: 100%;
+  min-height: 0;
+}
+.symbiote-panel.inline,
+.symbiote-panel.inline.open {
+  position: relative;
+  top: auto;
+  right: auto;
+  width: 100%;
+  height: 100%;
+  border-left: none;
+  transition: none;
+  z-index: auto;
+}
 `;
 
 // ── src/template.js ──
@@ -654,17 +672,27 @@ const ICON_X = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stro
 const ICON_TRASH = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
 
 function buildTemplate(opts) {
-  const { name, avatarHtml, placeholder, greeting, greetingSub, fabLabel } = opts;
+  const { name, avatarHtml, placeholder, greeting, greetingSub, fabLabel, inline } = opts;
 
-  return `
+  // Inline mode: no floating button, no overlay, no close button.
+  const fab = inline ? '' : `
     <!-- FAB -->
     <button class="symbiote-fab" part="fab" title="${name}">
       ${avatarHtml.fab}
       <span class="symbiote-fab-label">${fabLabel}</span>
-    </button>
+    </button>`;
+  const closeBtn = inline ? '' : `
+          <button type="button" class="symbiote-btn-icon" data-action="close" title="Close">
+            ${ICON_X}
+          </button>`;
+  const overlay = inline ? '' : `
+    <!-- Overlay -->
+    <div class="symbiote-overlay" data-action="close"></div>`;
+
+  return `${fab}
 
     <!-- Panel -->
-    <div class="symbiote-panel" part="panel">
+    <div class="symbiote-panel${inline ? ' inline' : ''}" part="panel">
       <div class="symbiote-header" part="header">
         <div class="symbiote-title">
           ${avatarHtml.header}
@@ -673,10 +701,7 @@ function buildTemplate(opts) {
         <div class="symbiote-header-actions">
           <button type="button" class="symbiote-btn-icon" data-action="clear" title="Clear">
             ${ICON_TRASH}
-          </button>
-          <button type="button" class="symbiote-btn-icon" data-action="close" title="Close">
-            ${ICON_X}
-          </button>
+          </button>${closeBtn}
         </div>
       </div>
 
@@ -696,9 +721,7 @@ function buildTemplate(opts) {
         </button>
       </div>
     </div>
-
-    <!-- Overlay -->
-    <div class="symbiote-overlay" data-action="close"></div>
+${overlay}
   `;
 }
 
@@ -759,6 +782,9 @@ function symbioteFormatMarkdown(text) {
  *   <symbiote-chat name="Clark" avatar="/img/clark.png" placeholder="Ask me..."
  *                  greeting="Hi!" greeting-sub="How can I help?"
  *                  session-key="/current-page"></symbiote-chat>
+ *
+ *   mode="inline" renders a static panel that fills its container (no
+ *   floating button, overlay or close button) — for chat-first pages.
  *   <script>
  *     document.querySelector('symbiote-chat').adapter = { sendMessage, loadHistory, clearHistory };
  *   </script>
@@ -767,7 +793,7 @@ function symbioteFormatMarkdown(text) {
 class SymbioteChat extends HTMLElement {
 
   static get observedAttributes() {
-    return ['name', 'avatar', 'placeholder', 'greeting', 'greeting-sub', 'session-key', 'width', 'fab-label'];
+    return ['name', 'avatar', 'placeholder', 'greeting', 'greeting-sub', 'session-key', 'width', 'fab-label', 'mode'];
   }
 
   constructor() {
@@ -800,13 +826,19 @@ class SymbioteChat extends HTMLElement {
   connectedCallback() {
     this._render();
     this._bindEvents();
+    if (this._isInline()) this._setOpen(true);
   }
 
   attributeChangedCallback(_name, _old, _new) {
     if (this._shadow.innerHTML && _old !== _new) {
       this._render();
       this._bindEvents();
+      if (this._isInline()) this._setOpen(true);
     }
+  }
+
+  _isInline() {
+    return this.getAttribute('mode') === 'inline';
   }
 
   // ── Public methods ──
@@ -867,7 +899,7 @@ class SymbioteChat extends HTMLElement {
         :host { --symbiote-width: ${width}; }
         ${SYMBIOTE_STYLES}
       </style>
-      ${buildTemplate({ name, avatarHtml, placeholder, greeting, greetingSub, fabLabel })}
+      ${buildTemplate({ name, avatarHtml, placeholder, greeting, greetingSub, fabLabel, inline: this._isInline() })}
     `;
   }
 
@@ -907,6 +939,7 @@ class SymbioteChat extends HTMLElement {
   // ── Panel state ──
 
   _setOpen(open) {
+    if (!open && this._isInline()) return;  // an inline panel is always open
     this._isOpen = open;
     const panel = this._shadow.querySelector('.symbiote-panel');
     const overlay = this._shadow.querySelector('.symbiote-overlay');
@@ -1055,6 +1088,9 @@ class SymbioteChat extends HTMLElement {
     container.scrollTop = container.scrollHeight;
 
     let accumulated = '';
+    // Text the server declared final (response_done) or an error message.
+    // It wins over the accumulated deltas.
+    let finalText = null;
     let renderTimer = null;
     const throttleMs = 100;
 
@@ -1062,6 +1098,7 @@ class SymbioteChat extends HTMLElement {
       if (renderTimer) return;
       renderTimer = setTimeout(() => {
         renderTimer = null;
+        if (finalText !== null) return;
         msgDiv.innerHTML = symbioteFormatMarkdown(this._applyTextFilter(accumulated));
         container.scrollTop = container.scrollHeight;
       }, throttleMs);
@@ -1103,7 +1140,7 @@ class SymbioteChat extends HTMLElement {
               this._handleSSE(eventType || 'text_delta', data, badgesWrap, msgDiv, () => {
                 accumulated += (data.text || '');
                 scheduleRender();
-              });
+              }, (text) => { finalText = text; });
             } catch (_) { /* ignore malformed JSON */ }
             eventType = null;
           }
@@ -1112,7 +1149,10 @@ class SymbioteChat extends HTMLElement {
 
       // Flush any pending render
       if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
-      if (accumulated) {
+      if (finalText !== null) {
+        // Already rendered by _handleSSE (response_done / error).
+        this._fireMessageRendered(msgId, finalText);
+      } else if (accumulated) {
         msgDiv.innerHTML = symbioteFormatMarkdown(this._applyTextFilter(accumulated));
         this._fireMessageRendered(msgId, accumulated);
       } else {
@@ -1132,7 +1172,7 @@ class SymbioteChat extends HTMLElement {
     this.dispatchEvent(new CustomEvent('symbiote-message-sent', { detail: { message } }));
   }
 
-  _handleSSE(event, data, badgesWrap, msgDiv, onTextDelta) {
+  _handleSSE(event, data, badgesWrap, msgDiv, onTextDelta, onFinalText) {
     const container = this._getMessagesContainer();
 
     switch (event) {
@@ -1152,6 +1192,7 @@ class SymbioteChat extends HTMLElement {
         // Final text override (if the server sends full text at end)
         if (data.text) {
           msgDiv.innerHTML = symbioteFormatMarkdown(this._applyTextFilter(data.text));
+          if (onFinalText) onFinalText(data.text);
         }
         // Final tool_results (for adapters that also send sync-style results)
         if (data.tool_results && data.tool_results.length) {
@@ -1174,6 +1215,7 @@ class SymbioteChat extends HTMLElement {
 
       case 'error':
         msgDiv.innerHTML = symbioteFormatMarkdown(data.message || 'An error occurred.');
+        if (onFinalText) onFinalText(data.message || 'An error occurred.');
         this.dispatchEvent(new CustomEvent('symbiote-error', { detail: { error: new Error(data.message) } }));
         break;
     }

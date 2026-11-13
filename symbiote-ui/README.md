@@ -63,6 +63,9 @@ No npm, no build tools, no Node.js required.
 | `session-key` | `""` | Session identifier (passed to adapter) |
 | `width` | `"420px"` | Panel width |
 | `fab-label` | Same as `name` | Text on the floating action button |
+| `mode` | drawer | `inline` renders a static panel that fills its container (give the element a height): no floating button, overlay or close button, and history loads on connect |
+
+With `sendMessageStream`, a `response_done` event that carries `text` sets the final message even when no `text_delta` came before it, and an `error` event stays on screen.
 
 ## Properties (JS)
 

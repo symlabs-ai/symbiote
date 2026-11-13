@@ -11,17 +11,27 @@ const ICON_X = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stro
 const ICON_TRASH = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
 
 function buildTemplate(opts) {
-  const { name, avatarHtml, placeholder, greeting, greetingSub, fabLabel } = opts;
+  const { name, avatarHtml, placeholder, greeting, greetingSub, fabLabel, inline } = opts;
 
-  return `
+  // Inline mode: no floating button, no overlay, no close button.
+  const fab = inline ? '' : `
     <!-- FAB -->
     <button class="symbiote-fab" part="fab" title="${name}">
       ${avatarHtml.fab}
       <span class="symbiote-fab-label">${fabLabel}</span>
-    </button>
+    </button>`;
+  const closeBtn = inline ? '' : `
+          <button type="button" class="symbiote-btn-icon" data-action="close" title="Close">
+            ${ICON_X}
+          </button>`;
+  const overlay = inline ? '' : `
+    <!-- Overlay -->
+    <div class="symbiote-overlay" data-action="close"></div>`;
+
+  return `${fab}
 
     <!-- Panel -->
-    <div class="symbiote-panel" part="panel">
+    <div class="symbiote-panel${inline ? ' inline' : ''}" part="panel">
       <div class="symbiote-header" part="header">
         <div class="symbiote-title">
           ${avatarHtml.header}
@@ -30,10 +40,7 @@ function buildTemplate(opts) {
         <div class="symbiote-header-actions">
           <button type="button" class="symbiote-btn-icon" data-action="clear" title="Clear">
             ${ICON_TRASH}
-          </button>
-          <button type="button" class="symbiote-btn-icon" data-action="close" title="Close">
-            ${ICON_X}
-          </button>
+          </button>${closeBtn}
         </div>
       </div>
 
@@ -53,9 +60,7 @@ function buildTemplate(opts) {
         </button>
       </div>
     </div>
-
-    <!-- Overlay -->
-    <div class="symbiote-overlay" data-action="close"></div>
+${overlay}
   `;
 }
 

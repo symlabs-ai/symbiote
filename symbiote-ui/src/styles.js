@@ -455,4 +455,22 @@ const SYMBIOTE_STYLES = `
 
 /* Hide FAB when panel is open */
 .symbiote-panel.open ~ .symbiote-fab { display: none; }
+
+/* ── Inline mode (mode="inline") ── */
+:host([mode="inline"]) {
+  display: block;
+  height: 100%;
+  min-height: 0;
+}
+.symbiote-panel.inline,
+.symbiote-panel.inline.open {
+  position: relative;
+  top: auto;
+  right: auto;
+  width: 100%;
+  height: 100%;
+  border-left: none;
+  transition: none;
+  z-index: auto;
+}
 `;
