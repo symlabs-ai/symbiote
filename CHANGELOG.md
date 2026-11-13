@@ -5,6 +5,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+### Novas funcionalidades
+
+- feat(kernel): `kernel.set_progress_callbacks(on_progress=, on_stream=, on_plan=, on_block_complete=)` instala os callbacks de progresso nos runners internos do kernel (chat e long-run). Antes eles só existiam no construtor do `ChatRunner`, e o host precisava trocar o runner do kernel por outro, perdendo o review de skills e o protocolo configurado. `ChatRunner` e `LongRunRunner` ganham `set_progress_callbacks()`; o long-run ganha `on_plan(plan)`, chamado com o plano antes do primeiro bloco.
+- feat(hooks): `BaseHook.on_context(context)`, síncrono, dispara a cada turno de chat com o `AssembledContext` logo depois de montado e antes da chamada ao modelo. Hooks existentes não precisam implementá-lo.
+- feat(kernel): `kernel.inspector` (`KernelInspector`, somente leitura) lista sessões (com score), mensagens, memórias, scores, traces (com os passos), reflexões, relatórios de dream, reviews de skills e o audit log de tools, com as colunas JSON já decodificadas. `kernel.memory`, `kernel.knowledge`, `kernel.workspaces` e `kernel.context_assembler` passam a ser propriedades públicas.
+- feat(kernel): acessos públicos que antes exigiam atributos privados: `kernel.update_symbiote(id, name=, role=, persona=)` (com auditoria da persona) e `kernel.list_symbiotes()`; `kernel.discover_tools(symbiote_id, source_path, url=)` e `kernel.discovered_tools` (status pending/approved/disabled); `kernel.tune_parameters(symbiote_id, days=, apply=)`, `kernel.cross_learning_candidates(symbiote_id)` e `kernel.harness_default_text(component)`. `evolve_harness` aceita `default_text` omitido e usa o texto embutido do componente.
+
+### Correções
+
+- fix(chat): no `message_async`, o callback de aprovação de tools de alto risco roda numa thread em vez de no event loop. Um callback que espera a resposta de uma pessoa travava o servidor inteiro, inclusive a requisição que traria a resposta.
+- fix(long-run): o callback de aprovação passa a valer dentro dos blocos de `tool_mode="long_run"`; antes os blocos rodavam tools de alto risco sem consultar o host. `kernel.set_approval_callback` configura os dois runners.
+- fix(knowledge): `KnowledgeService.query` passa a encontrar entradas por termos em comum (sem stop-words, acentos e sufixos, como o recall de memória), depois das que contêm o texto literal. Antes era só `LIKE '%<mensagem inteira>%'`, então no modo `packed` uma pergunta normal quase nunca trazia o knowledge para o prompt.
+- fix(environment): `configure(planner_prompt="")` e `configure(evaluator_prompt="")` limpam o prompt. Antes não havia como limpar (`None` significa "não mudar"), e um `""` gravado ligava o avaliador do long-run com o prompt padrão.
+
 ## [v0.8.0] - 2026-11-13
 
 Rodada de correções do relatório de melhorias de 2026-11-13 (`reports/2026-11-13_relatorio-melhorias.md`): isolamento de memória por symbiote, autenticação obrigatória na API, SSRF e DNS pinning, loop de tools, migrações versionadas do SQLite e mypy no CI. Testes: 1758 → 2234; cobertura 85,5% → 90,1%.

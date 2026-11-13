@@ -123,6 +123,8 @@ class LongRunRunner:
         evaluator_llm: LLMPort | None = None,
         on_progress: Callable[[str, int, int], None] | None = None,
         on_block_complete: Callable[[BlockResult], None] | None = None,
+        on_plan: Callable[[LongRunPlan], None] | None = None,
+        on_before_tool_call: Callable[[str, dict, str], bool] | None = None,
     ) -> None:
         self._llm = llm
         self._working_memory = working_memory
@@ -133,10 +135,35 @@ class LongRunRunner:
         self._evaluator_llm = evaluator_llm or llm
         self._on_progress = on_progress
         self._on_block_complete = on_block_complete
+        self._on_plan = on_plan
+        self._on_before_tool_call = on_before_tool_call
 
     def set_native_tools(self, enabled: bool) -> None:
         """Use the provider's structured tool calls instead of text parsing."""
         self._native_tools = enabled
+
+    def set_approval_callback(
+        self, callback: Callable[[str, dict, str], bool] | None
+    ) -> None:
+        """Gate for high-risk tools inside every block (see ``ChatRunner``)."""
+        self._on_before_tool_call = callback
+
+    def set_progress_callbacks(
+        self,
+        on_progress: Callable[[str, int, int], None] | None = None,
+        on_block_complete: Callable[[BlockResult], None] | None = None,
+        on_plan: Callable[[LongRunPlan], None] | None = None,
+    ) -> None:
+        """Install (or clear, with ``None``) the run's callbacks.
+
+        ``on_progress(event, index, total)`` receives ``plan_complete``,
+        ``block_start`` and ``block_end``; ``on_plan(plan)`` receives the
+        planner's blocks before the first one runs; ``on_block_complete``
+        receives each ``BlockResult`` after evaluation.
+        """
+        self._on_progress = on_progress
+        self._on_block_complete = on_block_complete
+        self._on_plan = on_plan
 
     def can_handle(self, intent: str) -> bool:
         return intent in _HANDLED_INTENTS
@@ -186,6 +213,12 @@ class LongRunRunner:
             "[long-run] plan: %d blocks from prompt '%s'",
             plan.total_blocks, context.user_input[:80],
         )
+
+        if self._on_plan is not None:
+            try:
+                self._on_plan(plan)
+            except Exception:
+                logger.exception("[long-run] on_plan callback failed")
 
         if self._on_progress is not None:
             self._on_progress("plan_complete", 0, plan.total_blocks)
@@ -447,6 +480,9 @@ class LongRunRunner:
             consolidator=self._consolidator,
             native_tools=self._native_tools,
             context_budget=self._context_budget,
+            # High-risk tools inside a block go through the same human gate
+            # as a plain chat turn.
+            on_before_tool_call=self._on_before_tool_call,
         )
 
         # Build a brief context for the block

@@ -81,6 +81,12 @@ class EnvironmentManager:
             k: v for k, v in locals().items()
             if k not in ("self", "symbiote_id", "workspace_id") and v is not None
         }
+        # None means "unchanged", so an empty string is how a caller clears
+        # the long-run prompts (an empty prompt has no other meaning; a stored
+        # "" would switch the evaluator on with the default prompt).
+        for key in ("planner_prompt", "evaluator_prompt"):
+            if updates.get(key) == "":
+                updates[key] = None
         # Guard: reflection_mode='llm' requires evolver_llm; 'llm_main' requires main llm.
         # This is the requirement-vs-fallback policy: opt-in to LLM reflection must be
         # explicit about which model pays the bill. Fails at configure() rather than

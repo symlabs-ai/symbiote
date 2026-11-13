@@ -8,6 +8,10 @@ from datetime import datetime
 from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.ports import StoragePort
 from symbiote.knowledge.models import KnowledgeEntry
+from symbiote.memory.recall import terms
+
+# How many of a symbiote's newest entries the term ranking looks at.
+_TERM_CANDIDATES = 500
 
 
 class KnowledgeService:
@@ -65,7 +69,15 @@ class KnowledgeService:
     def query(
         self, symbiote_id: str, theme: str, limit: int = 10
     ) -> list[KnowledgeEntry]:
-        """Search entries by content/name matching theme, filtered by symbiote_id."""
+        """One symbiote's entries related to ``theme``.
+
+        Entries whose name or content contains ``theme`` come first (newest
+        first). The remaining slots go to entries sharing terms with it —
+        stop words, accents and common suffixes ignored, as in memory recall
+        — ranked by the fraction of the theme's terms they contain. So a
+        whole user message finds the entry about its subject, not only a
+        literal substring of it.
+        """
         pattern = f"%{theme}%"
         rows = self._storage.fetch_all(
             "SELECT * FROM knowledge_entries "
@@ -73,7 +85,34 @@ class KnowledgeService:
             "ORDER BY created_at DESC LIMIT ?",
             (symbiote_id, pattern, pattern, limit),
         )
-        return [self._row_to_entry(r) for r in rows]
+        results = [self._row_to_entry(r) for r in rows]
+        if len(results) >= limit:
+            return results
+
+        query_terms = terms(theme)
+        if not query_terms:
+            return results
+        seen = {e.id for e in results}
+        candidates = self._storage.fetch_all(
+            "SELECT * FROM knowledge_entries WHERE symbiote_id = ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (symbiote_id, _TERM_CANDIDATES),
+        )
+        scored: list[tuple[float, int, KnowledgeEntry]] = []
+        for position, row in enumerate(candidates):
+            if row["id"] in seen:
+                continue
+            entry = self._row_to_entry(row)
+            entry_terms = terms(f"{entry.name}\n{entry.content or ''}")
+            for tag in entry.tags:
+                entry_terms |= terms(tag)
+            shared = len(entry_terms & query_terms)
+            if shared:
+                # Newer entries win ties (smaller position in the DESC list).
+                scored.append((shared / len(query_terms), -position, entry))
+        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        results.extend(entry for _, _, entry in scored[: limit - len(results)])
+        return results
 
     def list_by_symbiote(self, symbiote_id: str) -> list[KnowledgeEntry]:
         """Return all knowledge entries for a symbiote."""

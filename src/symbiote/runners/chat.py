@@ -216,6 +216,21 @@ class ChatRunner:
         returns True to allow. ``None`` removes the gate."""
         self._on_before_tool_call = callback
 
+    def set_progress_callbacks(
+        self,
+        on_progress: Callable[[str, int, int], None] | None = None,
+        on_stream: Callable[[str, int], None] | None = None,
+    ) -> None:
+        """Install (or clear, with ``None``) the mid-loop callbacks.
+
+        ``on_progress(event, iteration, max_iterations)`` receives
+        ``iteration_start``, ``tool_start``, ``tool_end`` and ``iteration_end``;
+        ``on_stream(text, iteration)`` receives the parsed text of every model
+        reply, including the ones that only request tools.
+        """
+        self._on_progress = on_progress
+        self._on_stream = on_stream
+
     def set_native_tools(self, enabled: bool) -> None:
         """Use the provider's structured tool calls instead of text parsing."""
         self._native_tools = enabled
@@ -938,8 +953,15 @@ class ChatRunner:
                 tool_calls, schema_cache, context.tool_loading,
             )
 
-            # Approval gate: check high-risk tools before execution
-            approved_calls, denial_results = self._check_approval(remaining_calls)
+            # Approval gate: check high-risk tools before execution. The
+            # callback is synchronous and may wait for a human, so it runs in
+            # a worker thread instead of blocking this event loop.
+            if self._on_before_tool_call is not None:
+                approved_calls, denial_results = await asyncio.to_thread(
+                    self._check_approval, remaining_calls
+                )
+            else:
+                approved_calls, denial_results = self._check_approval(remaining_calls)
 
             if self._on_progress is not None:
                 self._on_progress("tool_start", iteration + 1, max_iters)

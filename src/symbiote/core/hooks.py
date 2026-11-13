@@ -61,6 +61,15 @@ class BaseHook:
     async def after_turn(self, messages: list[dict], response: str) -> None:
         pass
 
+    def on_context(self, context: Any) -> None:
+        """Called synchronously with the ``AssembledContext`` of each chat
+        turn, right after it is built and before the model is called.
+
+        Read-only by contract: use it to inspect what the turn will see
+        (memories, knowledge, tools, token estimate). Optional — not part of
+        the ``Hook`` protocol, so existing hooks need not define it.
+        """
+
 
 class CompositeHook:
     """Composes multiple hooks and dispatches lifecycle events to all of them.
@@ -97,6 +106,27 @@ class CompositeHook:
 
     async def after_turn(self, messages: list[dict], response: str) -> None:
         await self._dispatch("after_turn", messages=messages, response=response)
+
+    def on_context(self, context: Any) -> None:
+        """Synchronous dispatch of ``on_context`` (see ``BaseHook``).
+
+        A hook that returns a coroutine here is a mistake: the coroutine is
+        closed and a warning is logged instead of leaving it un-awaited.
+        """
+        for hook in self._hooks:
+            fn = getattr(hook, "on_context", None)
+            if fn is None:
+                continue
+            try:
+                result = fn(context)
+                if asyncio.iscoroutine(result):
+                    result.close()
+                    logger.warning(
+                        "Hook %s.on_context() must be synchronous; ignored",
+                        type(hook).__name__,
+                    )
+            except Exception:
+                logger.exception("Hook %s.on_context() failed", type(hook).__name__)
 
     async def _dispatch(self, method: str, **kwargs: Any) -> None:
         """Call *method* on every registered hook, isolating errors."""

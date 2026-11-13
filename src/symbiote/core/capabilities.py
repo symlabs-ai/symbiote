@@ -7,6 +7,7 @@ from typing import Any
 
 from symbiote.core.context import ContextAssembler
 from symbiote.core.exceptions import SymbioteError
+from symbiote.core.hooks import CompositeHook
 from symbiote.core.identity import IdentityManager
 from symbiote.core.models import MemoryEntry
 from symbiote.core.ports import KnowledgePort, MemoryPort
@@ -37,6 +38,7 @@ class CapabilitySurface:
         context_assembler: ContextAssembler,
         runner_registry: RunnerRegistry,
         export_fn: Callable[[str, str], str] | None = None,
+        hooks: CompositeHook | None = None,
     ) -> None:
         self._identity = identity
         self._sessions = sessions
@@ -45,6 +47,7 @@ class CapabilitySurface:
         self._context_assembler = context_assembler
         self._runner_registry = runner_registry
         self._export_fn = export_fn
+        self._hooks = hooks
         self._last_loop_trace = None
         self._last_handoff_data: dict | None = None
 
@@ -163,6 +166,8 @@ class CapabilitySurface:
             user_input=content,
             extra_context=extra_context,
         )
+        if self._hooks is not None:
+            self._hooks.on_context(context)
         runner = self._runner_for_mode(context, runner)
 
         result = runner.run(context, llm_config=llm_config)
@@ -215,6 +220,8 @@ class CapabilitySurface:
             user_input=content,
             extra_context=extra_context,
         )
+        if self._hooks is not None:
+            self._hooks.on_context(context)
 
         runner = self._runner_for_mode(context, runner)
         if not hasattr(runner, "run_async"):

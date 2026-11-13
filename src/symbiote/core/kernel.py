@@ -23,6 +23,7 @@ from symbiote.core.context import ContextAssembler
 from symbiote.core.exceptions import DuplicateEntityError, EntityNotFoundError
 from symbiote.core.hooks import CompositeHook
 from symbiote.core.identity import IdentityManager
+from symbiote.core.inspector import KernelInspector
 from symbiote.core.models import Session, Symbiote
 from symbiote.core.ports import LLMPort, SessionRecallPort
 from symbiote.core.reflection import ReflectionEngine
@@ -42,7 +43,13 @@ from symbiote.harness.versions import HarnessVersionRepository
 from symbiote.knowledge.service import KnowledgeService
 from symbiote.memory.store import MemoryStore
 from symbiote.process.engine import ProcessEngine
-from symbiote.runners.base import LoopTrace, RunnerRegistry, RunResult
+from symbiote.runners.base import (
+    BlockResult,
+    LongRunPlan,
+    LoopTrace,
+    RunnerRegistry,
+    RunResult,
+)
 from symbiote.runners.chat import ChatRunner
 from symbiote.runners.long_run import LongRunRunner
 from symbiote.runners.process import ProcessRunner
@@ -258,7 +265,11 @@ class SymbioteKernel:
             context_assembler=self._context_assembler,
             runner_registry=self._runner_registry,
             export_fn=None,
+            hooks=self._hooks,
         )
+
+        # Read-only views over the stored state (sessions, traces, scores...)
+        self._inspector = KernelInspector(self._storage)
 
     # ── Properties ────────────────────────────────────────────────────────
 
@@ -273,6 +284,31 @@ class SymbioteKernel:
     @property
     def tool_gateway(self) -> ToolGateway:
         return self._tool_gateway
+
+    @property
+    def inspector(self) -> KernelInspector:
+        """Read-only views over sessions, messages, memories, scores, traces,
+        reflections, dream reports, skill reviews and the tool audit log."""
+        return self._inspector
+
+    @property
+    def memory(self) -> MemoryStore:
+        """Long-term memory store (``learn`` writes here; recall reads it)."""
+        return self._memory
+
+    @property
+    def knowledge(self) -> KnowledgeService:
+        """Knowledge entries injected into the context (or searched on demand)."""
+        return self._knowledge
+
+    @property
+    def workspaces(self) -> WorkspaceManager:
+        return self._workspace
+
+    @property
+    def context_assembler(self) -> ContextAssembler:
+        """Builds each turn's context; ``inspect(context)`` reports its budget."""
+        return self._context_assembler
 
     @property
     def session_recall(self) -> SessionRecallPort | None:
@@ -309,7 +345,10 @@ class SymbioteKernel:
         The callback receives ``(tool_id, params, risk_level)`` and returns
         ``True`` to allow or ``False`` to deny. It is invoked **only** for
         tools whose ``risk_level == "high"`` (see ``ChatRunner._check_approval``).
-        Pass ``None`` to remove a previously installed gate.
+        Pass ``None`` to remove a previously installed gate. The gate also
+        applies to the blocks of ``tool_mode="long_run"``. In
+        ``message_async`` the callback runs in a worker thread, so it may
+        block while waiting for a human answer.
 
         Raises:
             RuntimeError: if no chat runner is registered (kernel built
@@ -322,6 +361,48 @@ class SymbioteKernel:
                 "(kernel was constructed without an LLM)."
             )
         runner.set_approval_callback(callback)
+        long_run = self._runner_registry.get("long_run")
+        if isinstance(long_run, LongRunRunner):
+            long_run.set_approval_callback(callback)
+
+    def set_progress_callbacks(
+        self,
+        *,
+        on_progress: Callable[[str, int, int], None] | None = None,
+        on_stream: Callable[[str, int], None] | None = None,
+        on_plan: Callable[[LongRunPlan], None] | None = None,
+        on_block_complete: Callable[[BlockResult], None] | None = None,
+    ) -> None:
+        """Install mid-turn callbacks on the internal runners.
+
+        Chat turns: ``on_progress(event, iteration, max_iterations)`` with
+        ``iteration_start`` / ``tool_start`` / ``tool_end`` /
+        ``iteration_end``, and ``on_stream(text, iteration)`` with the parsed
+        text of every model reply. Long-run turns: ``on_progress(event,
+        index, total)`` with ``plan_complete`` / ``block_start`` /
+        ``block_end``, ``on_plan(plan)`` and ``on_block_complete(result)``.
+
+        Each call replaces all four; omitted ones are cleared. The callbacks
+        are shared by every session of this kernel (they receive no session
+        id), and in ``message_async`` they may run on a worker thread.
+
+        Raises:
+            RuntimeError: if the kernel was constructed without an LLM.
+        """
+        runner = self._runner_registry.select("chat")
+        if not isinstance(runner, ChatRunner):
+            raise RuntimeError(
+                "No chat runner available to set progress callbacks "
+                "(kernel was constructed without an LLM)."
+            )
+        runner.set_progress_callbacks(on_progress=on_progress, on_stream=on_stream)
+        long_run = self._runner_registry.get("long_run")
+        if isinstance(long_run, LongRunRunner):
+            long_run.set_progress_callbacks(
+                on_progress=on_progress,
+                on_block_complete=on_block_complete,
+                on_plan=on_plan,
+            )
 
     def set_native_tools(self, enabled: bool) -> None:
         """Enable/disable native function-calling on the internal chat runner.
@@ -433,6 +514,22 @@ class SymbioteKernel:
 
     def get_symbiote(self, symbiote_id: str) -> Symbiote | None:
         return self._identity.get(symbiote_id)
+
+    def update_symbiote(
+        self,
+        symbiote_id: str,
+        *,
+        name: str | None = None,
+        role: str | None = None,
+        persona: dict | None = None,
+    ) -> Symbiote:
+        """Change name, role and/or persona (persona changes are audited in
+        ``persona_audit``). Raises ``EntityNotFoundError`` if absent."""
+        return self._identity.update(symbiote_id, name=name, role=role, persona=persona)
+
+    def list_symbiotes(self) -> list[Symbiote]:
+        """Every symbiote that has not been deleted."""
+        return self._identity.list_all()
 
     def find_symbiote_by_name(self, name: str) -> Symbiote | None:
         """Find an active Symbiota by name."""
@@ -1243,6 +1340,26 @@ class SymbioteKernel:
                 self._storage.execute(f"DELETE FROM {table} WHERE {where}", (cutoff,))  # noqa: S608
         return counts
 
+    @property
+    def discovered_tools(self) -> DiscoveredToolRepository:
+        """Tools found by discovery, with their pending/approved/disabled
+        status (``set_status``, ``classify_by_tags``, ``list``)."""
+        return DiscoveredToolRepository(self._storage)
+
+    def discover_tools(
+        self, symbiote_id: str, source_path: str = ".", *, url: str | None = None
+    ):
+        """Scan a repository (``source_path``) or a live server (``url``, whose
+        ``/openapi.json`` is fetched) and store what it finds as ``pending``.
+
+        Approve with ``discovered_tools.set_status(...)``, then
+        ``load_discovered_tools``. Returns the ``DiscoveryResult``. The fetch
+        is blocking: from async code, run it in a thread.
+        """
+        from symbiote.discovery.service import DiscoveryService
+
+        return DiscoveryService(self.discovered_tools).discover(symbiote_id, source_path, url=url)
+
     def load_discovered_tools(self, symbiote_id: str, base_url: str = "") -> list[str]:
         """Load approved discovered tools into the ToolGateway and authorize them.
 
@@ -1329,17 +1446,26 @@ class SymbioteKernel:
     # ── Harness evolution ───────────────────────────────────────────
 
     def evolve_harness(
-        self, symbiote_id: str, component: str, default_text: str, *, days: int = 7
+        self,
+        symbiote_id: str,
+        component: str,
+        default_text: str | None = None,
+        *,
+        days: int = 7,
     ):
         """Run one evolution cycle for a harness component.
 
         Uses the evolver LLM (or main LLM as fallback) to propose an
-        improved version of the specified text component.
+        improved version of the specified text component. Without
+        ``default_text`` the kernel's built-in text for the component is
+        used (see ``harness_default_text``).
 
         Returns an EvolutionResult from HarnessEvolver.
         """
         from symbiote.harness.evolver import HarnessEvolver
 
+        if default_text is None:
+            default_text = self.harness_default_text(component)
         llm = self._evolver_llm or self._llm
         evolver = HarnessEvolver(
             storage=self._storage,
@@ -1347,6 +1473,48 @@ class SymbioteKernel:
             proposer_llm=llm,
         )
         return evolver.evolve(symbiote_id, component, default_text, days=days)
+
+    @staticmethod
+    def harness_default_text(component: str) -> str:
+        """The built-in text an evolvable component starts from.
+
+        Raises ``ValueError`` for a component that is not evolvable.
+        """
+        from symbiote.runners.chat import _TOOL_INSTRUCTIONS
+        from symbiote.runners.loop_control import LoopController
+
+        defaults = {
+            "tool_instructions": _TOOL_INSTRUCTIONS,
+            "injection_stagnation": LoopController._DEFAULT_STAGNATION_MSG,
+            "injection_circuit_breaker": LoopController._DEFAULT_CIRCUIT_BREAKER_MSG,
+        }
+        if component not in defaults:
+            raise ValueError(
+                f"Unknown harness component {component!r}; expected one of {sorted(defaults)}"
+            )
+        return defaults[component]
+
+    def tune_parameters(self, symbiote_id: str, *, days: int = 7, apply: bool = False):
+        """Run the ``ParameterTuner`` over the last ``days`` of sessions.
+
+        Returns its ``TuningResult`` (tier, adjustments, reasons). With
+        ``apply=True`` the adjustments are written to the symbiote's config.
+        """
+        from symbiote.harness.tuner import ParameterTuner
+
+        tuner = ParameterTuner(self._storage)
+        result = tuner.analyze(symbiote_id, days=days)
+        if apply and result.adjustments:
+            result = tuner.apply(result, self._environment)
+        return result
+
+    def cross_learning_candidates(self, symbiote_id: str, *, min_overlap: float = 0.5):
+        """Harness versions of other symbiotes with similar tools that
+        ``symbiote_id`` could adopt (``CrossSymbioteLearner.find_candidates``)."""
+        from symbiote.harness.cross_learning import CrossSymbioteLearner
+
+        learner = CrossSymbioteLearner(self._storage, self._harness_versions)
+        return learner.find_candidates(symbiote_id, min_overlap=min_overlap)
 
     def check_harness_rollback(self, symbiote_id: str, component: str) -> bool:
         """Check and auto-rollback a harness version if it underperforms.

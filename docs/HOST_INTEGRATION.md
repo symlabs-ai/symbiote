@@ -363,39 +363,47 @@ it preserves the legacy behaviour (`None`).
 
 ```python
 async def handle_message(session_id: str, content: str):
-    async def on_token(token: str):
-        await websocket.send(token)
+    queue: asyncio.Queue[str] = asyncio.Queue()
 
-    response = await kernel.message_async(
-        session_id,
-        content,
-        on_token=on_token,
-    )
+    def on_token(token: str) -> None:  # synchronous: called, never awaited
+        queue.put_nowait(token)
+
+    response = await kernel.message_async(session_id, content, on_token=on_token)
     return response
 ```
 
+What `on_token` receives: the text of the **final** reply only, after the
+runner has validated it (tool-call turns emit nothing). The adapter's stream is
+buffered for that validation, so the tokens arrive as a burst when the model
+finishes, not as it writes. Use the progress callbacks and tool hooks below to
+show activity while the loop runs.
+
 ### Mid-Loop Progress Callbacks
 
-For monitoring tool loop progress, configure the ChatRunner with callbacks:
+Install them on the kernel's own runners with `set_progress_callbacks`:
 
 ```python
-from symbiote.runners.chat import ChatRunner
-
-def on_progress(event: str, iteration: int, total: int):
-    # event: "tool_start", "tool_end", "llm_start", "llm_end"
+def on_progress(event: str, iteration: int, total: int) -> None:
+    # chat: "iteration_start", "tool_start", "tool_end", "iteration_end"
+    # long_run: "plan_complete", "block_start", "block_end"
     print(f"[{iteration}/{total}] {event}")
 
-def on_stream(text: str, iteration: int):
-    # Called with partial text during each LLM call
-    print(f"[iter {iteration}] {text[:50]}...")
+def on_stream(text: str, iteration: int) -> None:
+    # The parsed text of every model reply, including the ones that only ask for tools
+    print(f"[iter {iteration}] {text[:50]}")
 
-runner = ChatRunner(
-    llm=llm,
-    tool_gateway=kernel.tool_gateway,
+kernel.set_progress_callbacks(
     on_progress=on_progress,
     on_stream=on_stream,
+    on_plan=lambda plan: print([b["name"] for b in plan.blocks]),        # long_run
+    on_block_complete=lambda block: print(block.block_name, block.success),  # long_run
 )
 ```
+
+Each call replaces all four callbacks (omitted ones are cleared). They are
+shared by every session of the kernel and receive no session id; in
+`message_async` they may run on a worker thread. For per-tool detail (tool id,
+params, result) use the `before_tool` / `after_tool` hooks.
 
 ---
 
@@ -439,6 +447,10 @@ kernel.set_approval_callback(approval_gate)
 > `on_before_tool_call=` to a *standalone* `ChatRunner` you construct has **no
 > effect** on `kernel.message()` — that runner is never the one the kernel runs.
 > Embedded hosts must wire the gate via `kernel.set_approval_callback(...)`.
+> The gate also covers the blocks of `tool_mode="long_run"`. In
+> `message_async` the callback runs in a worker thread, so it may block while
+> it waits for a person (e.g. on a `threading.Event` set by another request)
+> without freezing the event loop.
 > Pass `None` to remove a previously installed gate. The call raises
 > `RuntimeError` if the kernel was built without an LLM (no chat runner exists).
 
@@ -657,6 +669,13 @@ When they fire:
   `response` is the final text. `after_turn` does not fire when the turn
   raises.
 
+- `on_context(context)` — **synchronous**, once per chat turn, right after the
+  context is assembled and before the model is called. `context` is the
+  `AssembledContext` (persona, `relevant_memories`, `relevant_knowledge`,
+  `available_tools`, `tool_mode`, `extra_context`, `total_tokens_estimate`...);
+  `kernel.context_assembler.inspect(context)` adds the budget check. Treat it as
+  read-only. Not part of the `Hook` protocol, so existing hooks need not define it.
+
 A hook that raises is logged and skipped; the turn continues. On the sync
 paths hooks run on the `ToolGateway` event loop.
 
@@ -782,6 +801,26 @@ kernel = SymbioteKernel(config=KernelConfig(db_path="data/symbiote.db"), llm=...
 ```
 
 To find an embedded database on disk: `find ~ -name "symbiote.db"`.
+
+From inside the host process, read that state through `kernel.inspector`
+instead of SQL. Every method is read-only and returns plain dicts with the JSON
+columns decoded:
+
+```python
+ins = kernel.inspector
+ins.list_sessions(symbiote_id, status="closed")    # with score columns
+ins.list_messages(session_id)                       # chronological
+ins.list_memories(symbiote_id, category="declarative")
+ins.list_scores(symbiote_id)
+ins.list_traces(session_id=session_id)              # each with its steps
+ins.list_reflections(symbiote_id)                   # llm / hybrid reflection modes
+ins.list_dream_reports(symbiote_id)
+ins.list_skill_reviews(symbiote_id)
+ins.audit_log(symbiote_id, session_id=session_id)   # executions and policy blocks
+```
+
+The components behind them are public too: `kernel.memory`, `kernel.knowledge`,
+`kernel.workspaces` and `kernel.context_assembler`.
 
 You can inspect or administer that database **without modifying the host app** —
 just open the same file with one of these tools:
