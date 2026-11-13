@@ -561,6 +561,58 @@ kernel.set_tool_guard(guard)                # None removes it
 - It may be `async def`. A plain function is called from a worker thread in
   `message_async`, so it may block (an HTTP call to your IAM).
 
+### Redaction: keeping secrets out of what is stored
+
+Administrative tools take secrets as parameters (a provider key, a password).
+The kernel stores the conversation, the tool calls and what it learns from
+them, so tell it what must not be stored. There are two ways, and they add up:
+
+```python
+# 1. Annotate the parameters that carry secrets.
+ToolDescriptor(
+    tool_id="create_provider",
+    name="Create provider",
+    description="Register an LLM provider.",
+    parameters={"type": "object", "properties": {
+        "name": {"type": "string"}, "api_key": {"type": "string"}}},
+    secret_params=["api_key"],          # dotted paths: "credentials.token"
+)
+
+# 2. Give the kernel a function that removes what it recognizes.
+KEY = re.compile(r"sk-[A-Za-z0-9-]{16,}")
+kernel.set_redactor(lambda text: KEY.sub("[REDACTED]", text))
+
+# A value known up front can be registered directly.
+kernel.redactor.add_secret(os.environ["UPSTREAM_TOKEN"])
+```
+
+- **Annotated parameters.** When the tool is called, the value is replaced by
+  `[REDACTED]` in the audit log and in the execution trace, and learned as a
+  literal: the same text is removed from everything stored afterwards
+  (the model's answer, memories, summaries) and from what the session had
+  already stored, since the user's message is saved before the tool call that
+  reveals the secret. Values shorter than 4 characters are masked in the
+  records of the call but not learned.
+- **The function** sees every piece of conversation-derived text before it is
+  stored. Inside JSON columns it is called once per string value, so the
+  stored JSON stays valid. If it raises, the text is replaced by a marker
+  instead of being stored unchecked. A secret typed in free text and never
+  passed to an annotated parameter is only caught here.
+- **What is covered:** `messages`, session summaries, `memory_entries`,
+  `audit_log`, `execution_traces`, `reflection_audit`, `skill_review_audit`,
+  `dream_reports`, `decisions`, `process_instances`, `artifacts`,
+  `harness_versions` and the skill files the kernel writes.
+- **What is not rewritten:** identifiers, timestamps and what the host
+  configured on purpose (HTTP tool configs and their headers, personas,
+  knowledge entries, environment configs, `external_key`). Log lines are not
+  covered either.
+- **The model is not affected in the turn that uses the secret:** the handler
+  receives the real value and the caller gets the model's answer as written.
+  Later turns read the stored history, so they see `[REDACTED]`.
+- Learned literals live in the process (the 10,000 most recent). After a
+  restart, or on another replica, a value is learned again the next time an
+  annotated parameter carries it; what was stored before stays redacted.
+
 ### Caller context: who is this turn for
 
 A kernel serves many users at once. Tell it who each turn is for with

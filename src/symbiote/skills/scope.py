@@ -27,6 +27,7 @@ import contextvars
 import shutil
 import threading
 from collections import OrderedDict
+from collections.abc import Callable
 from pathlib import Path
 
 from symbiote.skills.loader import SkillsLoader
@@ -82,8 +83,10 @@ class SkillScopeManager:
         auto_promote_threshold: int = 0,
         max_cached: int = _DEFAULT_MAX_CACHED,
         read_only: bool = False,
+        redact: Callable[[str], str] | None = None,
     ) -> None:
         self._read_only = read_only
+        self._redact = redact
         self._base_root = Path(base_root)
         self._protected_roots = list(protected_roots or [])
         self._extra_roots = list(extra_roots or [])
@@ -169,6 +172,7 @@ class SkillScopeManager:
             read_only=self._read_only,
         )
         store.on_change = loader.refresh
+        store.redact = self._redact
         return loader, store
 
 

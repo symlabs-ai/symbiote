@@ -167,7 +167,11 @@ def _validate_file_path(file_path: str) -> None:
 # ── Atomic write ───────────────────────────────────────────────────────────
 
 
-def _atomic_write_text(path: Path, content: str) -> None:
+def _atomic_write_text(
+    path: Path, content: str, redact: Callable[[str], str] | None = None
+) -> None:
+    if redact is not None:
+        content = redact(content)
     """Write text atomically in the same directory as ``path``."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -219,6 +223,9 @@ class SkillsStore:
     ) -> None:
         if not roots:
             raise ValueError("SkillsStore needs at least one root path.")
+        # ``fn(text) -> text`` applied to everything written to a skill file
+        # (the kernel points it at its redactor).
+        self.redact: Callable[[str], str] | None = None
         # Read-only: every mutating method raises SkillReadOnlyError and
         # nothing is created on disk, not even the agent root.
         self._read_only = read_only
@@ -321,7 +328,7 @@ class SkillsStore:
         skill_dir = self.agent_root / name
         skill_dir.mkdir(parents=True, exist_ok=False)
         skill_file = skill_dir / "SKILL.md"
-        _atomic_write_text(skill_file, content)
+        _atomic_write_text(skill_file, content, self.redact)
 
         # Sidecar: agent_created reflects who called us NOW.
         agent_created = is_background_review()
@@ -356,7 +363,7 @@ class SkillsStore:
             )
         _validate_frontmatter(content, name)
 
-        _atomic_write_text(skill_dir / "SKILL.md", content)
+        _atomic_write_text(skill_dir / "SKILL.md", content, self.redact)
         usage.bump_patch(skill_dir)
         self._notify()
 
@@ -423,7 +430,7 @@ class SkillsStore:
         _validate_content_size(new_text, label=str(target.name))
         if target.name == "SKILL.md":
             _validate_frontmatter(new_text, name)
-        _atomic_write_text(target, new_text)
+        _atomic_write_text(target, new_text, self.redact)
         usage.bump_patch(skill_dir)
 
         self._notify()
@@ -460,7 +467,7 @@ class SkillsStore:
             )
 
         target = skill_dir / file_path
-        _atomic_write_text(target, file_content)
+        _atomic_write_text(target, file_content, self.redact)
         usage.bump_patch(skill_dir)
 
         self._notify()

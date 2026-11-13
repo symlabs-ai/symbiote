@@ -28,6 +28,7 @@ from symbiote.core.identity import IdentityManager
 from symbiote.core.inspector import KernelInspector
 from symbiote.core.models import Session, Symbiote
 from symbiote.core.ports import LLMPort, SessionRecallPort, StoragePort
+from symbiote.core.redaction import RedactingStorage, Redactor
 from symbiote.core.reflection import ReflectionEngine
 from symbiote.core.scoring import compute_auto_score, compute_final_score
 from symbiote.core.session import SessionManager
@@ -135,12 +136,16 @@ class SymbioteKernel:
 
         # Storage: the host's adapter, or the default SQLite file.
         self._owns_storage = storage is None
-        self._storage: StoragePort = (
+        inner_storage: StoragePort = (
             storage
             if storage is not None
             else SQLiteAdapter(config.db_path, check_same_thread=False)
         )
-        self._storage.init_schema()
+        inner_storage.init_schema()
+        # Every component writes through this wrapper, which removes the
+        # secrets the redactor knows from the conversation tables.
+        self._redactor = Redactor()
+        self._storage: RedactingStorage = RedactingStorage(inner_storage, self._redactor)
 
         # Managers
         self._identity = IdentityManager(self._storage)
@@ -237,6 +242,8 @@ class SymbioteKernel:
         # in message() / message_async().
         self._hooks = CompositeHook()
         self._tool_gateway.hooks = self._hooks
+        self._tool_gateway.secrets_hook = self._learn_secret_params
+        self._policy_gate.params_filter = self._mask_secret_params
 
         # Optional session recall (host provides implementation)
         self._session_recall: SessionRecallPort | None = None
@@ -406,6 +413,57 @@ class SymbioteKernel:
         long_run = self._runner_registry.get("long_run")
         if isinstance(long_run, LongRunRunner):
             long_run.set_approval_callback(gate)
+
+    @property
+    def redactor(self) -> Redactor:
+        """Removes secrets from what the kernel stores (see ``set_redactor``).
+
+        ``kernel.redactor.add_secret(value)`` registers a literal directly.
+        """
+        return self._redactor
+
+    def set_redactor(
+        self,
+        fn: Callable[[str], str] | None,
+        *,
+        replacement: str | None = None,
+    ) -> None:
+        """Install the host's redaction function (``None`` removes it).
+
+        ``fn(text) -> text`` is given every piece of conversation-derived text
+        before it is stored (messages, session summaries, memories, audit log,
+        execution traces, reflection / skill-review / dream records, skill
+        files) and returns it without the secrets it recognizes. Inside JSON
+        columns it is called once per string value, so the stored JSON stays
+        valid. If it raises, the text is replaced by a marker instead of
+        being stored unchecked.
+
+        Independently of ``fn``, the values of the parameters a tool declares
+        in ``ToolDescriptor.secret_params`` are masked in the records of the
+        call and removed from everything stored afterwards, and from what the
+        same session had already stored.
+
+        Redaction applies to storage only: the model sees the real value in
+        the turn that uses it and the redacted history in later turns.
+        Identifiers, timestamps and host configuration (HTTP tool configs,
+        personas, knowledge, environment configs) are never rewritten.
+        """
+        self._redactor.set_function(fn)
+        if replacement is not None:
+            self._redactor.replacement = replacement
+
+    def _learn_secret_params(
+        self, session_id: str | None, secret_paths: list[str], params: dict
+    ) -> None:
+        new = self._redactor.learn(params, secret_paths)
+        if new and session_id is not None:
+            self._storage.scrub_session(session_id, new, self._redactor.replacement)
+
+    def _mask_secret_params(self, tool_id: str, params: dict) -> dict:
+        descriptor = self._tool_gateway.get_descriptor(tool_id)
+        if descriptor is None or not descriptor.secret_params:
+            return params
+        return self._redactor.mask_params(params, descriptor.secret_params)
 
     def set_tool_guard(self, guard: ToolGuard | None) -> None:
         """Install (or remove, with ``None``) the host's veto over tool calls.
@@ -991,6 +1049,7 @@ class SymbioteKernel:
             self._skills_store = SkillsStore(
                 roots=roots, protected_roots=protected, read_only=not cfg.skill_writes
             )
+            self._skills_store.redact = self._redactor.redact_text
         except Exception as exc:
             # Two failure regimes:
             # - Host EXPLICITLY set ``skills_root`` in KernelConfig — they
@@ -1072,6 +1131,7 @@ class SymbioteKernel:
                 extra_roots=list(cfg.skills_extra_roots),
                 max_cached=cfg.symbiote_cache_size,
                 read_only=not cfg.skill_writes,
+                redact=self._redactor.redact_text,
             )
         except Exception as exc:
             if cfg.skills_root is not None:
@@ -1845,7 +1905,17 @@ class SymbioteKernel:
                 trace.total_tool_calls,
                 trace.total_elapsed_ms,
                 trace.stop_reason,
-                json.dumps([s.model_dump() for s in trace.steps]),
+                json.dumps(
+                    [
+                        {
+                            **step,
+                            "params": self._mask_secret_params(
+                                step["tool_id"], step["params"]
+                            ),
+                        }
+                        for step in (s.model_dump() for s in trace.steps)
+                    ]
+                ),
                 trace.tool_mode,
                 datetime.now(tz=UTC).isoformat(),
             ),

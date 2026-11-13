@@ -243,6 +243,10 @@ class ToolGateway:
         self.hooks: Any = None
         # Host veto, consulted after policy and before approval / execution.
         self._guard: ToolGuard | None = None
+        # ``fn(session_id, secret_paths, params)``, called for every call to a
+        # tool that declares ``secret_params``, before the guard, the approval
+        # and any record of the call (the kernel's redactor learns the values).
+        self.secrets_hook: Callable[[str | None, list[str], dict], None] | None = None
         self._registry: dict[str, Callable[[dict], Any]] = {}
         self._descriptors: dict[str, ToolDescriptor] = {}
         self._http_configs: dict[str, HttpToolConfig] = {}
@@ -310,6 +314,12 @@ class ToolGateway:
     async def _fire_hook_async(self, event: str, **kwargs: Any) -> None:
         if self._has_hooks():
             await getattr(self.hooks, event)(**kwargs)
+
+    def _note_secrets(self, session_id: str | None, tool_id: str, params: dict) -> None:
+        hook = self.secrets_hook
+        descriptor = self._descriptors.get(tool_id)
+        if hook is not None and descriptor is not None and descriptor.secret_params:
+            hook(session_id, descriptor.secret_params, params)
 
     # ── host veto ─────────────────────────────────────────────────────────
 
@@ -427,6 +437,7 @@ class ToolGateway:
         tool_id, params = call.tool_id, call.params
         if tool_id not in self._registry:
             return None  # execution reports "Tool not registered"
+        self._note_secrets(session_id, tool_id, params)
         with tool_exec_context(symbiote_id, session_id):
             policy = self._gate.check(symbiote_id, tool_id, workspace_id)
             if not policy.allowed:
@@ -522,6 +533,7 @@ class ToolGateway:
                 tool_id=tool_id,
                 error="Tool not registered",
             )
+        self._note_secrets(session_id, tool_id, params)
         with tool_exec_context(symbiote_id, session_id):
             await self._fire_hook_async("before_tool", tool_id=tool_id, params=params)
             result = None
@@ -628,6 +640,7 @@ class ToolGateway:
                 error="Tool not registered",
             )
 
+        self._note_secrets(session_id, tool_id, params)
         with tool_exec_context(symbiote_id, session_id):
             self._fire_hook_sync("before_tool", tool_id=tool_id, params=params)
             result = None
@@ -721,6 +734,7 @@ class ToolGateway:
         pre_results: list[ToolResult | None] = []
         for call in calls:
             if call.tool_id in self._registry:
+                self._note_secrets(session_id, call.tool_id, call.params)
                 self._fire_hook_sync("before_tool", tool_id=call.tool_id, params=call.params)
             if call.tool_id not in self._registry:
                 pre_results.append(

@@ -117,6 +117,9 @@ class PolicyGate:
     def __init__(self, env_manager: EnvironmentManager, storage: StoragePort) -> None:
         self._env = env_manager
         self._storage = storage
+        # ``fn(tool_id, params) -> params`` applied to what the audit log
+        # stores (the kernel masks secret parameters here).
+        self.params_filter: Callable[[str, dict], dict] | None = None
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -326,6 +329,8 @@ class PolicyGate:
         params: dict,
         result: str,
     ) -> None:
+        if self.params_filter is not None:
+            params = self.params_filter(tool_id, params)
         self._storage.execute(
             "INSERT INTO audit_log "
             "(id, symbiote_id, session_id, tool_id, action, params_json, result, created_at) "

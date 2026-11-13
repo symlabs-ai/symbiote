@@ -18,6 +18,12 @@ class ToolDescriptor(BaseModel):
     tags: list[str] = Field(default_factory=list)
     handler_type: Literal["builtin", "http", "custom"] = "custom"
     risk_level: Literal["low", "medium", "high"] = "low"
+    # Parameters that carry secrets, as dotted paths into the call's params
+    # ("api_key", "credentials.token"; a path through a list applies to every
+    # item). Their values are masked in the audit log and the execution trace
+    # and removed from everything else the kernel stores. Never sent to the
+    # model: only ``parameters`` describes the tool to it.
+    secret_params: list[str] = Field(default_factory=list)
 
     def to_openai_schema(self) -> dict:
         """Convert to OpenAI function calling format."""
