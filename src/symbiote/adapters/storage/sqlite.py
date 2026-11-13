@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS symbiotes (
@@ -336,6 +339,33 @@ class SQLiteAdapter:
                 self._conn.commit()
             except sqlite3.OperationalError:
                 pass  # column already exists
+
+        self._ensure_unique_external_key()
+
+    def _ensure_unique_external_key(self) -> None:
+        """One session per (symbiote_id, external_key).
+
+        Databases that already hold duplicates keep working (nothing is
+        deleted or rewritten); the index is skipped and a warning says how
+        many keys are affected. The in-process lock in SessionManager still
+        prevents new duplicates from this process.
+        """
+        try:
+            self._conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_symbiote_external_key "
+                "ON sessions(symbiote_id, external_key) WHERE external_key IS NOT NULL"
+            )
+            self._conn.commit()
+        except sqlite3.IntegrityError:
+            dup = self._conn.execute(
+                "SELECT COUNT(*) FROM (SELECT 1 FROM sessions WHERE external_key IS NOT NULL "
+                "GROUP BY symbiote_id, external_key HAVING COUNT(*) > 1)"
+            ).fetchone()[0]
+            logger.warning(
+                "sessions has %d duplicated (symbiote_id, external_key) pairs; the "
+                "unique index was not created. Merge or close the duplicates to enable it.",
+                dup,
+            )
 
     def execute(self, sql: str, params: tuple | None = None) -> sqlite3.Cursor:
         """Run an INSERT / UPDATE / DELETE and auto-commit.

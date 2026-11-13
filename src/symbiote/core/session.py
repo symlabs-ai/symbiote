@@ -3,11 +3,23 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+import threading
 from datetime import datetime
 
 from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.models import Decision, Message, Session, _utcnow
 from symbiote.core.ports import StoragePort
+
+_key_locks: dict[tuple[str, str], threading.Lock] = {}
+_key_locks_guard = threading.Lock()
+
+
+def _external_key_lock(symbiote_id: str, external_key: str) -> threading.Lock:
+    """Process-wide lock for one (symbiote, external_key) pair. Shared by all
+    SessionManager instances (the HTTP API builds one per request)."""
+    with _key_locks_guard:
+        return _key_locks.setdefault((symbiote_id, external_key), threading.Lock())
 
 
 class SessionManager:
@@ -57,7 +69,22 @@ class SessionManager:
         external_key: str,
         goal: str | None = None,
     ) -> Session:
-        """Find an active session by external_key, or create one."""
+        """Find an active session by external_key, or create one.
+
+        Concurrent calls for the same (symbiote, key) get the same session: a
+        process-wide lock per key serializes find-or-create, and the unique
+        index on (symbiote_id, external_key) covers other processes.
+        """
+        with _external_key_lock(symbiote_id, external_key):
+            try:
+                return self._get_or_create_by_external_key(symbiote_id, external_key, goal)
+            except sqlite3.IntegrityError:
+                # Another process created it between our SELECT and INSERT.
+                return self._get_or_create_by_external_key(symbiote_id, external_key, goal)
+
+    def _get_or_create_by_external_key(
+        self, symbiote_id: str, external_key: str, goal: str | None
+    ) -> Session:
         row = self._storage.fetch_one(
             "SELECT * FROM sessions WHERE external_key = ? AND symbiote_id = ? "
             "ORDER BY started_at DESC LIMIT 1",
