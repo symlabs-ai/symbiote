@@ -447,6 +447,10 @@ class SymbioteKernel:
         goal: str | None = None,
         external_key: str | None = None,
     ) -> Session:
+        """Start a session. Raises EntityNotFoundError for an unknown symbiote
+        (instead of a bare FOREIGN KEY IntegrityError)."""
+        if self._identity.get(symbiote_id) is None:
+            raise EntityNotFoundError("Symbiote", symbiote_id)
         return self._sessions.start(
             symbiote_id=symbiote_id, goal=goal, external_key=external_key
         )

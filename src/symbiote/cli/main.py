@@ -8,14 +8,18 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 
+import click
 import typer
+from pydantic import ValidationError as PydanticValidationError
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from typer.core import TyperGroup
 
 from symbiote.adapters.export.markdown import ExportService
 from symbiote.config.models import KernelConfig
@@ -26,7 +30,40 @@ from symbiote.core.ports import LLMPort
 console = Console()
 err_console = Console(stderr=True)
 
-app = typer.Typer(name="symbiote", help="Symbiote — Kernel for persistent cognitive entities")
+# Port of a local Symbiote server (INFRA.md, `uvicorn ... --port 8008`).
+_DEFAULT_SERVER = "http://localhost:8008"
+
+# Errors caused by what the user typed: one line and exit code 1, no
+# traceback. (ValueError covers bad JSON and pydantic validation errors.)
+_INPUT_ERRORS = (ValueError, sqlite3.IntegrityError, FileNotFoundError, SymbioteError)
+
+
+def _describe(exc: BaseException) -> str:
+    if isinstance(exc, PydanticValidationError):
+        return "; ".join(
+            f"{'.'.join(str(p) for p in err['loc']) or 'value'}: {err['msg']}"
+            for err in exc.errors()
+        )
+    first = str(exc).strip().splitlines()
+    return first[0] if first else type(exc).__name__
+
+
+class _FriendlyErrors(TyperGroup):
+    """Top-level group: input errors from any command end with one line."""
+
+    def invoke(self, ctx: click.Context) -> object:
+        try:
+            return super().invoke(ctx)
+        except _INPUT_ERRORS as exc:
+            err_console.print(f"[red]Error:[/red] {_e(_describe(exc))}", soft_wrap=True)
+            raise typer.Exit(code=1) from None
+
+
+app = typer.Typer(
+    name="symbiote",
+    help="Symbiote — Kernel for persistent cognitive entities",
+    cls=_FriendlyErrors,
+)
 
 session_app = typer.Typer(help="Session management commands")
 memory_app = typer.Typer(help="Memory management commands")
@@ -683,7 +720,7 @@ def _write_symbiote_config(cfg: dict, path: Path = Path(".")) -> None:
 @app.command()
 def init(
     server: str = typer.Option(
-        None, "--server", "-s", help="Symbiote server URL (default: http://localhost:8000)"
+        None, "--server", "-s", help=f"Symbiote server URL (default: {_DEFAULT_SERVER})"
     ),
     api_key: str = typer.Option(None, "--api-key", "-k", help="API key (sk-symbiote_...)"),
     name: str = typer.Option(None, "--name", "-n", help="Symbiote name"),
@@ -695,7 +732,7 @@ def init(
 
     # Prompt for missing values
     if server is None:
-        server = typer.prompt("Server URL", default="http://localhost:8000")
+        server = typer.prompt("Server URL", default=_DEFAULT_SERVER)
     if api_key is None:
         api_key = typer.prompt("API key", hide_input=True)
     if name is None and symbiote_id is None:
@@ -775,7 +812,7 @@ def discover(
     """
     cfg = _read_symbiote_config()
 
-    server = cfg.get("server", "http://localhost:8000")
+    server = cfg.get("server", _DEFAULT_SERVER)
     api_key = cfg.get("api_key", "")
     symbiote_id = cfg.get("id", "")
     symbiote_name = cfg.get("name", symbiote_id)
@@ -854,7 +891,7 @@ def classify(
 ) -> None:
     """Auto-approve/disable discovered tools by OpenAPI tags."""
     cfg = _read_symbiote_config()
-    server = cfg.get("server", "http://localhost:8000")
+    server = cfg.get("server", _DEFAULT_SERVER)
     api_key = cfg.get("api_key", "")
     symbiote_id = cfg.get("id", "")
     symbiote_name = cfg.get("name", symbiote_id)
