@@ -13,6 +13,7 @@ from __future__ import annotations
 import atexit
 import contextlib
 import logging
+import os
 import signal
 import threading
 from typing import TYPE_CHECKING
@@ -25,6 +26,8 @@ logger = logging.getLogger(__name__)
 _lock = threading.Lock()
 _providers: list[BrowserProvider] = []
 _handlers_installed = False
+# SIGTERM handler that was in place before ours (called after cleanup).
+_previous_sigterm: object = None
 
 
 def register_provider(provider: BrowserProvider) -> None:
@@ -36,7 +39,7 @@ def register_provider(provider: BrowserProvider) -> None:
             atexit.register(_shutdown_all)
             # Not in main thread or signal not supported — fall back to atexit only.
             with contextlib.suppress(ValueError, OSError):
-                signal.signal(signal.SIGTERM, _signal_handler)
+                _install_sigterm_handler()
             _handlers_installed = True
 
 
@@ -58,6 +61,27 @@ def _shutdown_all() -> None:
             logger.warning("Provider %s close_all failed: %s", prov.name, exc)
 
 
-def _signal_handler(signum, frame) -> None:  # noqa: ARG001
+def _install_sigterm_handler() -> None:
+    global _previous_sigterm
+    previous = signal.getsignal(signal.SIGTERM)
+    if previous is signal.SIG_IGN:
+        return  # the host chose to ignore SIGTERM; atexit still cleans up
+    _previous_sigterm = previous
+    signal.signal(signal.SIGTERM, _signal_handler)
+
+
+def _signal_handler(signum, frame) -> None:
+    """Close browser sessions, then let SIGTERM do what it did before.
+
+    A host handler installed earlier is called; with no handler (the
+    default action) the default is restored and the signal re-raised, so
+    the process still terminates instead of ignoring SIGTERM.
+    """
     logger.info("Browser supervisor: caught signal %s, closing sessions", signum)
     _shutdown_all()
+    previous = _previous_sigterm
+    if callable(previous):
+        previous(signum, frame)
+        return
+    signal.signal(signum, signal.SIG_DFL)
+    os.kill(os.getpid(), signum)

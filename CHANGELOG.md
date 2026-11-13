@@ -69,6 +69,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
   - **MIGRAÇÃO:** configs de workspace criadas a partir de agora herdam os campos da config do symbiote que não forem informados.
 - fix(kernel)!: `load_discovered_tools()` e `load_mcp_tools()` acrescentam as tools carregadas às já autorizadas do symbiote; antes substituíam a lista inteira e um symbiote perdia `fs_read`, `skill_view` etc. ao carregar tools descobertas (T-5, D-9).
   - **MIGRAÇÃO:** quem dependia da substituição deve revogar as tools antigas com `environment.remove_tools()`.
+- fix(browser): o handler de SIGTERM do supervisor do browser fecha as sessões e depois deixa o sinal seguir seu curso (T-6). Antes ele substituía o handler do host e engolia o SIGTERM: o processo não terminava (systemd precisava de SIGKILL) e o handler que o host tinha instalado nunca era chamado. Agora o handler anterior é chamado depois do cleanup; sem handler, o padrão é restaurado e o sinal reenviado. Se o host ignorava SIGTERM, nada é instalado e o cleanup fica só no `atexit`.
 
 ## [v0.7.3] - 2026-07-28
 
