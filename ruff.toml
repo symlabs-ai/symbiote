@@ -1,5 +1,5 @@
 line-length = 88
-target-version = "py311"
+target-version = "py312"
 
 [lint]
 # Conjunto de regras enxuto e moderno: erros/avisos básicos, import sorting,
@@ -24,5 +24,4 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-"src/forgebase/**/__init__.py" = ["F401", "F403"]
 "tests/**" = ["E402", "F401"]

@@ -84,6 +84,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - docs(infra): o `INFRA.md` registra o ambiente local real: execução manual com `uvicorn symbiote.api.http:app --host 127.0.0.1 --port 8008`, sem unit systemd (antes citava `symbios.service` na porta 8003). O `setup_env.sh`, que era um template de outro projeto (instalava forgebase e forgellmclient), passa a criar o `.venv` com `uv` e instalar `-e ".[dev,llm]"`.
 - chore(repo): `symbiote.db`, `.coverage` e `.context/` saem do controle de versão (já constavam no `.gitignore`, exceto `.coverage`, que foi acrescentado). Os arquivos continuam no disco (Q-4, D-15). O container rodando como root ficou registrado no `BACKLOG.md` (B-70, D-16).
   - **MIGRAÇÃO:** num clone que faça pull desta mudança, o git apaga do disco esses três caminhos, por deixarem de ser versionados. Faça backup antes, se algum deles tiver conteúdo local que importe.
+- chore(lint): `ruff.toml` passa a ser a única configuração do ruff, com `target-version = "py312"` e sem a regra de `src/forgebase/**`, que vinha de outro projeto. O bloco `[tool.ruff]` do `pyproject.toml`, que o ruff ignorava por causa do `ruff.toml`, foi removido (Q-1, D-14). Nada novo foi apontado.
 
 ## [v0.7.3] - 2026-07-28
 
