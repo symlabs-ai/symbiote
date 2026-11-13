@@ -152,9 +152,10 @@ class DreamEngine:
             self._active_threads.pop(symbiote_id, None)
 
     def _last_dream_at(self, symbiote_id: str) -> datetime | None:
+        # Dry runs change nothing, so they do not count as the last dream.
         row = self._storage.fetch_one(
             "SELECT completed_at FROM dream_reports "
-            "WHERE symbiote_id = ? ORDER BY started_at DESC LIMIT 1",
+            "WHERE symbiote_id = ? AND dry_run = 0 ORDER BY started_at DESC LIMIT 1",
             (symbiote_id,),
         )
         if row is None or row.get("completed_at") is None:

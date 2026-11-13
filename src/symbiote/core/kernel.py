@@ -211,7 +211,9 @@ class SymbioteKernel:
         self._environment._kernel = self
 
         # Dream engine (lazy — created on first use)
-        self._dream_engine: DreamEngine | None = None
+        # Background dream threads, one per symbiote at most.
+        self._dream_threads: dict[str, threading.Thread] = {}
+        self._dream_lock = threading.Lock()
 
         # Skill self-improvement wiring (Sprint 4)
         # Lazily resolved when first needed so a kernel with no skills/ root
@@ -691,10 +693,12 @@ class SymbioteKernel:
 
             self._close_step("skill review", _review)
 
-            # 6. Dream mode — maybe trigger background dream
-            self._close_step("dream", self._maybe_dream, symbiote_id)
-
-        return self._sessions.close(session_id)
+        closed = self._sessions.close(session_id)
+        if row is not None:
+            # 6. Dream mode — after the close, so this session already counts
+            # towards dream_min_sessions.
+            self._close_step("dream", self._maybe_dream, row["symbiote_id"])
+        return closed
 
     # ── Skills wiring ──────────────────────────────────────────────────
 
@@ -1033,57 +1037,72 @@ class SymbioteKernel:
             return self._skill_scope_mgr.loader_for(symbiote_id)
         return self._skills_loader
 
-    def _get_or_create_dream_engine(self, cfg, symbiote_id: str) -> DreamEngine:
-        # In per-symbiote scope the GC must walk only this symbiote's skills,
-        # so the engine is built per-symbiote (not cached as a singleton).
-        if self._skill_scope_mgr is not None:
-            return DreamEngine(
-                storage=self._storage,
-                memory=self._memory,
-                llm=self._evolver_llm or self._llm,
-                max_llm_calls=cfg.dream_max_llm_calls,
-                min_sessions=cfg.dream_min_sessions,
-                skills_loader=self._skills_loader_for(symbiote_id),
-                skill_quarantine_timeout_days=cfg.skill_quarantine_timeout_days,
-            )
-        if self._dream_engine is None:
-            self._dream_engine = DreamEngine(
-                storage=self._storage,
-                memory=self._memory,
-                llm=self._evolver_llm or self._llm,
-                max_llm_calls=cfg.dream_max_llm_calls,
-                min_sessions=cfg.dream_min_sessions,
-                skills_loader=self._skills_loader,
-                skill_quarantine_timeout_days=cfg.skill_quarantine_timeout_days,
-            )
-        return self._dream_engine
+    def _build_dream_engine(
+        self,
+        cfg,  # noqa: ANN001
+        symbiote_id: str,
+        *,
+        min_sessions: int | None = None,
+        dry_run: bool = False,
+    ) -> DreamEngine:
+        """A DreamEngine configured for this symbiote, built per call.
 
-    def _maybe_dream(self, symbiote_id: str) -> None:
-        """Trigger a background dream cycle if conditions are met."""
-        cfg = self._environment.get_config(symbiote_id)
-        if cfg is None or cfg.dream_mode == "off":
-            return
-        engine = self._get_or_create_dream_engine(cfg, symbiote_id)
-        if engine.should_dream(symbiote_id, cfg.dream_mode):
-            engine.dream_async(symbiote_id, cfg.dream_mode)
-
-    def dream(self, symbiote_id: str, *, dry_run: bool = False) -> DreamReport:
-        """Run a dream cycle synchronously (for CLI / manual invocation)."""
-
-        cfg = self._environment.get_config(symbiote_id)
-        mode = cfg.dream_mode if cfg and cfg.dream_mode != "off" else "light"
-        engine = DreamEngine(
+        Never cached: each symbiote has its own dream settings and they may
+        change between cycles. Concurrency is guarded by the kernel
+        (``_dream_threads``), not by the engine.
+        """
+        return DreamEngine(
             storage=self._storage,
             memory=self._memory,
             llm=self._evolver_llm or self._llm,
             max_llm_calls=cfg.dream_max_llm_calls if cfg else 10,
-            min_sessions=1,  # manual trigger ignores min_sessions
+            min_sessions=min_sessions if min_sessions is not None else cfg.dream_min_sessions,
             dry_run=dry_run,
             skills_loader=self._skills_loader_for(symbiote_id),
             skill_quarantine_timeout_days=(
                 cfg.skill_quarantine_timeout_days if cfg else None
             ),
         )
+
+    def _maybe_dream(self, symbiote_id: str) -> None:
+        """Start a background dream cycle if due and none is running for the symbiote."""
+        cfg = self._environment.get_config(symbiote_id)
+        if cfg is None or cfg.dream_mode == "off":
+            return
+        with self._dream_lock:
+            running = self._dream_threads.get(symbiote_id)
+            if running is not None and running.is_alive():
+                return
+            engine = self._build_dream_engine(cfg, symbiote_id)
+            if not engine.should_dream(symbiote_id, cfg.dream_mode):
+                return
+            thread = threading.Thread(
+                target=self._run_dream,
+                args=(engine, symbiote_id, cfg.dream_mode),
+                daemon=True,
+                name=f"dream-{symbiote_id[:8]}",
+            )
+            self._dream_threads[symbiote_id] = thread
+            thread.start()
+
+    def _run_dream(self, engine: DreamEngine, symbiote_id: str, mode: str) -> None:
+        try:
+            engine.dream(symbiote_id, mode)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "dream background cycle failed for %s", symbiote_id
+            )
+        finally:
+            with self._dream_lock:
+                if self._dream_threads.get(symbiote_id) is threading.current_thread():
+                    del self._dream_threads[symbiote_id]
+
+    def dream(self, symbiote_id: str, *, dry_run: bool = False) -> DreamReport:
+        """Run a dream cycle synchronously (for CLI / manual invocation)."""
+        cfg = self._environment.get_config(symbiote_id)
+        mode = cfg.dream_mode if cfg and cfg.dream_mode != "off" else "light"
+        # Manual trigger ignores min_sessions.
+        engine = self._build_dream_engine(cfg, symbiote_id, min_sessions=1, dry_run=dry_run)
         return engine.dream(symbiote_id, mode)
 
     def report_feedback(

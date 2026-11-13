@@ -340,7 +340,10 @@ class GeneralizePhase:
             )
 
         entries = ctx.memory.get_by_type(ctx.symbiote_id, "procedural", limit=100)
-        tagged = [e for e in entries if len(e.tags) >= 1]
+        # Earlier generalizations are not clustered again, and a cluster they
+        # already cover is skipped (otherwise every cycle adds one more copy).
+        generalized = [e for e in entries if "dream:generalized" in e.tags]
+        tagged = [e for e in entries if len(e.tags) >= 1 and "dream:generalized" not in e.tags]
 
         # Cluster by tag overlap (2+ common tags)
         clusters: list[list[MemoryEntry]] = []
@@ -363,6 +366,10 @@ class GeneralizePhase:
         applied = 0
 
         for cluster in clusters:
+            cluster_tags = set().union(*(set(e.tags) for e in cluster))
+            if any(len(set(g.tags) & cluster_tags) >= 2 for g in generalized):
+                details.append({"cluster_size": len(cluster), "skipped": "already generalized"})
+                continue
             if not ctx.budget.consume(1):
                 break
 
