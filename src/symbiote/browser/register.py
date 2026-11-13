@@ -28,7 +28,15 @@ if TYPE_CHECKING:
     from symbiote.core.kernel import SymbioteKernel
 
 
-_REGISTERED_KERNELS: set[int] = set()
+# Marker set on a kernel once register() ran. An attribute on the kernel
+# itself, not a set of id()s: a new kernel can reuse a dead kernel's id.
+_REGISTERED_ATTR = "_symbiote_browser_registered"
+
+# Python module that each optional backend needs, and the extra providing it.
+_BACKEND_MODULES: dict[str, tuple[str, str]] = {
+    "chromium": ("playwright", "browser"),
+    "forge_scraper": ("forge_scraper", "extract"),
+}
 
 
 def register(
@@ -62,7 +70,7 @@ def register(
 
     Idempotent: calling `register` twice on the same kernel is a no-op.
     """
-    if id(kernel) in _REGISTERED_KERNELS:
+    if getattr(kernel, _REGISTERED_ATTR, False):
         return
 
     # Eagerly normalize so misshaped input fails fast with a useful error,
@@ -71,6 +79,10 @@ def register(
     _normalize_browser_options(browser_options)
     _normalize_routing(search_routing, search_backend)
     policy_obj = _build_policy(policy)
+    # Fail here, before any tool is registered, when a backend's extra is
+    # missing — not later at the first tool call.
+    extract_names = [extract_backend] if isinstance(extract_backend, str) else (extract_backend or [])
+    _require_backends([*extract_names, browser_backend])
 
     any_search_tool = (
         search_backend is not None
@@ -79,7 +91,7 @@ def register(
         or crawl_backend is not None
     )
     if not any_search_tool and browser_backend is None:
-        _REGISTERED_KERNELS.add(id(kernel))
+        setattr(kernel, _REGISTERED_ATTR, True)
         return
 
     if any_search_tool:
@@ -90,6 +102,7 @@ def register(
             search_options=search_options,
             extract_backend=extract_backend,
             crawl_backend=crawl_backend,
+            policy=policy_obj,
         )
 
     if browser_backend is not None:
@@ -101,7 +114,25 @@ def register(
             policy=policy_obj,
         )
 
-    _REGISTERED_KERNELS.add(id(kernel))
+    setattr(kernel, _REGISTERED_ATTR, True)
+
+
+def _module_available(name: str) -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec(name) is not None
+
+
+def _require_backends(backends: list[str | None]) -> None:
+    for backend in backends:
+        if backend is None or backend not in _BACKEND_MODULES:
+            continue
+        module, extra = _BACKEND_MODULES[backend]
+        if not _module_available(module):
+            raise ImportError(
+                f"Backend {backend!r} needs the {module!r} package: "
+                f'pip install "symbiote[{extra}]"'
+            )
 
 
 def _normalize_search_options(
@@ -157,6 +188,7 @@ def _register_search(
     search_options: dict[str, Any] | SearchOptions | None,
     extract_backend: ExtractBackend | list[ExtractBackend] | None,
     crawl_backend: CrawlBackend | None,
+    policy: Any = None,
 ) -> None:
     """Register web_search / web_extract / web_crawl backed by the chosen providers.
 
@@ -181,6 +213,7 @@ def _register_search(
         search=search_provider,
         extract=extract_provider,
         crawl=crawl_provider,
+        policy=policy,
     )
     descriptor_map = {
         WEB_SEARCH_DESCRIPTOR.tool_id: WEB_SEARCH_DESCRIPTOR,

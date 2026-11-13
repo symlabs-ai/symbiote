@@ -39,7 +39,17 @@ def kernel(tmp_path):
 
 
 @pytest.fixture
-def kernel_with_browser(kernel):
+def without_playwright_check(monkeypatch):
+    """Tests that fail before Chromium is launched (policy, SSRF) run without
+    the 'browser' extra: skip register()'s early check for it."""
+    import importlib
+
+    register_mod = importlib.import_module("symbiote.browser.register")
+    monkeypatch.setattr(register_mod, "_module_available", lambda name: True)
+
+
+@pytest.fixture
+def kernel_with_browser(kernel, without_playwright_check):
     register(
         kernel,
         browser_backend="chromium",
@@ -195,7 +205,7 @@ async def test_wait_for_matches_existing_text(kernel_with_browser, local_site):
 
 
 @pytest.mark.asyncio
-async def test_policy_blocklist_rejects_navigate(local_site, tmp_path):
+async def test_policy_blocklist_rejects_navigate(local_site, tmp_path, without_playwright_check):
     """Hooks layer: navigate fails before any network I/O when host is blocked."""
     kernel = SymbioteKernel(
         KernelConfig(db_path=str(tmp_path / "p.sqlite")),

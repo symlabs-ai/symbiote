@@ -125,6 +125,7 @@ def build_handlers(
     search: SearchProvider | None = None,
     extract: ExtractProvider | None = None,
     crawl: CrawlProvider | None = None,
+    policy: Any = None,
 ) -> dict[str, Any]:
     """Build async handlers for whichever providers were supplied.
 
@@ -132,6 +133,8 @@ def build_handlers(
         search: SearchProvider; enables `web_search` when given.
         extract: ExtractProvider; enables `web_extract` when given.
         crawl: CrawlProvider; enables `web_crawl` when given.
+        policy: Optional WebsitePolicy checked before every URL is fetched
+            (web_extract / web_crawl), as the browser tools already do.
 
     Returns:
         {tool_id: async-handler} mapping containing only the tools whose
@@ -156,6 +159,8 @@ def build_handlers(
             from symbiote.security.network import validate_url
 
             url = params["url"]
+            if policy is not None:
+                policy.check(url)
             validate_url(url)  # SSRF guard before any HTTP I/O
             return await extract.extract(url)
 
@@ -167,6 +172,10 @@ def build_handlers(
             from symbiote.security.network import validate_url
 
             domain = params["domain"]
+            if "://" not in domain:
+                domain = f"https://{domain}"  # the schema asks for a domain
+            if policy is not None:
+                policy.check(domain)
             validate_url(domain)
             instruction = params["instruction"]
             max_pages = int(params.get("max_pages", 10))

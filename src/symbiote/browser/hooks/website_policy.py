@@ -1,7 +1,7 @@
 """Website access policy — blocklist/allowlist with wildcard matching and TTL cache.
 
-Applied at the handler boundary for every URL-taking tool (browser_navigate
-primarily; web_extract / web_crawl when those land in Phase 4). The check
+Applied at the handler boundary for every URL-taking tool (browser_navigate,
+web_extract and web_crawl). The check
 runs *before* the SSRF validator so policy decisions are visible in the
 audit log even when DNS resolution would succeed.
 
@@ -78,7 +78,8 @@ class WebsitePolicy:
         exact: set[str] = set()
         suffix: set[str] = set()
         for raw in patterns:
-            p = raw.strip().lower()
+            # A trailing dot is the same DNS name (``evil.com.`` == ``evil.com``).
+            p = raw.strip().lower().rstrip(".")
             if not p:
                 continue
             if p.startswith("*."):
@@ -110,7 +111,7 @@ class WebsitePolicy:
         """
         self._maybe_reparse()
         parsed = urlparse(url)
-        host = (parsed.hostname or "").lower()
+        host = (parsed.hostname or "").lower().rstrip(".")
         if not host:
             raise DomainBlockedError(f"No hostname in URL: {url!r}")
 

@@ -78,6 +78,11 @@ async def test_extract_chain_falls_through_on_failure(tmp_path, monkeypatch):
 
     monkeypatch.setattr(fs_mod.ForgeScraperProvider, "extract", fs_fail)
     monkeypatch.setattr(fc_mod.FirecrawlViaSymGateway, "extract", fc_ok)
+    # Both providers are faked, so the 'extract' extra is not needed.
+    import importlib
+
+    register_mod = importlib.import_module("symbiote.browser.register")
+    monkeypatch.setattr(register_mod, "_module_available", lambda name: True)
     monkeypatch.setenv("SYMGATEWAY_BASE_URL", "https://gw.example.com/v1")
     monkeypatch.setenv("SYMGATEWAY_API_KEY", "sk-x")
 
