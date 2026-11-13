@@ -1294,5 +1294,6 @@ class SymbioteKernel:
         ))
 
     def shutdown(self) -> None:
-        """Close the storage adapter."""
+        """Stop the tool event loop and close the storage adapter."""
+        self._tool_gateway.close()
         self._storage.close()

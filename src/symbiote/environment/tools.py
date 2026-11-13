@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextlib
 import contextvars
 import functools
+import inspect
 import logging
 import os
 import signal
 import subprocess
+import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -175,10 +178,78 @@ class ToolGateway:
     ) -> None:
         self._gate = policy_gate
         self._fs_root = Path(fs_allowed_root) if fs_allowed_root is not None else None
+        # Event loop for async handlers called from the sync paths (created on
+        # first use). One long-lived loop, not asyncio.run() per call: objects
+        # bound to a loop (browser sessions, MCP clients) must survive between
+        # calls.
+        self._async_loop: asyncio.AbstractEventLoop | None = None
+        self._async_thread: threading.Thread | None = None
+        self._async_lock = threading.Lock()
         self._registry: dict[str, Callable[[dict], Any]] = {}
         self._descriptors: dict[str, ToolDescriptor] = {}
         self._http_configs: dict[str, HttpToolConfig] = {}
         self._register_builtins()
+
+    # ── async handlers on the sync paths ──────────────────────────────────
+
+    def _ensure_async_loop(self) -> asyncio.AbstractEventLoop:
+        with self._async_lock:
+            if self._async_loop is None or self._async_loop.is_closed():
+                loop = asyncio.new_event_loop()
+                thread = threading.Thread(
+                    target=loop.run_forever, name="symbiote-tool-loop", daemon=True
+                )
+                thread.start()
+                self._async_loop, self._async_thread = loop, thread
+            return self._async_loop
+
+    def _run_awaitable(self, awaitable: Any, ctx: contextvars.Context) -> Any:
+        """Run ``awaitable`` on the gateway loop with ``ctx`` and wait for it."""
+        loop = self._ensure_async_loop()
+        done: concurrent.futures.Future = concurrent.futures.Future()
+
+        async def _await() -> Any:
+            return await awaitable
+
+        def _start() -> None:
+            task = loop.create_task(_await(), context=ctx)
+
+            def _copy(t: asyncio.Task) -> None:
+                if t.cancelled():
+                    done.cancel()
+                elif t.exception() is not None:
+                    done.set_exception(t.exception())  # type: ignore[arg-type]
+                else:
+                    done.set_result(t.result())
+
+            task.add_done_callback(_copy)
+
+        loop.call_soon_threadsafe(_start)
+        return done.result()
+
+    def _sync_callable(self, fn: Callable[[dict], Any]) -> Callable[[dict], Any]:
+        """Wrap a handler so an async one is awaited on the gateway loop."""
+
+        def call(params: dict) -> Any:
+            result = fn(params)
+            if inspect.isawaitable(result):
+                return self._run_awaitable(result, contextvars.copy_context())
+            return result
+
+        return call
+
+    def close(self) -> None:
+        """Stop the loop used for async handlers (idempotent)."""
+        with self._async_lock:
+            loop, thread = self._async_loop, self._async_thread
+            self._async_loop = self._async_thread = None
+        if loop is None:
+            return
+        loop.call_soon_threadsafe(loop.stop)
+        if thread is not None:
+            thread.join(timeout=5)
+        if not loop.is_running():
+            loop.close()
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -325,7 +396,7 @@ class ToolGateway:
                 session_id=session_id,
                 tool_id=tool_id,
                 params=params,
-                action_fn=self._registry[tool_id],
+                action_fn=self._sync_callable(self._registry[tool_id]),
                 workspace_id=workspace_id,
                 timeout=timeout,
             )
@@ -423,7 +494,7 @@ class ToolGateway:
                 handler_fns.append(None)
             else:
                 pre_results.append(None)  # placeholder — will run in pool
-                handler_fns.append(self._registry[call.tool_id])
+                handler_fns.append(self._sync_callable(self._registry[call.tool_id]))
 
         # Dispatch authorised handlers to the pool
         max_workers = min(sum(1 for h in handler_fns if h is not None), 4)

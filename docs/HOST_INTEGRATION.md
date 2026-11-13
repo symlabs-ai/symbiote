@@ -130,6 +130,20 @@ kernel.tool_gateway.register(
 kernel.environment.configure(symbiote_id=sym.id, tools=["custom_search"])
 ```
 
+### Async handlers
+
+A handler may be `async def` (the browser and MCP tools are). It runs on every
+path:
+
+- `kernel.message_async()` awaits it in the caller's event loop;
+- `kernel.message()`, the CLI and `POST /sessions/{id}/chat` run it on one
+  long-lived event loop owned by the `ToolGateway` (a daemon thread, stopped by
+  `kernel.shutdown()`), with the caller's `contextvars` copied in.
+
+Objects bound to an event loop — a Playwright browser session, an MCP client —
+belong to the loop that created them. Do not share one between `message()` and
+`message_async()` calls: pick one entry point per session.
+
 ### Discovered Tools
 
 Automatically discover and load tools from a repository:

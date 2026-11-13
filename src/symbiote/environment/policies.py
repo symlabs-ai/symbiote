@@ -167,6 +167,10 @@ class PolicyGate:
             else:
                 coro = asyncio.to_thread(action_fn, params)
             output = await asyncio.wait_for(coro, timeout=timeout)
+            if inspect.isawaitable(output):
+                # A sync wrapper returning a coroutine (e.g. a lambda around
+                # an async function).
+                output = await asyncio.wait_for(output, timeout=timeout)
             self._write_audit(
                 symbiote_id=symbiote_id,
                 session_id=session_id,
