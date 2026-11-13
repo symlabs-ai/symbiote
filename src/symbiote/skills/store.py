@@ -70,6 +70,10 @@ class SkillExistsError(SkillError):
     """create() called with a name that already exists."""
 
 
+class SkillReadOnlyError(SkillError):
+    """Skill writes are turned off for this kernel (``skill_writes=False``)."""
+
+
 class SkillProtectedError(SkillError):
     """Skill is pinned or in a protected root — refused."""
 
@@ -211,9 +215,13 @@ class SkillsStore:
         roots: list[Path],
         *,
         protected_roots: list[Path] | None = None,
+        read_only: bool = False,
     ) -> None:
         if not roots:
             raise ValueError("SkillsStore needs at least one root path.")
+        # Read-only: every mutating method raises SkillReadOnlyError and
+        # nothing is created on disk, not even the agent root.
+        self._read_only = read_only
         # Called after every successful write; the kernel points it at the
         # matching SkillsLoader.refresh so new/edited skills are visible at once.
         self.on_change: Callable[[], None] | None = None
@@ -223,7 +231,14 @@ class SkillsStore:
             Path(r).resolve() for r in (protected_roots or [])
         ]
         # Ensure the agent write root exists.
-        self._roots[0].mkdir(parents=True, exist_ok=True)
+        if not read_only:
+            self._roots[0].mkdir(parents=True, exist_ok=True)
+
+    def _check_writable(self) -> None:
+        if self._read_only:
+            raise SkillReadOnlyError(
+                "Skill writes are disabled (KernelConfig.skill_writes=False)."
+            )
 
     @property
     def agent_root(self) -> Path:
@@ -291,6 +306,7 @@ class SkillsStore:
         so the skill belongs to the user and the future curator must not
         touch it.
         """
+        self._check_writable()
         _validate_name(name)
         if not content:
             raise SkillValidationError("content is required for create().")
@@ -325,6 +341,7 @@ class SkillsStore:
 
     def edit(self, name: str, content: str) -> SkillWriteResult:
         """Replace SKILL.md content entirely. Forbidden on protected skills."""
+        self._check_writable()
         _validate_name(name)
         if not content:
             raise SkillValidationError("content is required for edit().")
@@ -365,6 +382,7 @@ class SkillsStore:
         Refuses if ``old_string`` is not found, or if ``replace_all=False``
         and ``old_string`` appears more than once (ambiguous edit).
         """
+        self._check_writable()
         _validate_name(name)
         if not old_string:
             raise SkillValidationError("old_string is required for patch().")
@@ -419,6 +437,7 @@ class SkillsStore:
 
     def write_file(self, name: str, file_path: str, file_content: str) -> SkillWriteResult:
         """Create/overwrite a supporting file under references/templates/scripts/assets."""
+        self._check_writable()
         _validate_name(name)
         _validate_file_path(file_path)
         if file_content is None:
@@ -454,6 +473,7 @@ class SkillsStore:
     # ── remove_file ────────────────────────────────────────────────────
 
     def remove_file(self, name: str, file_path: str) -> SkillWriteResult:
+        self._check_writable()
         _validate_name(name)
         _validate_file_path(file_path)
 
@@ -486,6 +506,7 @@ class SkillsStore:
 
     def delete(self, name: str) -> SkillWriteResult:
         """Remove the skill directory entirely. Refused if pinned or protected."""
+        self._check_writable()
         _validate_name(name)
         skill_dir = self.find_skill_dir(name)
         if skill_dir is None:

@@ -12,6 +12,7 @@ from symbiote.core.identity import IdentityManager
 from symbiote.core.models import MemoryEntry
 from symbiote.core.ports import KnowledgePort, MemoryPort
 from symbiote.core.session import SessionManager
+from symbiote.core.turn_record import current_turn_record
 from symbiote.runners.base import RunnerRegistry, RunResult
 
 
@@ -79,7 +80,16 @@ class CapabilitySurface:
         fact_type: str = "factual",
         importance: float = 0.7,
     ) -> MemoryEntry:
-        """Persist a durable fact as long-term memory."""
+        """Persist a durable fact as long-term memory.
+
+        Raises ``CapabilityError`` when long-term memory is off for the
+        symbiote (``memory_enabled=False``).
+        """
+        is_enabled = getattr(self._memory, "is_enabled", None)
+        if is_enabled is not None and not is_enabled(symbiote_id):
+            raise CapabilityError(
+                "learn", "long-term memory is disabled for this symbiote"
+            )
         entry = MemoryEntry(
             symbiote_id=symbiote_id,
             session_id=session_id,
@@ -166,6 +176,9 @@ class CapabilitySurface:
             user_input=content,
             extra_context=extra_context,
         )
+        record = current_turn_record()
+        if record is not None:
+            record.note_context(context)
         if self._hooks is not None:
             self._hooks.on_context(context)
         runner = self._runner_for_mode(context, runner)
@@ -220,6 +233,9 @@ class CapabilitySurface:
             user_input=content,
             extra_context=extra_context,
         )
+        record = current_turn_record()
+        if record is not None:
+            record.note_context(context)
         if self._hooks is not None:
             self._hooks.on_context(context)
 

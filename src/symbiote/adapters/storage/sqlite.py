@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sqlite3
@@ -174,6 +175,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "_ensure_unique_external_key",
     "_ensure_unique_environment_config",
     "_ensure_hot_indexes",
+    "_migrate_governance",
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -467,6 +469,34 @@ class SQLiteAdapter:
         self._conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_environment_configs_scope "
             "ON environment_configs(symbiote_id, COALESCE(workspace_id, ''))"
+        )
+        self._conn.commit()
+
+    def _migrate_governance(self) -> None:
+        """6: per-symbiote memory switch and the per-turn context record."""
+        with contextlib.suppress(sqlite3.OperationalError):  # column already exists
+            self._conn.execute(
+                "ALTER TABLE environment_configs ADD COLUMN memory_enabled INTEGER DEFAULT 1"
+            )
+        self._conn.execute(
+            """CREATE TABLE IF NOT EXISTS turn_contexts (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                symbiote_id TEXT NOT NULL,
+                memories_json TEXT DEFAULT '[]',
+                knowledge_json TEXT DEFAULT '[]',
+                skills_json TEXT DEFAULT '[]',
+                tokens_estimate INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL
+            )"""
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_turn_contexts_session "
+            "ON turn_contexts(session_id, created_at)"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_turn_contexts_symbiote "
+            "ON turn_contexts(symbiote_id, created_at)"
         )
         self._conn.commit()
 

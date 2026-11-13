@@ -19,6 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from symbiote.core.turn_record import current_turn_record
 from symbiote.environment.descriptors import (
     HttpToolConfig,
     ToolCallResult,
@@ -981,6 +982,9 @@ def _make_memory_search_handler(memory_store: Any) -> Callable[[dict], Any]:
         results = memory_store.search(
             query, scope=scope, limit=limit, symbiote_id=_calling_symbiote()
         )
+        record = current_turn_record()
+        if record is not None:
+            record.add_memories([m.id for m in results], "on_demand")
         return [
             {"content": m.content, "type": m.type, "importance": m.importance}
             for m in results
@@ -998,6 +1002,9 @@ def _make_knowledge_search_handler(knowledge_service: Any) -> Callable[[dict], A
         query = params.get("query", "")
         limit = params.get("limit", 5)
         results = knowledge_service.query(symbiote_id, query, limit=limit)
+        record = current_turn_record()
+        if record is not None:
+            record.add_knowledge([k.id for k in results], "on_demand")
         return [{"name": k.name, "content": k.content or ""} for k in results]
 
     return handler

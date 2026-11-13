@@ -61,6 +61,7 @@ class EnvironmentManager:
         # Reflection mode fields
         reflection_mode: str | None = None,
         reflection_max_tokens: int | None = None,
+        memory_enabled: bool | None = None,
         # Skill self-improvement fields (Sprint 4)
         skill_review_enabled: bool | None = None,
         skill_injection_enabled: bool | None = None,
@@ -405,6 +406,11 @@ class EnvironmentManager:
             "max_blocks": cfg.max_blocks,
         }
 
+    def get_memory_enabled(self, symbiote_id: str) -> bool:
+        """False only when the symbiote turned long-term memory off."""
+        cfg = self.get_config(symbiote_id)
+        return cfg.memory_enabled if cfg is not None else True
+
     def get_dream_mode(
         self, symbiote_id: str, workspace_id: str | None = None
     ) -> str:
@@ -502,6 +508,7 @@ class EnvironmentManager:
             dream_min_sessions=_int(row, "dream_min_sessions", 5),
             reflection_mode=row.get("reflection_mode") or "keyword",
             reflection_max_tokens=_int(row, "reflection_max_tokens", 4000),
+            memory_enabled=bool(_int(row, "memory_enabled", 1)),
             skill_review_enabled=bool(row.get("skill_review_enabled", 0)),
             skill_injection_enabled=bool(row.get("skill_injection_enabled", 0)),
             skill_injection_mode=row.get("skill_injection_mode") or "full",

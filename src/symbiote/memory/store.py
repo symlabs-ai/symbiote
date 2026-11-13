@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.models import MemoryEntry
 from symbiote.core.ports import StoragePort
+
+logger = logging.getLogger(__name__)
 
 _LIKE_ESCAPE = "\\"
 # How many of a symbiote's memories (most important / recently used first)
@@ -30,11 +34,34 @@ class MemoryStore:
 
     def __init__(self, storage: StoragePort) -> None:
         self._storage = storage
+        # ``fn(symbiote_id) -> bool``; set by the kernel from the symbiote's
+        # ``memory_enabled``. None means memory is on for everyone.
+        self._enabled_check: Callable[[str], bool] | None = None
+
+    def set_enabled_check(self, check: Callable[[str], bool] | None) -> None:
+        """Install the per-symbiote switch for long-term memory.
+
+        For a symbiote the check turns off, ``store`` writes nothing and the
+        query methods return nothing: this is the single point every writer
+        (reflection, failure memory, handoff, dream, consolidation, ``learn``)
+        and every reader (context assembly, ``search_memories``) goes through.
+        """
+        self._enabled_check = check
+
+    def is_enabled(self, symbiote_id: str) -> bool:
+        return self._enabled_check is None or self._enabled_check(symbiote_id)
 
     # ── public API ─────────────────────────────────────────────────────
 
     def store(self, entry: MemoryEntry) -> str:
-        """Persist a memory entry and return its ID."""
+        """Persist a memory entry and return its ID.
+
+        Writes nothing when long-term memory is off for the entry's symbiote
+        (the ID is still returned, so internal writers need no special case).
+        """
+        if not self.is_enabled(entry.symbiote_id):
+            logger.debug("memory is off for %s; entry not stored", entry.symbiote_id)
+            return entry.id
         self._storage.execute(
             "INSERT INTO memory_entries "
             "(id, symbiote_id, session_id, type, category, scope, content, "
@@ -87,6 +114,8 @@ class MemoryStore:
         ``query`` is matched literally (``%`` and ``_`` are not wildcards).
         Optionally filters by scope and tags.
         """
+        if not self.is_enabled(symbiote_id):
+            return []
         sql = (
             "SELECT * FROM memory_entries "
             "WHERE is_active = 1 AND symbiote_id = ? AND content LIKE ? ESCAPE '\\'"
@@ -126,6 +155,8 @@ class MemoryStore:
         memory without being a substring of it. Memories from ``session_id``
         come first. Updates last_used_at for all returned entries.
         """
+        if not self.is_enabled(symbiote_id):
+            return []
         from symbiote.memory.recall import rank_entries
 
         rows = self._storage.fetch_all(
@@ -148,6 +179,8 @@ class MemoryStore:
         self, symbiote_id: str, entry_type: str, limit: int = 20
     ) -> list[MemoryEntry]:
         """Return active entries filtered by symbiote and memory type."""
+        if not self.is_enabled(symbiote_id):
+            return []
         rows = self._storage.fetch_all(
             "SELECT * FROM memory_entries "
             "WHERE is_active = 1 AND symbiote_id = ? AND type = ? "
@@ -160,6 +193,8 @@ class MemoryStore:
         self, symbiote_id: str, category: str, limit: int = 20
     ) -> list[MemoryEntry]:
         """Return active entries filtered by symbiote and memory category."""
+        if not self.is_enabled(symbiote_id):
+            return []
         rows = self._storage.fetch_all(
             "SELECT * FROM memory_entries "
             "WHERE is_active = 1 AND symbiote_id = ? AND category = ? "

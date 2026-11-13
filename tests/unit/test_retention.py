@@ -14,6 +14,17 @@ from symbiote.cli.main import app
 from tests.support import ScriptedLLM, make_kernel
 
 
+def _counts(**deleted: int) -> dict[str, int]:
+    """What ``prune()`` returns: one entry per table it covers."""
+    return {
+        "messages": 0,
+        "execution_traces": 0,
+        "turn_contexts": 0,
+        "memory_entries": 0,
+        **deleted,
+    }
+
+
 def _count(kernel, table: str, session_id: str) -> int:
     return kernel._storage.fetch_one(
         f"SELECT COUNT(*) c FROM {table} WHERE session_id = ?", (session_id,)  # noqa: S608
@@ -50,7 +61,7 @@ def test_retention_is_off_by_default(tmp_path: Path) -> None:
     kernel = make_kernel(tmp_path, ScriptedLLM("ok"))
     s = _seed(kernel)
 
-    assert kernel.prune() == {"messages": 0, "execution_traces": 0}
+    assert kernel.prune() == _counts()
     assert _count(kernel, "messages", s["old"]) == 1
     kernel.shutdown()
 
@@ -65,10 +76,10 @@ def test_retention_removes_only_old_closed_sessions(tmp_path: Path) -> None:
     )
 
     dry = kernel.prune(dry_run=True)
-    assert dry == {"messages": 1, "execution_traces": 1}
+    assert dry == _counts(messages=1, execution_traces=1)
     assert _count(kernel, "messages", s["old"]) == 1
 
-    assert kernel.prune() == {"messages": 1, "execution_traces": 1}
+    assert kernel.prune() == _counts(messages=1, execution_traces=1)
     assert _count(kernel, "messages", s["old"]) == 0
     assert _count(kernel, "execution_traces", s["old"]) == 0
     for keep in ("recent", "active"):

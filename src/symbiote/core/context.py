@@ -40,6 +40,10 @@ class AssembledContext(BaseModel):
     working_memory_snapshot: dict | None = None
     relevant_memories: list[dict] = Field(default_factory=list)
     relevant_knowledge: list[dict] = Field(default_factory=list)
+    # IDs of the entries behind ``relevant_memories`` / ``relevant_knowledge``
+    # (after trimming to the budget), in the same order.
+    memory_ids: list[str] = Field(default_factory=list)
+    knowledge_ids: list[str] = Field(default_factory=list)
     available_tools: list[dict] = Field(default_factory=list)
     tool_loading: str = "full"
     tool_mode: str = "brief"
@@ -182,6 +186,11 @@ class ContextAssembler:
         if self._environment is not None:
             context_mode = self._environment.get_context_mode(symbiote_id)
 
+        # The dicts below are what the prompt renders; the entry IDs are kept
+        # aside (keyed by dict identity, which trimming preserves) so adding
+        # them does not change the token estimates.
+        entry_ids: dict[int, str] = {}
+
         # 3. Relevant memories (skipped in on_demand mode)
         memories_dicts: list[dict] = []
         if context_mode != "on_demand":
@@ -196,6 +205,9 @@ class ContextAssembler:
                 }
                 for m in raw_memories
             ]
+            entry_ids.update(
+                (id(d), m.id) for d, m in zip(memories_dicts, raw_memories, strict=True)
+            )
             # Sort by importance descending for trimming
             memories_dicts.sort(key=lambda d: d["importance"], reverse=True)
 
@@ -207,6 +219,9 @@ class ContextAssembler:
                 {"name": k.name, "content": k.content or ""}
                 for k in raw_knowledge
             ]
+            entry_ids.update(
+                (id(d), k.id) for d, k in zip(knowledge_dicts, raw_knowledge, strict=True)
+            )
 
         # 5. Tool descriptors — mode-aware loading
         #    Resolve tags: explicit param > EnvironmentConfig > None (all)
@@ -336,6 +351,8 @@ class ContextAssembler:
             working_memory_snapshot=wm_snapshot,
             relevant_memories=memories_dicts,
             relevant_knowledge=knowledge_dicts,
+            memory_ids=[entry_ids[id(d)] for d in memories_dicts if id(d) in entry_ids],
+            knowledge_ids=[entry_ids[id(d)] for d in knowledge_dicts if id(d) in entry_ids],
             available_tools=tool_dicts,
             tool_loading=loading_mode,
             tool_mode=tool_mode,

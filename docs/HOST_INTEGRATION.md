@@ -698,6 +698,112 @@ the symbiote (`symbiote_id` query param / `--symbiote` option).
 
 ---
 
+## One symbiote per user: isolation, retention, erasure
+
+Memory, knowledge, traces and configuration belong to a symbiote, so a host
+that wants what one user said never to reach another gives each identity
+(user, or user + workspace) its own symbiote. This is a supported way to run
+the kernel:
+
+```python
+kernel = SymbioteKernel(
+    KernelConfig(
+        skill_scope="per_symbiote",        # each symbiote has its own skill library
+        cross_symbiote_learning=False,     # never read another symbiote's harness
+        memory_retention_days=180,
+    ),
+    llm=llm,
+)
+sym = kernel.find_symbiote_by_name(user_key) or kernel.create_symbiote(name=user_key, role="assistant")
+```
+
+**What is isolated.** Every memory and knowledge read is filtered by symbiote,
+in recall, in the context of a turn, in `search_memories` / `search_knowledge`
+and in the batch processes (reflection, dream, background review), which run
+for one symbiote at a time. With `skill_scope="per_symbiote"` each symbiote
+reads and writes only `{skills_root}/<symbiote_id>/skills`, plus the read-only
+catalogue in `skills_protected_roots`. The one place that reads across
+symbiotes is `kernel.cross_learning_candidates()` (harness versions of other
+symbiotes with similar tools); nothing calls it automatically, and
+`cross_symbiote_learning=False` makes it return nothing.
+
+**What it costs.** A symbiote that is not in a turn costs rows in the
+database and nothing else: no thread, no timer, no background task. In
+memory the kernel keeps per-symbiote objects in caches bounded by
+`KernelConfig.symbiote_cache_size` (default 256; skill loader/store pairs and
+background-review engines), rebuilt on demand. Measured with 5000 symbiotes in
+one kernel (SQLite, one turn each): the kernel's share of `message()` stayed
+under 1 ms from the first to the last symbiote and memory grew about 1 KB per
+symbiote. With skill writes on, each symbiote that has had a turn gets a
+directory under `skills_root`.
+
+### Switches
+
+Everything that learns can be turned off, per symbiote
+(`kernel.environment.configure(symbiote_id=..., ...)`) or for the kernel
+(`KernelConfig`). None of these is the default.
+
+| Mechanism | Switch | When off |
+|---|---|---|
+| Reflection at session close | `reflection_mode="off"` (per symbiote) | no reflection run, no model call, nothing in `reflection_audit`, no memory with `source='reflection'` |
+| Long-term memory | `memory_enabled=False` (per symbiote) | nothing is written to `memory_entries` by anyone (reflection, failure memory, handoff, dream, `learn`, which raises), and nothing is recalled into the context or by `search_memories`; the automatic dream cycle does not start |
+| Dream | `dream_mode="off"` (per symbiote, the default) | no cycle, nothing in `dream_reports` |
+| Background skill review | `skill_review_enabled=False` (per symbiote, the default) | no review, nothing in `skill_review_audit` |
+| Skill writes | `KernelConfig(skill_writes=False)` (whole kernel) | the library is read-only: `skill_manage` and `SkillsStore` refuse every change, the review does not run, dream leaves skills alone, loading a skill does not touch its usage counter, and no directory is created |
+| Cross-symbiote learning | `KernelConfig(cross_symbiote_learning=False)` | `cross_learning_candidates()` returns nothing |
+
+Skills live on local disk. Until they can be stored elsewhere, a host with
+several replicas that do not share a disk should run with `skill_writes=False`.
+
+### Retention
+
+`kernel.prune()` (or `symbiote prune`) applies the retention windows. Nothing
+runs it automatically; call it from a cron.
+
+| Window | Removes |
+|---|---|
+| `message_retention_days` / `--messages-days` | messages of sessions closed more than N days ago |
+| `trace_retention_days` / `--traces-days` | `execution_traces` and `turn_contexts` of those sessions |
+| `memory_retention_days` / `--memories-days` | memory entries created more than N days ago, whatever their session |
+
+It returns the rows deleted per table: `messages`, `execution_traces`,
+`turn_contexts`, `memory_entries`.
+
+### Erasing a symbiote
+
+```python
+counts = kernel.purge_symbiote(sym.id)            # dry_run=True only counts
+```
+
+Deletes the symbiote and everything the kernel stored about it: sessions,
+messages, memories, knowledge, traces and turn contexts, scores, audit rows,
+harness versions, configuration, the HTTP tools it registered and, with
+`skill_scope="per_symbiote"`, its skill directory. Other symbiotes are not
+touched. It cannot be undone (`IdentityManager.delete` only sets
+`status='deleted'`). Stop sending turns to the symbiote first. The deletes are
+not one transaction: if the call fails midway, call it again.
+
+### Which memories entered a turn
+
+Every turn, with or without tool calls and whether or not it succeeded,
+leaves one row in `turn_contexts`:
+
+```python
+for turn in kernel.inspector.list_turn_contexts(session_id=session.id):
+    turn["memories"]    # [{"id": "...", "source": "packed" | "on_demand"}]
+    turn["knowledge"]   # same shape
+    turn["skills"]      # names listed in <available-skills>
+```
+
+`packed` entries were in the system prompt; `on_demand` entries were returned
+by `search_memories` / `search_knowledge` during the turn. The record says what
+the model was given, not what it used. For the full text as the model saw it,
+use the `on_context` hook (see [Lifecycle Hooks](#lifecycle-hooks)), which
+receives the `AssembledContext` of each turn; `context.memory_ids` and
+`context.knowledge_ids` carry the same IDs.
+
+---
+
 ## Timeout Configuration
 
 ```python

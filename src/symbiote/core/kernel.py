@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ from symbiote.core.reflection import ReflectionEngine
 from symbiote.core.scoring import compute_auto_score, compute_final_score
 from symbiote.core.session import SessionManager
 from symbiote.core.session_lock import SessionLock
+from symbiote.core.turn_record import TurnRecord, close_turn_record, open_turn_record
 from symbiote.discovery.loader import DiscoveredToolLoader
 from symbiote.discovery.repository import DiscoveredToolRepository
 from symbiote.dream.engine import DreamEngine
@@ -147,6 +149,9 @@ class SymbioteKernel:
         self._knowledge = KnowledgeService(self._storage)
         self._workspace = WorkspaceManager(self._storage)
         self._environment = EnvironmentManager(self._storage)
+        # Per-symbiote switch for long-term memory (``memory_enabled``),
+        # enforced where every memory write and read goes through.
+        self._memory.set_enabled_check(self._environment.get_memory_enabled)
 
         # Policies and tools
         self._policy_gate = PolicyGate(self._environment, self._storage)
@@ -266,7 +271,11 @@ class SymbioteKernel:
         # In per_symbiote mode the review engine is cached per-symbiote (each
         # symbiote sees only its own store/loader). In global mode the single
         # _background_review is reused.
-        self._background_review_by_symbiote: dict[str, BackgroundReviewEngine] = {}
+        # Bounded: least recently used engines are dropped once they have no
+        # thread running (``KernelConfig.symbiote_cache_size``).
+        self._background_review_by_symbiote: OrderedDict[
+            str, BackgroundReviewEngine
+        ] = OrderedDict()
         self._background_review: BackgroundReviewEngine | None = None
         # Guards the lazy construction of _background_review against the
         # race where ChatRunner (mid-session nudge) and close_session
@@ -673,6 +682,7 @@ class SymbioteKernel:
         # skill_view) resolve the right store/loader. The gateway's parallel
         # tool path copies contextvars into worker threads, so this propagates.
         _scope_token = _set_active_symbiote(symbiote_id)
+        record, record_token = open_turn_record(symbiote_id, session_id)
         try:
             # S-01: Inject previous handoff on session start (first message only)
             extra_context = self._inject_handoff_if_resuming(
@@ -704,6 +714,8 @@ class SymbioteKernel:
                 )
             return response
         finally:
+            close_turn_record(record_token)
+            self._persist_turn_context(record)
             _reset_active_symbiote(_scope_token)
 
     async def message_async(
@@ -749,6 +761,7 @@ class SymbioteKernel:
         symbiote_id = row["symbiote_id"]
 
         _scope_token = _set_active_symbiote(symbiote_id)
+        record, record_token = open_turn_record(symbiote_id, session_id)
         try:
             # S-01: Inject previous handoff on session start (first message only)
             extra_context = self._inject_handoff_if_resuming(
@@ -775,6 +788,8 @@ class SymbioteKernel:
             await self._hooks.after_turn(turn_messages, _response_text(response))
             return response
         finally:
+            close_turn_record(record_token)
+            self._persist_turn_context(record)
             _reset_active_symbiote(_scope_token)
 
     def _finish_turn(self, session_id: str, symbiote_id: str, result: RunResult):  # noqa: ANN202
@@ -795,6 +810,42 @@ class SymbioteKernel:
         response = result.output
         self._sessions.add_message(session_id, "assistant", _response_text(response))
         return response
+
+    def _persist_turn_context(self, record: TurnRecord) -> None:
+        """Write what entered the context of a turn to ``turn_contexts``.
+
+        Runs for every turn whose context was assembled, with or without
+        tools and whether or not the run succeeded. Never raises: it is
+        called while a turn unwinds.
+        """
+        if not record.assembled:
+            return
+        import json
+        from datetime import UTC, datetime
+        from uuid import uuid4
+
+        try:
+            self._storage.execute(
+                "INSERT INTO turn_contexts "
+                "(id, session_id, symbiote_id, memories_json, knowledge_json, "
+                "skills_json, tokens_estimate, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(uuid4()),
+                    record.session_id,
+                    record.symbiote_id,
+                    json.dumps(record.memories),
+                    json.dumps(record.knowledge),
+                    json.dumps(record.skills),
+                    record.tokens_estimate,
+                    datetime.now(tz=UTC).isoformat(),
+                ),
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "could not record the context of a turn of session %s",
+                record.session_id,
+            )
 
     def _latest_trace(self, session_id: str) -> LoopTrace | None:
         """Most recent loop trace persisted for ``session_id``."""
@@ -849,13 +900,18 @@ class SymbioteKernel:
                 "failure memory", self._generate_failure_memory, session_id, symbiote_id, trace
             )
 
-            # 3. Reflection — build engine matching this symbiote's config
-            self._close_step(
-                "reflection",
-                lambda: self._reflection_for(symbiote_id).reflect_session(
-                    session_id, symbiote_id
-                ),
-            )
+            # 3. Reflection — build engine matching this symbiote's config.
+            # Skipped when the symbiote turned reflection or long-term memory
+            # off (no LLM call, nothing written to reflection_audit). The
+            # other memory writers below are stopped by the MemoryStore.
+            cfg = self._environment.get_config(symbiote_id)
+            if cfg is None or (cfg.memory_enabled and cfg.reflection_mode != "off"):
+                self._close_step(
+                    "reflection",
+                    lambda: self._reflection_for(symbiote_id).reflect_session(
+                        session_id, symbiote_id
+                    ),
+                )
 
             # 4. S-02: Persist long-run handoff as memory entry
             self._close_step("handoff", self._persist_handoff_memory, session_id, symbiote_id)
@@ -932,7 +988,9 @@ class SymbioteKernel:
         protected = list(cfg.skills_protected_roots)
 
         try:
-            self._skills_store = SkillsStore(roots=roots, protected_roots=protected)
+            self._skills_store = SkillsStore(
+                roots=roots, protected_roots=protected, read_only=not cfg.skill_writes
+            )
         except Exception as exc:
             # Two failure regimes:
             # - Host EXPLICITLY set ``skills_root`` in KernelConfig — they
@@ -970,7 +1028,9 @@ class SymbioteKernel:
                 # as the search dir by passing r.parent — same convention,
                 # just renamed.
                 loader_roots.append(r.parent)
-        self._skills_loader = SkillsLoader(*loader_roots)
+        self._skills_loader = SkillsLoader(
+            *loader_roots, read_only=not cfg.skill_writes
+        )
         if self._skills_store is not None:
             self._skills_store.on_change = self._skills_loader.refresh
 
@@ -1010,6 +1070,8 @@ class SymbioteKernel:
                 base_root=base_root,
                 protected_roots=list(cfg.skills_protected_roots),
                 extra_roots=list(cfg.skills_extra_roots),
+                max_cached=cfg.symbiote_cache_size,
+                read_only=not cfg.skill_writes,
             )
         except Exception as exc:
             if cfg.skills_root is not None:
@@ -1059,6 +1121,8 @@ class SymbioteKernel:
         symbiote wins — acceptable because each symbiote sees only its own
         skills via path scoping anyway.
         """
+        if not self._config.skill_writes:
+            return None  # the review exists to write skills
         cfg = self._environment.get_config(symbiote_id)
         if cfg is None or not cfg.skill_review_enabled:
             return None
@@ -1100,6 +1164,9 @@ class SymbioteKernel:
                         environment=self._environment,
                     )
                     self._background_review_by_symbiote[symbiote_id] = eng
+                    self._evict_idle_review_engines(keep=symbiote_id)
+                else:
+                    self._background_review_by_symbiote.move_to_end(symbiote_id)
             return eng
 
         # Hot path: engine already built — return immediately, no lock.
@@ -1122,6 +1189,25 @@ class SymbioteKernel:
                 )
         return self._background_review
 
+    def _evict_idle_review_engines(self, *, keep: str) -> None:
+        """Drop least recently used review engines beyond the cache size.
+
+        Called with ``_background_review_lock`` held. An engine with a review
+        still running is kept (``shutdown`` must be able to wait for it), so
+        the cache can exceed the limit while that many reviews are running.
+        """
+        limit = self._config.symbiote_cache_size
+        excess = len(self._background_review_by_symbiote) - limit
+        if excess <= 0:
+            return
+        for sid in list(self._background_review_by_symbiote):
+            if excess <= 0:
+                break
+            if sid == keep or self._background_review_by_symbiote[sid].active_threads():
+                continue
+            del self._background_review_by_symbiote[sid]
+            excess -= 1
+
     def _reflection_for(self, symbiote_id: str) -> ReflectionEngine:
         """Build a ReflectionEngine for this symbiote's current config.
 
@@ -1136,7 +1222,7 @@ class SymbioteKernel:
         mode = cfg.reflection_mode if cfg else "keyword"
         max_tokens = cfg.reflection_max_tokens if cfg else 4000
 
-        if mode == "keyword":
+        if mode in ("keyword", "off"):  # "off" is decided by close_session
             return self._reflection
 
         # llm/hybrid -> evolver_llm; llm_main -> main self._llm
@@ -1240,7 +1326,12 @@ class SymbioteKernel:
             max_llm_calls=cfg.dream_max_llm_calls if cfg else 10,
             min_sessions=min_sessions if min_sessions is not None else cfg.dream_min_sessions,
             dry_run=dry_run,
-            skills_loader=self._skills_loader_for(symbiote_id),
+            # Without a loader the skill lifecycle phases do nothing.
+            skills_loader=(
+                self._skills_loader_for(symbiote_id)
+                if self._config.skill_writes
+                else None
+            ),
             skill_quarantine_timeout_days=(
                 cfg.skill_quarantine_timeout_days if cfg else None
             ),
@@ -1249,7 +1340,7 @@ class SymbioteKernel:
     def _maybe_dream(self, symbiote_id: str) -> None:
         """Start a background dream cycle if due and none is running for the symbiote."""
         cfg = self._environment.get_config(symbiote_id)
-        if cfg is None or cfg.dream_mode == "off":
+        if cfg is None or cfg.dream_mode == "off" or not cfg.memory_enabled:
             return
         with self._dream_lock:
             running = self._dream_threads.get(symbiote_id)
@@ -1367,23 +1458,30 @@ class SymbioteKernel:
         dry_run: bool = False,
         messages_days: int | None = None,
         traces_days: int | None = None,
+        memories_days: int | None = None,
     ) -> dict[str, int]:
         """Apply the retention windows; returns rows deleted (or that would be).
 
-        Removes the messages and execution traces of sessions that are
-        ``closed`` and ended more than N days ago. Active sessions are never
-        touched; memories, summaries and scores are kept. The windows default
-        to ``KernelConfig.message_retention_days`` / ``trace_retention_days``;
-        ``None`` (the default) leaves that table alone. Not scheduled
-        automatically.
+        Removes the messages and the traces (``execution_traces`` and
+        ``turn_contexts``) of sessions that are ``closed`` and ended more than
+        N days ago; active sessions are never touched. Removes the memory
+        entries created more than N days ago, whatever their session.
+        Summaries and scores are kept. The windows default to
+        ``KernelConfig.message_retention_days`` / ``trace_retention_days`` /
+        ``memory_retention_days``; ``None`` (the default) leaves those tables
+        alone. Not scheduled automatically.
         """
         from datetime import UTC, datetime, timedelta
 
+        trace_window = (
+            traces_days if traces_days is not None
+            else self._config.trace_retention_days
+        )
         windows = {
             "messages": messages_days if messages_days is not None
             else self._config.message_retention_days,
-            "execution_traces": traces_days if traces_days is not None
-            else self._config.trace_retention_days,
+            "execution_traces": trace_window,
+            "turn_contexts": trace_window,
         }
         old_sessions = (
             "SELECT id FROM sessions WHERE status = 'closed' "
@@ -1402,7 +1500,132 @@ class SymbioteKernel:
             counts[table] = int(row["c"]) if row else 0
             if not dry_run and counts[table]:
                 self._storage.execute(f"DELETE FROM {table} WHERE {where}", (cutoff,))  # noqa: S608
+
+        memory_window = (
+            memories_days if memories_days is not None
+            else self._config.memory_retention_days
+        )
+        counts["memory_entries"] = 0
+        if memory_window is not None:
+            cutoff = (datetime.now(tz=UTC) - timedelta(days=memory_window)).isoformat()
+            row = self._storage.fetch_one(
+                "SELECT COUNT(*) AS c FROM memory_entries WHERE created_at < ?", (cutoff,)
+            )
+            counts["memory_entries"] = int(row["c"]) if row else 0
+            if not dry_run and counts["memory_entries"]:
+                self._storage.execute(
+                    "DELETE FROM memory_entries WHERE created_at < ?", (cutoff,)
+                )
         return counts
+
+    # Rows that belong to a symbiote through one of its sessions, then the
+    # rows that carry its id. Children first: foreign keys are enforced.
+    _PURGE_BY_SESSION = ("messages", "decisions", "process_instances", "artifacts")
+    _PURGE_BY_SYMBIOTE = (
+        "turn_contexts",
+        "execution_traces",
+        "session_scores",
+        "reflection_audit",
+        "skill_review_audit",
+        "audit_log",
+        "memory_entries",
+        "knowledge_entries",
+        "dream_reports",
+        "harness_versions",
+        "persona_audit",
+        "discovered_tools",
+        "environment_configs",
+        "http_tools",
+        "workspaces",
+        "sessions",
+    )
+
+    def purge_symbiote(
+        self, symbiote_id: str, *, dry_run: bool = False
+    ) -> dict[str, int]:
+        """Erase a symbiote and everything the kernel stored about it.
+
+        Deletes its sessions, messages, memories, knowledge, traces, scores,
+        audit rows, harness versions, configuration, the HTTP tools it
+        registered and the symbiote row itself; with
+        ``skill_scope="per_symbiote"`` also its skill directory (key
+        ``"skills"`` in the result, 1 when a directory was removed). In the
+        global skill scope the library is shared, so no skill is removed.
+        Returns the rows deleted per table (or that would be, with
+        ``dry_run``).
+
+        Unlike ``IdentityManager.delete`` (a status change), this cannot be
+        undone. Stop sending turns to the symbiote first: background work
+        still running for it gets a few seconds to finish, and rows written by
+        a turn that is still in flight are not covered. The deletes are not
+        one transaction; if the call fails midway, call it again.
+
+        Raises ``EntityNotFoundError`` when the symbiote does not exist.
+        """
+        if self._storage.fetch_one(
+            "SELECT id FROM symbiotes WHERE id = ?", (symbiote_id,)
+        ) is None:
+            raise EntityNotFoundError("Symbiote", symbiote_id)
+
+        sessions = "SELECT id FROM sessions WHERE symbiote_id = ?"
+        workspaces = "SELECT id FROM workspaces WHERE symbiote_id = ?"
+        targets: list[tuple[str, str, tuple]] = [
+            (table, f"session_id IN ({sessions})", (symbiote_id,))
+            for table in self._PURGE_BY_SESSION
+        ]
+        # Artifacts can also hang from a workspace without a session.
+        targets.append(("artifacts", f"workspace_id IN ({workspaces})", (symbiote_id,)))
+        targets += [
+            (table, "symbiote_id = ?", (symbiote_id,))
+            for table in self._PURGE_BY_SYMBIOTE
+        ]
+        targets.append(("symbiotes", "id = ?", (symbiote_id,)))
+
+        if not dry_run:
+            self._quiesce_symbiote(symbiote_id)
+            session_ids = [
+                r["id"] for r in self._storage.fetch_all(sessions, (symbiote_id,))
+            ]
+            for tool in self._storage.fetch_all(
+                "SELECT tool_id FROM http_tools WHERE symbiote_id = ?", (symbiote_id,)
+            ):
+                self._tool_gateway.unregister_tool(tool["tool_id"])
+
+        counts: dict[str, int] = {}
+        for table, where, params in targets:
+            row = self._storage.fetch_one(
+                f"SELECT COUNT(*) AS c FROM {table} WHERE {where}", params  # noqa: S608
+            )
+            found = int(row["c"]) if row else 0
+            counts[table] = counts.get(table, 0) + found
+            if not dry_run and found:
+                self._storage.execute(f"DELETE FROM {table} WHERE {where}", params)  # noqa: S608
+
+        counts["skills"] = 0
+        if self._skill_scope_mgr is not None:
+            if dry_run:
+                counts["skills"] = int(self._skill_scope_mgr.has_directory(symbiote_id))
+            else:
+                counts["skills"] = int(self._skill_scope_mgr.purge(symbiote_id))
+        if not dry_run:
+            with self._handoffs_lock:
+                for sid in session_ids:
+                    self._handoffs.pop(sid, None)
+        return counts
+
+    def _quiesce_symbiote(self, symbiote_id: str, timeout: float = 5.0) -> None:
+        """Wait briefly for the symbiote's background work and forget its
+        cached per-symbiote objects."""
+        deadline = time.monotonic() + timeout
+        with self._dream_lock:
+            dream = self._dream_threads.get(symbiote_id)
+        with self._background_review_lock:
+            engine = self._background_review_by_symbiote.pop(symbiote_id, None)
+        threads = [dream] if dream is not None else []
+        if engine is not None:
+            threads.extend(engine.active_threads())
+        for thread in threads:
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
 
     @property
     def discovered_tools(self) -> DiscoveredToolRepository:
@@ -1574,7 +1797,13 @@ class SymbioteKernel:
 
     def cross_learning_candidates(self, symbiote_id: str, *, min_overlap: float = 0.5):
         """Harness versions of other symbiotes with similar tools that
-        ``symbiote_id`` could adopt (``CrossSymbioteLearner.find_candidates``)."""
+        ``symbiote_id`` could adopt (``CrossSymbioteLearner.find_candidates``).
+
+        Always empty when ``KernelConfig.cross_symbiote_learning`` is False:
+        nothing of another symbiote is read.
+        """
+        if not self._config.cross_symbiote_learning:
+            return []
         from symbiote.harness.cross_learning import CrossSymbioteLearner
 
         learner = CrossSymbioteLearner(self._storage, self._harness_versions)

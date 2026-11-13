@@ -24,6 +24,7 @@ store/loader exactly as before.
 from __future__ import annotations
 
 import contextvars
+import shutil
 import threading
 from collections import OrderedDict
 from pathlib import Path
@@ -80,7 +81,9 @@ class SkillScopeManager:
         extra_roots: list[Path] | None = None,
         auto_promote_threshold: int = 0,
         max_cached: int = _DEFAULT_MAX_CACHED,
+        read_only: bool = False,
     ) -> None:
+        self._read_only = read_only
         self._base_root = Path(base_root)
         self._protected_roots = list(protected_roots or [])
         self._extra_roots = list(extra_roots or [])
@@ -103,6 +106,27 @@ class SkillScopeManager:
 
     def store_for(self, symbiote_id: str) -> SkillsStore:
         return self._get(symbiote_id)[1]
+
+    def has_directory(self, symbiote_id: str) -> bool:
+        """True when the symbiote has a skill directory on disk."""
+        return bool(symbiote_id) and (self._base_root / symbiote_id).is_dir()
+
+    def purge(self, symbiote_id: str) -> bool:
+        """Delete everything the symbiote wrote: ``{base_root}/<symbiote_id>``.
+
+        Returns True when a directory was removed. The shared catalogue
+        (protected and extra roots) is never touched.
+        """
+        if not symbiote_id or Path(symbiote_id).name != symbiote_id:
+            raise ValueError(f"not a symbiote id: {symbiote_id!r}")
+        with self._lock:
+            self._cache.pop(symbiote_id, None)
+        base = self._base_root.resolve()
+        target = (base / symbiote_id).resolve()
+        if target.parent != base or not target.is_dir():
+            return False
+        shutil.rmtree(target)
+        return True
 
     # ── internal ───────────────────────────────────────────────────────
 
@@ -131,6 +155,7 @@ class SkillScopeManager:
         store = SkillsStore(
             roots=[agent_root],
             protected_roots=self._protected_roots,
+            read_only=self._read_only,
         )
         # Loader scans {root}/skills/*/SKILL.md, so pass the PARENT of each
         # "skills" dir. Own root + extra roots + shared protected catalogue
@@ -139,7 +164,9 @@ class SkillScopeManager:
         loader_roots += [r.parent for r in self._extra_roots]
         loader_roots += [r.parent for r in self._protected_roots]
         loader = SkillsLoader(
-            *loader_roots, auto_promote_threshold=self._auto_promote_threshold
+            *loader_roots,
+            auto_promote_threshold=self._auto_promote_threshold,
+            read_only=self._read_only,
         )
         store.on_change = loader.refresh
         return loader, store

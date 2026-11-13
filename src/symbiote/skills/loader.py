@@ -66,8 +66,16 @@ class SkillsLoader:
     Skills live at ``{workspace_root}/skills/{skill-name}/SKILL.md``.
     """
 
-    def __init__(self, *roots: Path, auto_promote_threshold: int = 0) -> None:
+    def __init__(
+        self,
+        *roots: Path,
+        auto_promote_threshold: int = 0,
+        read_only: bool = False,
+    ) -> None:
         self._roots = list(roots)
+        # Read-only: loading a skill does not touch its sidecar (no use
+        # counter, no auto-promotion).
+        self._read_only = read_only
         self._skills: dict[str, Skill] = {}
         # Sprint 5: when > 0, quarantine skills auto-promote to active after
         # this many ``get_skill()`` loads. 0 keeps promotion strictly manual.
@@ -126,6 +134,8 @@ class SkillsLoader:
             return None
         if skill.content is None:
             skill.content = self._load_content(skill.path)
+        if self._read_only:
+            return skill
         # Best-effort usage telemetry + auto-promote. Never fails the load.
         threshold = self._auto_promote_threshold
         if (

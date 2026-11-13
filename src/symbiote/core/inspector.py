@@ -137,6 +137,36 @@ class KernelInspector:
         )
         return [_decode(r, "steps_json") for r in rows]
 
+    def list_turn_contexts(
+        self,
+        *,
+        symbiote_id: str | None = None,
+        session_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """What entered the context of each turn, newest first.
+
+        One row per turn (with or without tools). ``memories`` and
+        ``knowledge`` are lists of ``{"id", "source"}``, ``source`` being
+        ``"packed"`` (in the system prompt) or ``"on_demand"`` (returned by
+        ``search_memories`` / ``search_knowledge`` during the turn);
+        ``skills`` lists the names in ``<available-skills>``. It records what
+        the model was given, not what it used.
+        """
+        if symbiote_id is None and session_id is None:
+            raise ValueError("list_turn_contexts needs symbiote_id or session_id")
+        column, value = ("session_id", session_id) if session_id else ("symbiote_id", symbiote_id)
+        rows = self._storage.fetch_all(
+            "SELECT id, session_id, symbiote_id, memories_json, knowledge_json, "
+            "skills_json, tokens_estimate, created_at "
+            f"FROM turn_contexts WHERE {column} = ? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (value, limit),
+        )
+        return [
+            _decode(r, "memories_json", "knowledge_json", "skills_json") for r in rows
+        ]
+
     # ── learning ───────────────────────────────────────────────────────
 
     def list_reflections(self, symbiote_id: str, *, limit: int = 50) -> list[dict]:

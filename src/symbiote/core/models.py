@@ -190,8 +190,13 @@ class EnvironmentConfig(BaseModel):
     #   llm      — LLM-based via _evolver_llm (cheap aux model required)
     #   llm_main — LLM-based via main _llm (explicit opt-in to higher cost)
     #   hybrid   — runs both, persists keyword, logs diff to reflection_audit
-    reflection_mode: Literal["keyword", "llm", "llm_main", "hybrid"] = "keyword"
+    #   off      — no reflection when a session closes
+    reflection_mode: Literal["off", "keyword", "llm", "llm_main", "hybrid"] = "keyword"
     reflection_max_tokens: int = Field(default=4000, ge=500, le=20000)
+    # Long-term memory for this symbiote. False: nothing is written to
+    # memory_entries (reflection, failure memory, handoff, dream, ``learn``)
+    # and nothing is recalled into the context or by ``search_memories``.
+    memory_enabled: bool = True
     # Skill self-improvement (Sprint 4)
     # When True, BackgroundReviewEngine runs after close_session (and optionally
     # mid-session every skill_nudge_interval tool iterations) to consider

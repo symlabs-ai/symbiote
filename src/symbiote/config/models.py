@@ -61,6 +61,22 @@ class KernelConfig(BaseModel):
     # Nothing runs it automatically — call it from a cron (``symbiote prune``).
     message_retention_days: int | None = Field(default=None, ge=0)
     trace_retention_days: int | None = Field(default=None, ge=0)
+    # Same for long-term memory: ``kernel.prune()`` deletes the memory entries
+    # created more than N days ago, whatever their session.
+    memory_retention_days: int | None = Field(default=None, ge=0)
+    # Kill switch for everything that writes skills (the ``skill_manage``
+    # tool, the background review, dream's lifecycle changes, usage counters).
+    # False makes the skill library read-only for the whole kernel: for hosts
+    # whose replicas do not share a disk.
+    skill_writes: bool = True
+    # ``kernel.cross_learning_candidates()`` reads the harness versions of
+    # OTHER symbiotes. False makes it return nothing: for hosts where each
+    # symbiote belongs to a different user.
+    cross_symbiote_learning: bool = True
+    # How many per-symbiote objects (skill loader/store pairs, background
+    # review engines) stay cached. Least recently used ones are dropped and
+    # rebuilt on demand, so memory does not grow with the number of symbiotes.
+    symbiote_cache_size: int = Field(default=256, ge=1)
     # Root directory for the builtin filesystem tools (fs_read / fs_write /
     # fs_list) and the default working directory of ``bash``. When set, every
     # path must resolve (symlinks included) inside it and an ``allowed_root``
