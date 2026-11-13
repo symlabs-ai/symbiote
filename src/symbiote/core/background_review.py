@@ -169,6 +169,11 @@ class BackgroundReviewEngine:
         self._last_thread = thread
         return thread
 
+    def active_threads(self) -> list[threading.Thread]:
+        """Review threads still running (the kernel joins them on shutdown)."""
+        with self._active_lock:
+            return [t for t in self._active.values() if t.is_alive()]
+
     def spawn_final(
         self,
         session_id: str,

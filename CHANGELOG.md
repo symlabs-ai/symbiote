@@ -55,6 +55,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
   - **MIGRAÇÃO:** `create`/`edit`/`patch` de `SKILL.md` sem frontmatter ou com `name` diferente do diretório levantam `SkillValidationError`.
 - fix(skills): três caminhos que contornavam a quarentena de skills foram fechados (S-4). O `skill_view` confere o status antes de carregar a skill, então visualizações recusadas não contam mais uso (antes três recusas promoviam a skill em quarentena e entregavam o conteúdo). O review em background só altera (`edit`, `patch`, `write_file`) skills criadas pelo agente; uma skill humana ou curada não é mais reescrita a partir de uma transcrição. No escopo `per_symbiote`, `skills_extra_roots` é só leitura: um symbiote não altera mais uma skill que outro lê. `SkillsLoader.peek()` é novo.
   - **Observação:** com isso a autopromoção só acontece por carregamentos de skills já ativas; skills em quarentena passam a ser promovidas manualmente.
+- fix(kernel): `shutdown()` passa a esperar as threads de review de skills e de dream (até `timeout`, padrão 10 s) antes de fechar o storage (M-9). Antes, num processo curto como a CLI, o review final morria antes da resposta do LLM; num processo longo, a thread gravava a skill depois do shutdown e o audit falhava com "Cannot operate on a closed database". Threads que passam do prazo são listadas num aviso.
 
 ## [v0.7.3] - 2026-07-28
 

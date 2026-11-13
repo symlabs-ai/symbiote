@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -731,7 +732,7 @@ class SymbioteKernel:
         background review, Dream skill-lifecycle, Sprint 5 auto-promote /
         auto-archive / skill_review_audit) depends on ``_skills_loader``
         being non-None. The guards in ``_background_review_for`` and in
-        ``_get_or_create_dream_engine`` make all these features no-op
+        ``_build_dream_engine`` make all these features no-op
         when wiring is disabled — no silent partial activation.
         """
         cfg = self._config
@@ -1389,7 +1390,34 @@ class SymbioteKernel:
             tags=["harness_failure", trace.stop_reason],
         ))
 
-    def shutdown(self) -> None:
-        """Stop the tool event loop and close the storage adapter."""
+    def shutdown(self, timeout: float = 10.0) -> None:
+        """Wait for background work, then stop the tool loop and close storage.
+
+        Skill reviews and dream cycles run in daemon threads that write to
+        the database. They get up to ``timeout`` seconds in total to finish;
+        closing the storage under them lost their results (or, in a short
+        CLI process, killed them before the LLM answered).
+        """
+        deadline = time.monotonic() + max(0.0, timeout)
+        pending = self._background_threads()
+        for thread in pending:
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        still_running = [t.name for t in pending if t.is_alive()]
+        if still_running:
+            logging.getLogger(__name__).warning(
+                "shutdown: background threads still running after %.1fs: %s",
+                timeout,
+                ", ".join(still_running),
+            )
         self._tool_gateway.close()
         self._storage.close()
+
+    def _background_threads(self) -> list[threading.Thread]:
+        with self._dream_lock:
+            threads = [t for t in self._dream_threads.values() if t.is_alive()]
+        engines = list(self._background_review_by_symbiote.values())
+        if self._background_review is not None:
+            engines.append(self._background_review)
+        for engine in engines:
+            threads.extend(engine.active_threads())
+        return threads
