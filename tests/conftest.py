@@ -22,11 +22,17 @@ from tests.support import api_client  # noqa: E402,F401
 
 
 @pytest.fixture(autouse=True)
-def _isolate_api_singletons():
+def _isolate_api_singletons(monkeypatch, tmp_path_factory):
     """Restore symbiote.api.http module singletons after every test, so a
-    kernel/adapter created by one test is never reused by the next."""
+    kernel/adapter created by one test is never reused by the next, and give
+    each test its own default database (state such as registered HTTP tools
+    is persisted and must not leak between tests)."""
     import symbiote.api.http as http_mod
     import symbiote.api.middleware as mw_mod
+
+    monkeypatch.setenv(
+        "SYMBIOTE_DB_PATH", str(tmp_path_factory.mktemp("api-db") / "default.db")
+    )
 
     names = ("_adapter", "_kernel", "_tool_gateway", "_key_manager", "_local_admin_key")
     saved = {name: getattr(http_mod, name) for name in names}

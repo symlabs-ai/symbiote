@@ -524,13 +524,8 @@ def tools_add(
             handler_type="http",
         )
         http_config = HttpToolConfig(method=method, url_template=url)
-        kernel.tool_gateway.register_http_tool(descriptor, http_config)
-
-        # Also add to environment config so PolicyGate authorizes it
-        kernel.environment.configure(
-            symbiote_id=symbiote_id,
-            tools=kernel.environment.list_tools(symbiote_id) + [tool_id],
-        )
+        # Persisted and authorized, so the next process (and the API) sees it.
+        kernel.register_http_tool(symbiote_id, descriptor, http_config)
         console.print(f"Registered tool [cyan]{tool_id}[/cyan] for symbiote {symbiote_id[:8]}")
     except Exception as exc:
         err_console.print(f"[red]Error:[/red] {exc}")
@@ -573,10 +568,7 @@ def tools_remove(
     """Remove a tool from a symbiote's authorized list."""
     kernel = _make_kernel()
     try:
-        current = kernel.environment.list_tools(symbiote_id)
-        updated = [t for t in current if t != tool_id]
-        kernel.environment.configure(symbiote_id=symbiote_id, tools=updated)
-        kernel.tool_gateway.unregister_tool(tool_id)
+        kernel.remove_http_tool(symbiote_id, tool_id)
         console.print(f"Removed tool [cyan]{tool_id}[/cyan]")
     finally:
         kernel.shutdown()

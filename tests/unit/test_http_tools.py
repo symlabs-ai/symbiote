@@ -8,18 +8,21 @@ import pytest
 from fastapi.testclient import TestClient
 
 from symbiote.adapters.storage.sqlite import SQLiteAdapter
-from symbiote.api.http import _tool_gateway, app, get_adapter
+from symbiote.api.http import app, get_adapter
 from symbiote.core.identity import IdentityManager
 from symbiote.environment.manager import EnvironmentManager
 
 
 @pytest.fixture()
-def adapter(tmp_path: Path) -> SQLiteAdapter:
-    db = tmp_path / "http_tools_test.db"
-    adp = SQLiteAdapter(db_path=db, check_same_thread=False)
-    adp.init_schema()
-    yield adp
-    adp.close()
+def adapter(tmp_path: Path, monkeypatch) -> SQLiteAdapter:
+    # The API's kernel owns the only connection; tests use its storage.
+    import symbiote.api.http as mod
+
+    monkeypatch.setenv("SYMBIOTE_DB_PATH", str(tmp_path / "http_tools_test.db"))
+    mod._kernel = mod._adapter = mod._tool_gateway = None
+    yield mod.get_adapter()
+    if mod._kernel is not None:
+        mod._kernel.shutdown()
 
 
 @pytest.fixture()
@@ -31,18 +34,9 @@ def symbiote_id(adapter: SQLiteAdapter) -> str:
 
 @pytest.fixture()
 def client(adapter: SQLiteAdapter) -> TestClient:
-    import symbiote.api.http as mod
-
-    mod._tool_gateway = None  # reset singleton
-
-    def _override() -> SQLiteAdapter:
-        return adapter
-
-    app.dependency_overrides[get_adapter] = _override
-    with TestClient(app) as c:
-        yield c
-    app.dependency_overrides.clear()
-    mod._tool_gateway = None
+    # No ``with``: the lifespan would shut the kernel down at exit and the
+    # adapter fixture does that already.
+    yield TestClient(app)
 
 
 class TestRegisterTool:
@@ -133,8 +127,7 @@ class TestExecTool:
     def test_exec_builtin_authorized(self, client: TestClient, symbiote_id: str, tmp_path: Path) -> None:
         # Authorize fs_read
 
-        adapter = app.dependency_overrides[get_adapter]()
-        env = EnvironmentManager(storage=adapter)
+        env = EnvironmentManager(storage=get_adapter())
         env.configure(symbiote_id=symbiote_id, tools=["fs_read"])
 
         target = tmp_path / "test.txt"

@@ -38,7 +38,12 @@ from symbiote.api.middleware import (
     set_key_manager,
 )
 from symbiote.config.models import KernelConfig
-from symbiote.core.exceptions import EntityNotFoundError, SymbioteError, ValidationError
+from symbiote.core.exceptions import (
+    DuplicateEntityError,
+    EntityNotFoundError,
+    SymbioteError,
+    ValidationError,
+)
 from symbiote.core.identity import IdentityManager
 from symbiote.core.kernel import SymbioteKernel
 from symbiote.core.ports import LLMPort
@@ -48,7 +53,6 @@ from symbiote.discovery.repository import DiscoveredToolRepository
 from symbiote.discovery.service import DiscoveryService
 from symbiote.environment.descriptors import HttpToolConfig, ToolDescriptor
 from symbiote.environment.manager import EnvironmentManager
-from symbiote.environment.policies import PolicyGate
 from symbiote.environment.tools import ToolGateway
 from symbiote.harness.evolver import EVOLVABLE_COMPONENTS
 from symbiote.harness.versions import HarnessVersionRepository
@@ -154,6 +158,11 @@ async def entity_not_found_handler(request: Request, exc: EntityNotFoundError) -
 @app.exception_handler(ValidationError)
 async def validation_error_handler(request: Request, exc: ValidationError) -> JSONResponse:
     return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
+@app.exception_handler(DuplicateEntityError)
+async def duplicate_entity_handler(request: Request, exc: DuplicateEntityError) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
 @app.exception_handler(SymbioteError)
@@ -574,15 +583,9 @@ def get_env_manager(
     return EnvironmentManager(storage=adapter)
 
 
-def get_tool_gateway(
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
-) -> ToolGateway:
-    global _tool_gateway
-    if _tool_gateway is None:
-        env = EnvironmentManager(storage=adapter)
-        gate = PolicyGate(env_manager=env, storage=adapter)
-        _tool_gateway = ToolGateway(policy_gate=gate)
-    return _tool_gateway
+def get_tool_gateway() -> ToolGateway:
+    """The kernel's gateway — the same one the chat loop executes tools on."""
+    return get_kernel().tool_gateway
 
 
 def get_discovery_service(
@@ -882,10 +885,10 @@ def register_tool(
     auth: Annotated[APIKey, Depends(require_auth)],
     adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     env: Annotated[EnvironmentManager, Depends(get_env_manager)],
-    gw: Annotated[ToolGateway, Depends(get_tool_gateway)],
+    kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
 ) -> ToolDescriptorResponse:
+    """Register an HTTP tool for a symbiote (persisted; 409 on a name clash)."""
     _require_symbiote_access(adapter, symbiote_id, auth)
-    """Register an HTTP tool for a symbiote."""
     descriptor = ToolDescriptor(
         tool_id=body.tool_id,
         name=body.name,
@@ -900,12 +903,7 @@ def register_tool(
         timeout=body.timeout,
         body_template=body.body_template,
     )
-    gw.register_http_tool(descriptor, http_config)
-
-    # Authorize the tool for this symbiote
-    current = env.list_tools(symbiote_id)
-    if body.tool_id not in current:
-        env.configure(symbiote_id=symbiote_id, tools=current + [body.tool_id])
+    kernel.register_http_tool(symbiote_id, descriptor, http_config)
 
     return ToolDescriptorResponse(
         tool_id=descriptor.tool_id,
@@ -927,8 +925,8 @@ def list_tools(
     env: Annotated[EnvironmentManager, Depends(get_env_manager)],
     gw: Annotated[ToolGateway, Depends(get_tool_gateway)],
 ) -> list[ToolDescriptorResponse]:
-    _require_symbiote_access(adapter, symbiote_id, auth)
     """List tools available to a symbiote (authorized ones only)."""
+    _require_symbiote_access(adapter, symbiote_id, auth)
     authorized = set(env.list_tools(symbiote_id))
     return [
         ToolDescriptorResponse(
@@ -949,16 +947,16 @@ def remove_tool(
     tool_id: str,
     auth: Annotated[APIKey, Depends(require_auth)],
     adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
-    env: Annotated[EnvironmentManager, Depends(get_env_manager)],
-    gw: Annotated[ToolGateway, Depends(get_tool_gateway)],
+    kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
 ) -> dict:
+    """Remove a tool from a symbiote.
+
+    Builtins and tools of other symbiotes are only de-authorized for this
+    symbiote, never unregistered for everyone.
+    """
     _require_symbiote_access(adapter, symbiote_id, auth)
-    """Remove a tool from a symbiote."""
-    current = env.list_tools(symbiote_id)
-    updated = [t for t in current if t != tool_id]
-    env.configure(symbiote_id=symbiote_id, tools=updated)
-    gw.unregister_tool(tool_id)
-    return {"removed": tool_id}
+    deleted = kernel.remove_http_tool(symbiote_id, tool_id)
+    return {"removed": tool_id, "deleted": deleted}
 
 
 @app.post(
@@ -973,8 +971,8 @@ def exec_tool(
     adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
     gw: Annotated[ToolGateway, Depends(get_tool_gateway)],
 ) -> ToolExecResponse:
-    _require_symbiote_access(adapter, symbiote_id, auth)
     """Execute a tool manually (for testing)."""
+    _require_symbiote_access(adapter, symbiote_id, auth)
     result = gw.execute(
         symbiote_id=symbiote_id,
         session_id=None,

@@ -20,7 +20,7 @@ from symbiote.config.models import KernelConfig
 from symbiote.core.background_review import BackgroundReviewEngine
 from symbiote.core.capabilities import CapabilityError, CapabilitySurface
 from symbiote.core.context import ContextAssembler
-from symbiote.core.exceptions import EntityNotFoundError
+from symbiote.core.exceptions import DuplicateEntityError, EntityNotFoundError
 from symbiote.core.hooks import CompositeHook
 from symbiote.core.identity import IdentityManager
 from symbiote.core.models import Session, Symbiote
@@ -33,6 +33,8 @@ from symbiote.discovery.loader import DiscoveredToolLoader
 from symbiote.discovery.repository import DiscoveredToolRepository
 from symbiote.dream.engine import DreamEngine
 from symbiote.dream.models import DreamReport
+from symbiote.environment.descriptors import HttpToolConfig, ToolDescriptor
+from symbiote.environment.http_tool_store import HttpToolRepository
 from symbiote.environment.manager import EnvironmentManager
 from symbiote.environment.policies import PolicyGate
 from symbiote.environment.tools import ToolGateway
@@ -125,6 +127,12 @@ class SymbioteKernel:
         # Register memory/knowledge on-demand tools (always available,
         # authorized per-symbiote only when context_mode == "on_demand")
         self._tool_gateway.register_memory_tools(self._memory, self._knowledge)
+
+        # HTTP tools registered through the API / CLI (persisted).
+        self._http_tools = HttpToolRepository(self._storage)
+        for _owner, descriptor, http_config in self._http_tools.list_all():
+            if not self._tool_gateway.has_tool(descriptor.tool_id):
+                self._tool_gateway.register_http_tool(descriptor, http_config)
 
         # Harness versioning
         self._harness_versions = HarnessVersionRepository(self._storage)
@@ -1146,6 +1154,48 @@ class SymbioteKernel:
             "UPDATE session_scores SET user_score = ?, final_score = ? WHERE id = ?",
             (score, final, row["id"]),
         )
+
+    def register_http_tool(
+        self, symbiote_id: str, descriptor: ToolDescriptor, http_config: HttpToolConfig
+    ) -> None:
+        """Register an HTTP tool for a symbiote, persist it and authorize it.
+
+        The tool is stored, so it survives restarts and is visible to every
+        process using this database (HTTP API, CLI). Raises
+        ``DuplicateEntityError`` when ``tool_id`` belongs to a builtin, to a
+        tool registered in code, or to another symbiote's HTTP tool.
+        """
+        tool_id = descriptor.tool_id
+        owner = self._http_tools.owner(tool_id)
+        if owner is not None and owner != symbiote_id:
+            raise DuplicateEntityError("Tool", tool_id)
+        if owner is None and self._tool_gateway.has_tool(tool_id):
+            raise DuplicateEntityError("Tool", tool_id)
+        descriptor = descriptor.model_copy(update={"handler_type": "http"})
+        self._http_tools.save(symbiote_id, descriptor, http_config)
+        self._tool_gateway.register_http_tool(descriptor, http_config)
+        current = self._environment.list_tools(symbiote_id)
+        if tool_id not in current:
+            self._environment.configure(symbiote_id=symbiote_id, tools=[*current, tool_id])
+
+    def remove_http_tool(self, symbiote_id: str, tool_id: str) -> bool:
+        """Take a tool away from a symbiote.
+
+        Always removes it from the symbiote's authorized list. Only an HTTP
+        tool this symbiote registered is also deleted and unregistered —
+        builtins and other symbiotes' tools stay for everyone else.
+        Returns True if the tool was deleted.
+        """
+        current = self._environment.list_tools(symbiote_id)
+        if tool_id in current:
+            self._environment.configure(
+                symbiote_id=symbiote_id, tools=[t for t in current if t != tool_id]
+            )
+        if self._http_tools.owner(tool_id) != symbiote_id:
+            return False
+        self._http_tools.delete(tool_id)
+        self._tool_gateway.unregister_tool(tool_id)
+        return True
 
     def load_discovered_tools(self, symbiote_id: str, base_url: str = "") -> list[str]:
         """Load approved discovered tools into the ToolGateway and authorize them.
