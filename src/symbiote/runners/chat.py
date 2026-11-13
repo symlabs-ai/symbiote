@@ -434,9 +434,12 @@ class ChatRunner:
                         protocol_state,
                     )
 
-        # Release tokens — no suppression since there's no next iteration
+        # Release tokens — no suppression since there's no next iteration.
+        # The buffered chunks are the raw stream of the last model call; when
+        # that call carried a tool_call block (and no final call replaced
+        # it), they differ from the clean text, so the clean text is sent.
         if on_token is not None:
-            if buffered_chunks is not None:
+            if buffered_chunks is not None and "".join(buffered_chunks).strip() == clean_text.strip():
                 for chunk in buffered_chunks:
                     on_token(chunk)
             else:
@@ -968,6 +971,20 @@ class ChatRunner:
                 # Record in loop controller
                 controller.record(tc.tool_id, tc.params, tr.success)
             controller.end_round()
+
+            # Hook: let the caller decide whether tool results end the loop
+            # (same contract as run()).
+            if self._on_after_tool_result is not None:
+                hook_text = self._on_after_tool_result(tool_calls, results)
+                if hook_text is not None:
+                    trace.stop_reason = "on_after_tool_result"
+                    final_text = hook_text
+                    if self._on_progress is not None:
+                        self._on_progress("iteration_end", iteration + 1, max_iters)
+                    break
+
+            # Skill review nudge (same cadence as run()).
+            self._maybe_nudge_skill_review(context)
 
             # Check loop health — stop early on stagnation or circuit breaker
             should_stop, stop_reason = controller.should_stop()
