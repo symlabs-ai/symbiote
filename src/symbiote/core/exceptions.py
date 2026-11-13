@@ -14,8 +14,12 @@ class EntityNotFoundError(SymbioteError):
         super().__init__(f"{entity_type} {entity_id!r} not found")
 
 
-class ValidationError(SymbioteError):
-    """Raised when a domain validation rule is violated."""
+class ValidationError(SymbioteError, ValueError):
+    """Raised when a domain validation rule is violated.
+
+    Also a ``ValueError`` so callers that caught the plain ``ValueError``
+    raised before this type was used keep working.
+    """
 
     def __init__(self, message: str) -> None:
         super().__init__(message)

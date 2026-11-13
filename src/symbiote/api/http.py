@@ -5,15 +5,17 @@ from __future__ import annotations
 import collections
 import logging
 import os
+import sqlite3
 import time as _time
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 
 # ── FastAPI app ───────────────────────────────────────────────────────────
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
+from pydantic import ValidationError as PydanticValidationError
 from starlette.requests import Request
 
 from symbiote.adapters.storage.sqlite import SQLiteAdapter
@@ -122,6 +124,24 @@ async def symbiote_error_handler(request: Request, exc: SymbioteError) -> JSONRe
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
+@app.exception_handler(PydanticValidationError)
+async def model_validation_error_handler(
+    request: Request, exc: PydanticValidationError
+) -> JSONResponse:
+    """Domain models (EnvironmentConfig, Message, ...) rejecting a value the
+    request carried. FastAPI's own RequestValidationError covers the request
+    body; this covers values validated later, inside the kernel."""
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors(include_url=False, include_context=False)},
+    )
+
+
+@app.exception_handler(sqlite3.IntegrityError)
+async def integrity_error_handler(request: Request, exc: sqlite3.IntegrityError) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": "Conflict with existing data"})
+
+
 # ── Request / Response schemas ────────────────────────────────────────────
 
 
@@ -161,7 +181,7 @@ class SessionResponse(BaseModel):
 
 
 class CreateMessageRequest(BaseModel):
-    role: str
+    role: Literal["user", "assistant", "system"]
     content: str
 
 
@@ -1224,7 +1244,7 @@ def chat(
 class CreateAPIKeyRequest(BaseModel):
     tenant_id: str
     name: str
-    role: str = "user"
+    role: Literal["user", "admin"] = "user"
 
 
 class APIKeyResponse(BaseModel):

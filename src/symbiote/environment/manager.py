@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from symbiote.core.exceptions import ValidationError
 from symbiote.core.models import EnvironmentConfig
 from symbiote.core.ports import StoragePort
 
@@ -115,7 +116,7 @@ class EnvironmentManager:
                 50,
             )
             if max_tool_iterations > ceiling:
-                raise ValueError(
+                raise ValidationError(
                     f"max_tool_iterations={max_tool_iterations} exceeds the host "
                     f"ceiling ({ceiling}). Raise KernelConfig."
                     f"max_tool_iterations_ceiling to allow higher values. "

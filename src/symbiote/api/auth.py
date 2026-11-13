@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
+from symbiote.core.exceptions import ValidationError
 from symbiote.core.ports import StoragePort
 
 _API_KEYS_SCHEMA = """\
@@ -72,7 +73,7 @@ class APIKeyManager:
             ValueError: If role is not one of VALID_ROLES.
         """
         if role not in self.VALID_ROLES:
-            raise ValueError(f"Invalid role '{role}'. Must be one of: {sorted(self.VALID_ROLES)}")
+            raise ValidationError(f"Invalid role '{role}'. Must be one of: {sorted(self.VALID_ROLES)}")
         raw_key = f"{self.KEY_PREFIX}{secrets.token_urlsafe(32)}"
         key_hash = self._hash_key(raw_key)
         key_prefix = raw_key[:18]
