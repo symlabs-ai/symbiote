@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import collections
+import functools
 import logging
 import os
 import sqlite3
@@ -17,7 +18,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 
 # ── FastAPI app ───────────────────────────────────────────────────────────
 from fastapi.responses import HTMLResponse, JSONResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic import ValidationError as PydanticValidationError
 from starlette.requests import Request
 
@@ -103,6 +104,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Create the kernel (storage, API keys) once at startup; close it at exit."""
     global _kernel, _adapter, _tool_gateway
     _configure_logging()
+    _build_info()  # resolve version/commit once, at startup
     get_kernel()
     try:
         yield
@@ -122,9 +124,13 @@ app = FastAPI(
 app.add_middleware(BodySizeLimitMiddleware)
 
 
-@app.get("/health")
-async def health() -> dict:
-    """Health check endpoint for Docker/load balancers."""
+@functools.cache
+def _build_info() -> tuple[str, str]:
+    """(version, commit) of this process — resolved once, not per request.
+
+    ``/health`` is polled by load balancers; spawning ``git`` on every call
+    cost a subprocess each time (and up to its 2 s timeout).
+    """
     import importlib.metadata
     import subprocess
 
@@ -133,7 +139,6 @@ async def health() -> dict:
     except importlib.metadata.PackageNotFoundError:
         version = "dev"
 
-    commit = "unknown"
     try:
         commit = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -144,9 +149,14 @@ async def health() -> dict:
         # Containers don't ship the .git directory; CI injects GIT_COMMIT as a
         # build-arg / env var. systemd-managed deployments still get the right
         # answer from `git rev-parse` above.
-        import os
         commit = os.environ.get("GIT_COMMIT", "unknown")
+    return version, commit
 
+
+@app.get("/health")
+async def health() -> dict:
+    """Health check endpoint for Docker/load balancers."""
+    version, commit = _build_info()
     return {"status": "ok", "service": "symbiote", "version": version, "commit": commit}
 
 
@@ -191,16 +201,26 @@ async def integrity_error_handler(request: Request, exc: sqlite3.IntegrityError)
 # ── Request / Response schemas ────────────────────────────────────────────
 
 
+def _not_blank(value: str | None) -> str | None:
+    if value is not None and not value.strip():
+        raise ValueError("must not be empty")
+    return value
+
+
 class CreateSymbioteRequest(BaseModel):
     name: str = Field(max_length=MAX_NAME_CHARS)
     role: str = Field(max_length=MAX_NAME_CHARS)
     persona_json: dict | None = None
+
+    _name_not_blank = field_validator("name")(_not_blank)
 
 
 class UpdateSymbioteRequest(BaseModel):
     name: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
     role: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
     persona_json: dict | None = None
+
+    _name_not_blank = field_validator("name")(_not_blank)
 
 
 class SymbioteResponse(BaseModel):
@@ -1277,11 +1297,21 @@ def chat(
     and returns the response. Tenant isolation is enforced via session ownership.
     """
     _require_session_access(kernel._storage, session_id, auth)
+    if kernel._llm is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No LLM configured: set SYMBIOTE_LLM_PROVIDER (and "
+                "SYMBIOTE_LLM_MODEL) and restart the server."
+            ),
+        )
 
     response = kernel.message(
         session_id=session_id,
         content=body.content,
         extra_context=body.extra_context,
+        # Per-call LLM overrides (e.g. temperature), as the SDK sends them.
+        llm_config=body.generation_settings,
     )
     return ChatResponse(response=response, session_id=session_id)
 
