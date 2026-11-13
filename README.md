@@ -83,9 +83,11 @@ symbiote session close <SESSION_ID>
 ### HTTP API
 
 ```bash
-uvicorn symbiote.api.http:app --host 0.0.0.0 --port 8000
+uvicorn symbiote.api.http:app --host 127.0.0.1 --port 8008
 
-curl -X POST http://localhost:8000/symbiotes \
+# Every route except /health and the docs needs an API key.
+curl -X POST http://localhost:8008/symbiotes \
+  -H "Authorization: Bearer $SYMBIOTE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"name": "Atlas", "role": "assistant"}'
 ```
@@ -106,6 +108,7 @@ kernel.tool_gateway.register_http_tool(
     ),
     HttpToolConfig(method="GET", url_template="http://localhost:8000/api/search?q={q}"),
 )
+kernel.environment.add_tools(bot.id, ["search"])  # authorize it for the symbiote
 
 # Use external keys for session mapping
 session = kernel.get_or_create_session(
@@ -239,7 +242,7 @@ register(
 )
 ```
 
-The Symbiota can now use 10 new tools: `web_search`, `web_extract`, `web_crawl`, `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_fill`, `browser_screenshot`, `browser_wait_for`, `browser_close`.
+Each tool is registered only when its backend is set: `web_search` (`search_backend`), `web_extract` (`extract_backend`), `web_crawl` (`crawl_backend`) and the seven browser tools `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_fill`, `browser_screenshot`, `browser_wait_for`, `browser_close` (`browser_backend`). The call above registers nine; add `crawl_backend="firecrawl"` for `web_crawl`. The `policy` applies to `web_extract`, `web_crawl` and `browser_navigate`. A backend whose extra is not installed makes `register()` raise `ImportError`. The tools still need to be authorized per symbiote (`kernel.environment.add_tools`).
 
 ### Optional extras
 

@@ -1,8 +1,8 @@
 # SPEC.md — Symbiote
 
-> Versão: 0.2.27
+> Versão: 0.7.3 (+ mudanças em `[Unreleased]` no CHANGELOG)
 > MVP entregue em: 2026-03-16
-> Última atualização: 2026-04-01
+> Última atualização: 2026-11-13
 > Status: maintenance
 
 ---
@@ -149,6 +149,19 @@ Symbiote é um kernel Python para construir entidades cognitivas persistentes. M
 | Structural Evolution — StructuralEvolver with strategy registry | H-12 | ✅ Entregue | horizon |
 | Cross-Symbiote Learning — tool overlap + version transfer | H-13 | ✅ Entregue | horizon |
 
+### Pós-MVP (Melhorias — 2026-11-13)
+
+Correções do relatório `reports/2026-11-13_relatorio-melhorias.md`. Detalhes e notas de migração no `CHANGELOG.md` (`[Unreleased]`) e em `docs/HOST_INTEGRATION.md` ("Upgrading").
+
+| Mudança | Itens | Status |
+|---------|-------|--------|
+| Memória isolada por symbiote; autenticação em todas as rotas da API; SSRF, encoding de URL, redirects e limites de tamanho | S-1 a S-10 | ✅ |
+| Loop de tools: compactação, timeouts reais, handlers async, parser e validador, retry de LLM, hooks ligados | E-1 a E-12 | ✅ |
+| Recall por termos, aprendizado no close da API, reflexão PT/EN com marca d'água, dream e harness com guardas, skills com identidade e quarentena consistentes | M-1 a M-10 | ✅ |
+| Tools da API/CLI persistidas no gateway do kernel; discovery com query params e reaprovação; meta-tools dos modos; `configure` atômico (`add_tools`/`remove_tools`) | T-1 a T-7, S-5 | ✅ |
+| API com inicialização única; CLI sem MarkupError nem traceback; índices, retenção opcional (`kernel.prune`) e `synchronous=NORMAL` | A-1 a A-3, C-1 a C-3, P-1 a P-3 | ✅ |
+| Streaming na API HTTP | D-17 | backlog (B-69) |
+
 ### O que está fora do escopo
 
 - Multi-tenant completo
@@ -211,7 +224,7 @@ Pipeline: identity → working memory → memories → knowledge → rank → tr
 **Entrypoint**: via biblioteca (`ContextAssembler.build()`)
 
 ### Policy Gate
-Deny-by-default. Tools autorizadas via EnvironmentManager. Audit log com timestamp.
+Deny-by-default. Tools autorizadas via EnvironmentManager (`configure`, `add_tools`, `remove_tools`). Exceção: as meta-tools do modo ativo (`get_tool_schema` com `tool_loading="index"`; `search_memories`/`search_knowledge` com `context_mode="on_demand"`). Audit log com timestamp.
 **User Story**: US-04, US-09
 **Entrypoint**: via biblioteca (`PolicyGate.check()`)
 

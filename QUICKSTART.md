@@ -1,4 +1,4 @@
-# Symbiote v0.2.27 -- Quickstart
+# Symbiote -- Quickstart
 
 Symbiote is a Python kernel for building **persistent AI agents**. It is not a framework -- it is an embeddable kernel that your application composes with its own LLM, tools, and business logic.
 
@@ -128,7 +128,7 @@ Memory entries are auto-classified into categories: `ephemeral`, `declarative`, 
 
 Tools are registered in the `ToolGateway` and authorized per-symbiote via `EnvironmentManager`. The kernel supports three tool sources:
 
-- **Built-in tools**: `fs_read`, `fs_write`, `fs_list`, `search_memories`, `search_knowledge`
+- **Built-in tools**: `fs_read`, `fs_write`, `fs_list`, `bash`, `search_memories`, `search_knowledge`; `get_tool_schema` in `index` loading mode; `spawn` when subagents are enabled; `skill_manage` / `skill_view` when skills are enabled. Each one still has to be authorized per symbiote, except the meta-tools of the active mode (see below)
 - **HTTP tools**: Declarative REST endpoint wrappers via `HttpToolConfig`
 - **MCP tools**: Model Context Protocol tools bridged via forge-llm
 
@@ -188,7 +188,7 @@ Configured via `kernel.environment.configure()` or `EnvironmentManager`. All fie
 ```python
 from symbiote.environment.descriptors import HttpToolConfig, ToolDescriptor
 
-kernel.tool_gateway.register(
+kernel.tool_gateway.register_http_tool(
     descriptor=ToolDescriptor(
         tool_id="get_weather",
         name="Get Weather",
@@ -210,8 +210,8 @@ kernel.tool_gateway.register(
     ),
 )
 
-# Authorize tools for a symbiote
-kernel.environment.configure(symbiote_id=sym.id, tools=["get_weather"])
+# Authorize the tool for a symbiote (keeps the tools it already had)
+kernel.environment.add_tools(sym.id, ["get_weather"])
 ```
 
 Placeholder values are percent-encoded, so `city="São Paulo"` becomes
@@ -222,10 +222,11 @@ is inserted as-is.
 ### Loading MCP Tools
 
 ```python
-from forge_llm.application.tools import McpToolset
+from forge_llm.mcp import McpToolset
 
 async with McpToolset.from_http("http://localhost:9000/mcp") as registry:
     tool_ids = kernel.load_mcp_tools(registry, symbiote_id=sym.id)
+    # tool_ids are added to the symbiote's authorized tools
 ```
 
 ### Execution Modes
@@ -260,7 +261,7 @@ runner = ChatRunner(
 
 ### On-Demand Mode
 
-When `context_mode="on_demand"`, memories and knowledge are not injected into the context upfront. Instead, the LLM can call `search_memories` and `search_knowledge` tools to retrieve what it needs. This reduces prompt size for symbiotes with large memory stores.
+When `context_mode="on_demand"`, memories and knowledge are not injected into the context upfront. Instead, the LLM can call `search_memories` and `search_knowledge` tools to retrieve what it needs. This reduces prompt size for symbiotes with large memory stores. The mode itself authorizes both tools and offers them to the model even when `tool_tags` would hide them; nothing else needs to be configured. Likewise, `tool_loading="index"` authorizes `get_tool_schema`, which only describes tools the symbiote may use.
 
 ```python
 kernel.environment.configure(
@@ -338,9 +339,9 @@ Quick reference:
 # Initialize
 kernel = SymbioteKernel(config=KernelConfig(...), llm=llm)
 
-# Register tools
-kernel.tool_gateway.register(descriptor, http_config=config)
-kernel.environment.configure(symbiote_id=sid, tools=[...])
+# Register tools (in code, every startup) and authorize them
+kernel.tool_gateway.register_http_tool(descriptor, config)
+kernel.environment.add_tools(sid, ["tool_id", ...])
 
 # Session management
 session = kernel.get_or_create_session(sid, external_key="user:123")

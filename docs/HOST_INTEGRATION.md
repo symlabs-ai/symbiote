@@ -60,6 +60,51 @@ them explicitly:
 
 ---
 
+## Upgrading: behaviour changes for hosts (2026-11 hardening)
+
+These changes are in `CHANGELOG.md` under `[Unreleased]`, each with a
+**MIGRAÇÃO** note. What a host has to check:
+
+- **Memory is per symbiote.** `MemoryStore.search()` / `get_relevant()` take
+  a required keyword `symbiote_id` (custom `MemoryPort` implementations must
+  accept it). `search_memories` / `search_knowledge` use the calling symbiote
+  and ignore a `symbiote_id` sent by the LLM.
+- **HTTP API needs a key on every route** except `/health` and the docs.
+  Symbiotes without an owner are visible only to admin keys.
+- **HTTP tool URLs:** placeholder values are percent-encoded, so `/`, `?` or
+  `&` in a value no longer change the URL (a leading `{base_url}` is still
+  inserted as-is). Discovered tools now send their `in: query` parameters.
+- **Filesystem tools:** with `fs_allowed_root` set, paths outside it are
+  refused and relative paths are relative to it.
+- **Tool loop:** a turn that hits `max_tool_iterations` returns a text answer
+  (one extra LLM call) instead of an empty string.
+- **Authorizing tools:** `load_discovered_tools()` / `load_mcp_tools()` add to
+  the authorized list instead of replacing it. Use
+  `environment.add_tools()` / `remove_tools()`; `configure(tools=[...])` still
+  replaces the whole list. A new workspace-level config starts from the
+  symbiote's config instead of the defaults.
+- **Mode meta-tools:** `tool_loading="index"` authorizes `get_tool_schema`
+  (which now describes only tools the caller may use), and
+  `context_mode="on_demand"` authorizes `search_memories` /
+  `search_knowledge` — no manual authorization needed.
+- **Discovered tools:** an approved tool whose method, URL, parameters or risk
+  changes goes back to `pending`. Host headers (`header_factory`) and
+  `allow_internal` are only given to URLs on the `base_url` origin. Generated
+  ids of routes with path parameters changed (`get_items_by_id`), so those
+  tools need approval again.
+- **Tools registered through the HTTP API or CLI** are persisted and live on
+  the kernel's gateway; registering a builtin's id (or another symbiote's) is
+  a 409. Tools registered in code by the host are unchanged.
+- **Sessions:** `(symbiote_id, external_key)` is unique. `POST
+  /sessions/{id}/close` runs reflection, scoring, skill review and dream, so
+  it is slower. Keyword reflection ignores assistant messages and also
+  matches Portuguese phrasing.
+- **Browser:** `register()` raises `ImportError` when the requested backend's
+  extra is missing; the `policy` also applies to `web_extract` / `web_crawl`;
+  SIGTERM now terminates the process after closing browser sessions (a host
+  handler installed earlier is still called).
+- **CLI:** the default server is `http://localhost:8008`.
+
 ## Tool Registration
 
 ### HTTP Tools
@@ -69,7 +114,7 @@ Wrap REST endpoints as tools the LLM can call:
 ```python
 from symbiote.environment.descriptors import HttpToolConfig, ToolDescriptor
 
-kernel.tool_gateway.register(
+kernel.tool_gateway.register_http_tool(
     descriptor=ToolDescriptor(
         tool_id="search_articles",
         name="Search Articles",
@@ -94,8 +139,9 @@ kernel.tool_gateway.register(
     ),
 )
 
-# Authorize the tool for the symbiote
-kernel.environment.configure(symbiote_id=sym.id, tools=["search_articles"])
+# Authorize the tool for the symbiote (keeps the tools it already had;
+# configure(tools=[...]) replaces the whole list)
+kernel.environment.add_tools(sym.id, ["search_articles"])
 ```
 
 ### MCP Tools
@@ -103,11 +149,11 @@ kernel.environment.configure(symbiote_id=sym.id, tools=["search_articles"])
 Bridge Model Context Protocol tools from forge-llm:
 
 ```python
-from forge_llm.application.tools import McpToolset
+from forge_llm.mcp import McpToolset
 
 async with McpToolset.from_http("http://localhost:9000/mcp") as registry:
     tool_ids = kernel.load_mcp_tools(registry, symbiote_id=sym.id)
-    # tool_ids are automatically authorized
+    # tool_ids are added to the symbiote's authorized tools
 ```
 
 ### Custom Handlers
@@ -118,7 +164,7 @@ Register arbitrary Python callables as tools:
 def my_custom_tool(params: dict) -> str:
     return f"Result for {params['query']}"
 
-kernel.tool_gateway.register(
+kernel.tool_gateway.register_descriptor(
     descriptor=ToolDescriptor(
         tool_id="custom_search",
         name="Custom Search",
@@ -127,7 +173,7 @@ kernel.tool_gateway.register(
     ),
     handler=my_custom_tool,
 )
-kernel.environment.configure(symbiote_id=sym.id, tools=["custom_search"])
+kernel.environment.add_tools(sym.id, ["custom_search"])
 ```
 
 ### Async handlers
@@ -658,7 +704,7 @@ sym = kernel.find_symbiote_by_name("clark") or kernel.create_symbiote(
 )
 
 # 3. Register tools
-kernel.tool_gateway.register(
+kernel.tool_gateway.register_http_tool(
     descriptor=ToolDescriptor(
         tool_id="search_articles", name="Search Articles",
         description="Search published articles.",
@@ -671,7 +717,7 @@ kernel.tool_gateway.register(
         allow_internal=True,
     ),
 )
-kernel.environment.configure(symbiote_id=sym.id, tools=["search_articles"])
+kernel.environment.add_tools(sym.id, ["search_articles"])
 
 # 4. Configure harness
 kernel.environment.configure(
@@ -771,7 +817,7 @@ The CLI accepts a global `--db-path` flag (before the subcommand):
 
 ```bash
 symbiote --db-path /path/to/host-app/.symbiote/symbiote.db list
-symbiote --db-path /path/to/host-app/.symbiote/symbiote.db show <SYMBIOTE_ID>
+symbiote --db-path /path/to/host-app/.symbiote/symbiote.db show <SESSION_ID> "<query>"
 symbiote --db-path /path/to/host-app/.symbiote/symbiote.db memory search "..." --symbiote <SYMBIOTE_ID>
 symbiote --db-path /path/to/host-app/.symbiote/symbiote.db export session <SESSION_ID>
 ```
