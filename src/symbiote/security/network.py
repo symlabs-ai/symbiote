@@ -25,6 +25,10 @@ _BLOCKED_NETWORKS = [
 ]
 
 
+# Well-known NAT64 prefix (RFC 6052): 64:ff9b::a.b.c.d reaches IPv4 a.b.c.d.
+_NAT64_PREFIX = ipaddress.ip_network("64:ff9b::/96")
+
+
 class SSRFError(Exception):
     """Raised when a URL targets a blocked network."""
 
@@ -64,11 +68,26 @@ def validate_url(url: str) -> str:
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             continue
-
-        for network in _BLOCKED_NETWORKS:
-            if ip in network:
-                raise SSRFError(
-                    f"URL {url} resolves to blocked IP {ip} ({network})"
-                )
+        _check_ip(url, ip)
 
     return url
+
+
+def _check_ip(url: str, ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> None:
+    """Raise SSRFError unless ``ip`` is a globally routable unicast address."""
+    # ::ffff:a.b.c.d is IPv4 in disguise — judge the embedded IPv4 address.
+    # (An IPv6Address is never "in" an IPv4Network, so without this a mapped
+    # loopback like ::ffff:127.0.0.1 slipped past the blocklist.)
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        elif ip in _NAT64_PREFIX:
+            ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+
+    for network in _BLOCKED_NETWORKS:
+        if ip in network:
+            raise SSRFError(f"URL {url} resolves to blocked IP {ip} ({network})")
+    # Allowlist semantics: anything not globally routable (private, loopback,
+    # link-local, reserved, multicast, unspecified, ...) is refused.
+    if not ip.is_global or ip.is_multicast:
+        raise SSRFError(f"URL {url} resolves to non-public IP {ip}")
