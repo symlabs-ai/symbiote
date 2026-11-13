@@ -27,17 +27,22 @@ class TestIsValidResponse:
 
     # ── bare JSON detection ───────────────────────────────────────────────
 
-    def test_bare_json_object_on_line_is_invalid(self) -> None:
-        # This would survive parse_tool_calls if the JSON is malformed
+    # JSON without tool/params keys is content, not a leaked tool call
+    # (data the user asked for). See test_response_validator_regression.py.
+    def test_bare_json_object_without_tool_keys_is_valid(self) -> None:
         text = '{"invalid": true, "no_tool_key": "here"}'
-        assert is_valid_response(text) is False
+        assert is_valid_response(text) is True
 
-    def test_bare_json_after_newline_is_invalid(self) -> None:
-        text = "Aqui vou chamar a ferramenta:\n[\"item1\", \"item2\"]"
-        assert is_valid_response(text) is False
+    def test_bare_json_list_after_newline_is_valid(self) -> None:
+        text = "Aqui estão os itens:\n[\"item1\", \"item2\"]"
+        assert is_valid_response(text) is True
 
-    def test_bare_json_array_on_line_is_invalid(self) -> None:
+    def test_bare_json_array_on_line_is_valid(self) -> None:
         text = '[{"id": 1}, {"id": 2}]'
+        assert is_valid_response(text) is True
+
+    def test_bare_json_with_params_key_is_invalid(self) -> None:
+        text = '{"params": {"id": 1}}'
         assert is_valid_response(text) is False
 
     def test_inline_json_not_at_line_start_is_valid(self) -> None:

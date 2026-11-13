@@ -38,6 +38,7 @@ from symbiote.runners.base import (
 from symbiote.runners.loop_control import LoopController
 from symbiote.runners.response_validator import (
     fallback_text,
+    has_raw_tool_fence,
     is_valid_response,
     reformulate_message,
 )
@@ -1351,6 +1352,7 @@ class ChatRunner:
         if is_valid_response(clean_text):
             return clean_text, buffered_chunks
 
+        original_text, original_chunks = clean_text, buffered_chunks
         retry_messages = list(messages)
         for _ in range(_MAX_VALIDATION_RETRIES):
             retry_messages.append({"role": "assistant", "content": clean_text})
@@ -1370,7 +1372,11 @@ class ChatRunner:
                 # Return single-chunk buffer matching the validated text
                 return clean_text, [clean_text] if buffered_chunks is not None else None
 
-        # All retries failed — use fallback
+        # Retries did not help. Keep the model's own answer unless there is
+        # nothing to show or it is a raw tool_call block: a false positive of
+        # the validator must not turn a real answer into an apology.
+        if original_text.strip() and not has_raw_tool_fence(original_text):
+            return original_text, original_chunks
         fb = fallback_text()
         return fb, [fb] if buffered_chunks is not None else None
 
