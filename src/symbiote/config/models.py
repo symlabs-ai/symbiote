@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal, Self
 
 import yaml
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 _VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
@@ -56,6 +56,11 @@ class KernelConfig(BaseModel):
     # rejects per-symbiote values above it. Default 50 preserves the historical
     # hardcoded cap. Bounded by the EnvironmentConfig absolute backstop (10000).
     max_tool_iterations_ceiling: int = 50
+    # Optional retention (off by default): ``kernel.prune()`` deletes the
+    # messages / execution traces of sessions closed more than N days ago.
+    # Nothing runs it automatically — call it from a cron (``symbiote prune``).
+    message_retention_days: int | None = Field(default=None, ge=0)
+    trace_retention_days: int | None = Field(default=None, ge=0)
     # Root directory for the builtin filesystem tools (fs_read / fs_write /
     # fs_list) and the default working directory of ``bash``. When set, every
     # path must resolve (symlinks included) inside it and an ``allowed_root``

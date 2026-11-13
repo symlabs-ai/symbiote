@@ -1195,6 +1195,49 @@ class SymbioteKernel:
         self._tool_gateway.unregister_tool(tool_id)
         return True
 
+    def prune(
+        self,
+        *,
+        dry_run: bool = False,
+        messages_days: int | None = None,
+        traces_days: int | None = None,
+    ) -> dict[str, int]:
+        """Apply the retention windows; returns rows deleted (or that would be).
+
+        Removes the messages and execution traces of sessions that are
+        ``closed`` and ended more than N days ago. Active sessions are never
+        touched; memories, summaries and scores are kept. The windows default
+        to ``KernelConfig.message_retention_days`` / ``trace_retention_days``;
+        ``None`` (the default) leaves that table alone. Not scheduled
+        automatically.
+        """
+        from datetime import UTC, datetime, timedelta
+
+        windows = {
+            "messages": messages_days if messages_days is not None
+            else self._config.message_retention_days,
+            "execution_traces": traces_days if traces_days is not None
+            else self._config.trace_retention_days,
+        }
+        old_sessions = (
+            "SELECT id FROM sessions WHERE status = 'closed' "
+            "AND ended_at IS NOT NULL AND ended_at < ?"
+        )
+        counts: dict[str, int] = {}
+        for table, days in windows.items():
+            if days is None:
+                counts[table] = 0
+                continue
+            cutoff = (datetime.now(tz=UTC) - timedelta(days=days)).isoformat()
+            where = f"session_id IN ({old_sessions})"
+            row = self._storage.fetch_one(
+                f"SELECT COUNT(*) AS c FROM {table} WHERE {where}", (cutoff,)  # noqa: S608
+            )
+            counts[table] = int(row["c"]) if row else 0
+            if not dry_run and counts[table]:
+                self._storage.execute(f"DELETE FROM {table} WHERE {where}", (cutoff,))  # noqa: S608
+        return counts
+
     def load_discovered_tools(self, symbiote_id: str, base_url: str = "") -> list[str]:
         """Load approved discovered tools into the ToolGateway and authorize them.
 

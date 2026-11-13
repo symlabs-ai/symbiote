@@ -1447,5 +1447,37 @@ def skills_pin(
     console.print(f"[green]✓[/] {_e(name)} {_e(state)}.")
 
 
+# ── prune (retention) ─────────────────────────────────────────────────────
+
+
+@app.command("prune")
+def prune(
+    messages_days: int | None = typer.Option(
+        None, "--messages-days", min=0,
+        help="Delete messages of sessions closed more than N days ago.",
+    ),
+    traces_days: int | None = typer.Option(
+        None, "--traces-days", min=0,
+        help="Delete execution traces of sessions closed more than N days ago.",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Only count."),
+) -> None:
+    """Retention for messages and traces of old closed sessions.
+
+    Active sessions are never touched. Without options nothing is deleted.
+    Suggested cron (weekly): ``symbiote prune --messages-days 180 --traces-days 30``.
+    """
+    kernel = _make_kernel()
+    try:
+        counts = kernel.prune(
+            dry_run=dry_run, messages_days=messages_days, traces_days=traces_days
+        )
+    finally:
+        kernel.shutdown()
+    verb = "Would delete" if dry_run else "Deleted"
+    for table, n in counts.items():
+        console.print(f"{verb} {n} row(s) from {_e(table)}")
+
+
 if __name__ == "__main__":
     app()
