@@ -55,14 +55,23 @@ class TestIsRetryableError:
     def test_429_string_not_retryable(self):
         assert not ChatRunner._is_retryable_error(Exception("HTTP 429 Too Many Requests"))
 
-    def test_503_string_is_retryable(self):
-        assert ChatRunner._is_retryable_error(Exception("503 Service Unavailable"))
+    # Message text is not inspected (a 400 can quote "timeout" or "503");
+    # the status code decides. See test_llm_retry_classification.py.
+    def test_503_string_alone_is_not_retryable(self):
+        assert not ChatRunner._is_retryable_error(Exception("503 Service Unavailable"))
 
-    def test_502_string_is_retryable(self):
-        assert ChatRunner._is_retryable_error(Exception("502 Bad Gateway"))
+    def test_503_status_is_retryable(self):
+        exc = Exception("Service Unavailable")
+        exc.status_code = 503
+        assert ChatRunner._is_retryable_error(exc)
 
-    def test_timeout_string_is_retryable(self):
-        assert ChatRunner._is_retryable_error(Exception("request timeout"))
+    def test_502_status_is_retryable(self):
+        exc = Exception("Bad Gateway")
+        exc.status_code = 502
+        assert ChatRunner._is_retryable_error(exc)
+
+    def test_file_not_found_is_not_retryable(self):
+        assert not ChatRunner._is_retryable_error(FileNotFoundError("missing"))
 
     def test_value_error_not_retryable(self):
         assert not ChatRunner._is_retryable_error(ValueError("bad value"))

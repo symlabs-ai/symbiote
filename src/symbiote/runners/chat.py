@@ -24,6 +24,7 @@ from symbiote.agent_protocols.base import (
     format_legacy_tool_results,
 )
 from symbiote.core.context import AssembledContext
+from symbiote.core.exceptions import is_transient_llm_error
 from symbiote.core.models import Message
 from symbiote.core.ports import LLMPort
 from symbiote.environment.descriptors import LLMResponse, ToolCall, ToolCallResult
@@ -1323,19 +1324,13 @@ class ChatRunner:
     def _is_retryable_error(exc: Exception) -> bool:
         """Return True if *exc* is a transient error worth retrying.
 
-        429 rate-limit errors are NOT retried here — the OpenAI SDK already
-        retries them internally, so a second layer only amplifies the problem.
-        Rate limits should surface immediately to the caller.
+        Decided by ``LLMError.retryable`` (set by the adapter from the
+        provider status) or, for other exceptions, by the HTTP status found
+        in the exception chain or the exception type. Message text is never
+        inspected: a 400 whose message quotes "timeout" or "503" is not
+        retried, and a 503 whose request id contains "429" is.
         """
-        if isinstance(exc, ValueError | TypeError | KeyError):
-            return False
-        if isinstance(exc, ConnectionError | TimeoutError | OSError):
-            return True
-        msg = str(exc).lower()
-        # Exclude 429 — rate limits must not be retried at this layer
-        if "429" in msg or "rate limit" in msg or "rate_limit" in msg:
-            return False
-        return any(kw in msg for kw in ("503", "502", "timeout", "overloaded"))
+        return is_transient_llm_error(exc)
 
     def _call_llm_with_retry(
         self,

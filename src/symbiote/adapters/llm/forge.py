@@ -6,7 +6,7 @@ import json
 import os
 from typing import TYPE_CHECKING, Any
 
-from symbiote.core.exceptions import LLMError
+from symbiote.core.exceptions import LLMError, is_transient_llm_error, llm_error_status
 from symbiote.environment.descriptors import (
     LLMModelIdentity,
     LLMResponse,
@@ -102,7 +102,7 @@ class ForgeLLMAdapter:
         except LLMError:
             raise
         except Exception as exc:
-            raise LLMError(str(exc)) from exc
+            raise _wrap_error(exc) from exc
 
     def stream(
         self,
@@ -146,7 +146,16 @@ class ForgeLLMAdapter:
         except LLMError:
             raise
         except Exception as exc:
-            raise LLMError(str(exc)) from exc
+            raise _wrap_error(exc) from exc
+
+
+def _wrap_error(exc: Exception) -> LLMError:
+    """LLMError keeping the provider status and whether a retry may help."""
+    return LLMError(
+        str(exc),
+        status_code=llm_error_status(exc),
+        retryable=is_transient_llm_error(exc),
+    )
 
 
 def _to_chat_message(message: dict[str, Any]) -> Any:
