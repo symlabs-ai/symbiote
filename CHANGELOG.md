@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+- test(support): helpers compartilhados em `tests/support` (`ScriptedLLM`, `make_kernel`, `add_tool`, `tool_call_block`) e fixture `api_client` com autenticação real (sem `SYMBIOTE_DEV_MODE`), base dos testes de regressão do relatório de melhorias (Q-2).
+
 ## [v0.7.3] - 2026-07-28
 
 - fix(deps): fixa ForgeScraper `v0.12.4` pelo commit imutável `632e4ce`, eliminando a dependência flutuante do extra `[extract]`.
