@@ -4,7 +4,7 @@
 
 | Ambiente | Onde roda | Acesso |
 |---|---|---|
-| **Local** | Sua máquina de dev | `systemd user` symbios.service — `http://localhost:8003` |
+| **Local** | Sua máquina de dev | Execução manual (não há unit systemd): `uvicorn symbiote.api.http:app --host 127.0.0.1 --port 8008` — `http://127.0.0.1:8008` |
 | **Staging** | linux-ci (10.10.10.10) — Docker (`staging-symbiote`) | `http://127.0.0.1:8008` no host, via SSH |
 | **Produção** | VPS 72.60.246.51 — systemd `symbiote` | `https://symbiote.symlabs.ai` |
 
