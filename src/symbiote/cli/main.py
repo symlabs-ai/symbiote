@@ -655,7 +655,8 @@ def _read_symbiote_config(path: Path = Path(".")) -> dict:
         raise typer.Exit(1)
     import configparser
 
-    cp = configparser.ConfigParser()
+    # RawConfigParser: values (API keys, names) may contain '%'.
+    cp = configparser.RawConfigParser()
     cp.read(str(cfg_file))
     return dict(cp["symbiote"]) if "symbiote" in cp else {}
 
@@ -666,9 +667,14 @@ def _write_symbiote_config(cfg: dict, path: Path = Path(".")) -> None:
 
     cfg_dir = path / _SYMBIOTE_CONFIG_DIR
     cfg_dir.mkdir(exist_ok=True)
-    cp = configparser.ConfigParser()
+    cp = configparser.RawConfigParser()
     cp["symbiote"] = cfg
-    with open(path / _SYMBIOTE_CONFIG_FILE, "w") as f:
+    # The file holds the API key: create it owner-only, and tighten an
+    # existing file written by older versions with the default umask.
+    cfg_file = path / _SYMBIOTE_CONFIG_FILE
+    fd = os.open(cfg_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.chmod(cfg_file, 0o600)
+    with os.fdopen(fd, "w") as f:
         cp.write(f)
 
 
