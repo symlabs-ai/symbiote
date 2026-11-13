@@ -83,13 +83,21 @@ class DiscoveryService:
         # Strategy 4: pyproject.toml scripts (always — CLI tools complement HTTP)
         tools.extend(self._scan_pyproject_scripts(symbiote_id, root, now, result))
 
-        # Deduplicate by tool_id (first wins)
-        seen: set[str] = set()
+        # Deduplicate by tool_id (first wins); a different operation that
+        # maps to the same id is reported instead of silently dropped.
+        seen: dict[str, DiscoveredTool] = {}
         for tool in tools:
-            if tool.tool_id not in seen:
-                seen.add(tool.tool_id)
+            first = seen.get(tool.tool_id)
+            if first is None:
+                seen[tool.tool_id] = tool
                 self._repo.save(tool)
                 result.discovered.append(tool)
+            elif (first.method, first.url_template) != (tool.method, tool.url_template):
+                result.errors.append(
+                    f"tool_id collision: {tool.tool_id!r} for {tool.method} "
+                    f"{tool.url_template} skipped (already used by {first.method} "
+                    f"{first.url_template})"
+                )
 
         return result
 
@@ -145,7 +153,7 @@ class DiscoveryService:
                 name=summary[:80],
                 description=op.get("description") or summary,
                 method=method.upper(),
-                url_template=f"{base_url}{path}",
+                url_template=f"{base_url}{_normalize_path(path)}{_query_template(op, spec)}",
                 parameters=parameters,
                 tags=op.get("tags", []),
                 risk_level=_risk_for_operation(method, op),
@@ -218,7 +226,7 @@ class DiscoveryService:
                 name=summary[:80],
                 description=op.get("description") or summary,
                 method=method.upper(),
-                url_template=f"{base_url}{path}",
+                url_template=f"{base_url}{_normalize_path(path)}{_query_template(op, spec)}",
                 parameters=parameters,
                 tags=op.get("tags", []),
                 risk_level=_risk_for_operation(method, op),
@@ -257,7 +265,7 @@ class DiscoveryService:
                     name=f"{method} {path}",
                     description=f"FastAPI route: {method} {path}",
                     method=method,
-                    url_template="{base_url}" + path,
+                    url_template="{base_url}" + _normalize_path(path),
                     source_path=str(py_file),
                     discovered_at=now,
                 ))
@@ -298,7 +306,7 @@ class DiscoveryService:
                         name=f"{method} {path}",
                         description=f"Flask route: {method} {path}",
                         method=method,
-                        url_template="{base_url}" + path,
+                        url_template="{base_url}" + _normalize_path(path),
                         source_path=str(py_file),
                         discovered_at=now,
                     ))
@@ -412,11 +420,49 @@ def _iter_operations(spec: dict, errors: list[str] | None = None):  # noqa: ANN2
 
 
 def _path_to_tool_id(method: str, path: str) -> str:
-    """Convert HTTP method + path to a tool_id slug."""
-    parts = [method.lower()] + [
-        p for p in path.strip("/").split("/") if p and not p.startswith("{")
-    ]
+    """Convert HTTP method + path to a tool_id slug.
+
+    Path parameters are kept as ``by_<name>`` so ``/items``, ``/items/{id}``
+    and ``/items/{id}/{rev}`` get distinct ids.
+    """
+    parts = [method.lower()]
+    for segment in _normalize_path(path).strip("/").split("/"):
+        if not segment:
+            continue
+        parts.append(re.sub(r"\{([^{}]+)\}", r"by_\1", segment))
     return _slugify("_".join(parts))
+
+
+def _normalize_path(path: str) -> str:
+    """Route converters to plain placeholders.
+
+    Starlette ``{file_path:path}`` and Flask ``<int:user_id>`` / ``<name>``
+    become ``{file_path}``, ``{user_id}`` and ``{name}`` — the ``:spec`` form
+    is not a valid ``str.format`` placeholder for our values.
+    """
+    path = re.sub(r"\{(\w+):[^{}]*\}", r"{\1}", path)
+    return re.sub(r"<(?:[^<>:]+:)?(\w+)>", r"{\1}", path)
+
+
+# Query parameter names that can be a ``str.format`` placeholder.
+_QUERY_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
+
+
+def _query_template(op: dict[str, Any], spec_root: dict[str, Any] | None) -> str:
+    """``?a={a}&b={b}`` for the operation's ``in: query`` parameters.
+
+    The gateway percent-encodes each value and drops the optional ones the
+    caller leaves out (``optional_params``, set by the loader).
+    """
+    names = []
+    for p in op.get("parameters") or []:
+        p = _resolve_ref(p, spec_root) if isinstance(p, dict) else {}
+        name = p.get("name", "")
+        if p.get("in") == "query" and _QUERY_NAME.match(name):
+            names.append(name)
+    if not names:
+        return ""
+    return "?" + "&".join(f"{n}={{{n}}}" for n in names)
 
 
 def _openapi_params_to_schema(
@@ -433,8 +479,10 @@ def _openapi_params_to_schema(
     required: list[str] = []
 
     for p in params:
+        p = _resolve_ref(p, spec_root) if isinstance(p, dict) else {}
         name = p.get("name", "")
-        if not name:
+        if not name or p.get("in") in ("header", "cookie"):
+            # Header/cookie parameters cannot be sent by the HTTP tool.
             continue
         schema = p.get("schema", {"type": "string"})
         schema = _resolve_ref(schema, spec_root)

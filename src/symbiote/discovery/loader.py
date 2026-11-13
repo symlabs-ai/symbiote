@@ -155,8 +155,9 @@ def _derive_http_config(
 
     # Identify path params (before '?') vs query params (after '?')
     import re
-    path_part = url_template.split("?", 1)[0]
-    path_params = set(re.findall(r"\{(\w+)\}", path_part))
+    path_part, _, query_part = url_template.partition("?")
+    path_params = set(re.findall(r"\{([^{}]+)\}", path_part))
+    query_params = set(re.findall(r"\{([^{}]+)\}", query_part))
 
     # Identify array params
     array_params = [
@@ -170,9 +171,10 @@ def _derive_http_config(
         # only if the LLM explicitly provides them.
         body = {}
         for name in props:
-            if name not in path_params and name in required:
+            if name not in path_params and name not in query_params and name in required:
                 body[name] = f"{{{name}}}"
-        return (body or None), [], array_params
+        optional_query = [name for name in query_params if name not in required]
+        return (body or None), optional_query, array_params
 
     # GET/DELETE — optional_params are non-required query params
     optional = [

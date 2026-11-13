@@ -44,8 +44,9 @@ class TestHelpers:
     def test_path_to_tool_id(self) -> None:
         assert _path_to_tool_id("GET", "/api/search") == "get_api_search"
 
-    def test_path_to_tool_id_skips_params(self) -> None:
-        assert _path_to_tool_id("POST", "/api/items/{id}/publish") == "post_api_items_publish"
+    def test_path_to_tool_id_keeps_params(self) -> None:
+        # Path params stay in the id so /items and /items/{id} do not collide (T-2).
+        assert _path_to_tool_id("POST", "/api/items/{id}/publish") == "post_api_items_by_id_publish"
 
 
 # ── FastAPI strategy ──────────────────────────────────────────────────────────
