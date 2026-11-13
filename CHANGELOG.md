@@ -16,6 +16,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - fix(tools): os valores dos placeholders de `url_template` passam a ser codificados (`quote(safe="")`), então um valor vindo do LLM não acrescenta segmentos de path, parâmetros de query nem fragmento, e valores com espaço ou acento funcionam. Placeholders opcionais com valor `False` ou `0` deixam de ser removidos (S-7).
   - **MIGRAÇÃO:** valores com `/`, `?` ou `&` em placeholders deixam de alterar a URL. Exceção: um placeholder no início do template (`{base_url}/...` ou `{url}`) é inserido sem codificação.
 - fix(tools): num redirect para outra origem (esquema, host ou porta), a HTTP tool deixa de reenviar `Authorization`, `Cookie`, `Proxy-Authorization` e os headers definidos em `headers` e `header_factory` (S-8).
+- fix(console): `esc()` passa a escapar aspas simples e duplas, então um valor vindo de memória, mensagem ou nome de symbiote não injeta atributos HTML (como `onmouseover`) no Console. Os botões que recebiam dados em `onclick` inline usam atributos `data-*` com um handler delegado (S-6).
 
 ## [v0.7.3] - 2026-07-28
 

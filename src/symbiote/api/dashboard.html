@@ -592,12 +592,32 @@ function fmtDateShort(iso) {
   const p = n => String(n).padStart(2, '0');
   return `${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
+// Escapes for both text and attribute context (quotes included). Use it for
+// every value interpolated into HTML; never interpolate data into on*="".
 function esc(s) {
-  if (!s) return '';
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
+
+// Delegated handlers for buttons rendered from data: the values travel in
+// data-* attributes (escaped by esc) instead of inline onclick JavaScript.
+document.addEventListener('click', (ev) => {
+  const el = ev.target.closest('[data-action]');
+  if (!el) return;
+  const d = el.dataset;
+  switch (d.action) {
+    case 'edit-symbiote': openEditModal(d.id); break;
+    case 'delete-symbiote': deleteSymbiote(d.id, d.name); break;
+    case 'close-session': closeSession(d.id); break;
+    case 'toggle-tool': toggleToolStatus(d.symbiote, d.tool, d.status); break;
+    case 'revoke-key': revokeApiKey(d.id); break;
+  }
+});
 function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + '...' : (s || '-'); }
 
 function renderBadge(text, type) {
@@ -838,8 +858,8 @@ async function loadSymbiotes() {
         `<span class="text-text-dim text-[11px]">${fmtDate(s.created_at)}</span>`,
         `<div class="flex items-center gap-2">
           <a href="#symbiotes/${s.id}" class="text-accent text-[11px] hover:underline">View</a>
-          <button onclick="openEditModal('${s.id}')" class="text-blue text-[11px] hover:underline px-1" title="Editar">✏️</button>
-          <button onclick="deleteSymbiote('${s.id}', '${esc(s.name)}')" class="text-red text-[11px] hover:underline px-1" title="Deletar">🗑️</button>
+          <button data-action="edit-symbiote" data-id="${esc(s.id)}" class="text-blue text-[11px] hover:underline px-1" title="Editar">✏️</button>
+          <button data-action="delete-symbiote" data-id="${esc(s.id)}" data-name="${esc(s.name)}" class="text-red text-[11px] hover:underline px-1" title="Deletar">🗑️</button>
         </div>`,
       ]),
       { empty: 'No symbiotes — click Create to add one' }
@@ -1362,7 +1382,7 @@ async function loadSessionDetail(id) {
     det.innerHTML = `
       <div class="mb-4 flex items-center gap-3">
         <a href="#sessions" class="text-accent text-[11px] hover:underline">&larr; Back to list</a>
-        ${session && session.status === 'active' ? `<button onclick="closeSession('${id}')" class="ml-auto bg-red text-white text-[11px] font-semibold px-3 py-1 rounded hover:opacity-90">Close Session</button>` : ''}
+        ${session && session.status === 'active' ? `<button data-action="close-session" data-id="${esc(id)}" class="ml-auto bg-red text-white text-[11px] font-semibold px-3 py-1 rounded hover:opacity-90">Close Session</button>` : ''}
       </div>
       <div class="bg-bg-card border border-border rounded-lg p-5 mb-6">
         <div class="flex items-center gap-3 mb-3">
@@ -1661,7 +1681,7 @@ async function loadTools() {
             ${renderBadge(t.status, t.status === 'approved' ? 'active' : t.status === 'disabled' ? 'closed' : 'amber')}
           </div>
           <div class="flex items-center gap-2">
-            <button onclick="toggleToolStatus('${t.symbiote_id}', '${t.tool_id}', '${t.status}')"
+            <button data-action="toggle-tool" data-symbiote="${esc(t.symbiote_id)}" data-tool="${esc(t.tool_id)}" data-status="${esc(t.status)}"
               class="text-[11px] px-3 py-1 rounded border ${t.status === 'approved' ? 'border-red text-red hover:bg-red hover:text-white' : 'border-accent text-accent hover:bg-accent hover:text-bg'} transition-colors">
               ${t.status === 'approved' ? 'Disable' : 'Approve'}
             </button>
@@ -2080,7 +2100,7 @@ async function loadApiKeys() {
         renderBadge(k.role, k.role === 'admin' ? 'amber' : 'role'),
         renderBadge(k.is_active !== false ? 'active' : 'revoked', k.is_active !== false ? 'active' : 'red'),
         `<span class="text-text-dim text-[11px]">${fmtDate(k.created_at)}</span>`,
-        k.is_active !== false ? `<button onclick="revokeApiKey('${k.id}')" class="text-red text-[11px] hover:underline">Revoke</button>` : '<span class="text-text-dim text-[11px]">-</span>',
+        k.is_active !== false ? `<button data-action="revoke-key" data-id="${esc(k.id)}" class="text-red text-[11px] hover:underline">Revoke</button>` : '<span class="text-text-dim text-[11px]">-</span>',
       ]),
       { empty: 'No API keys for this tenant' }
     );
