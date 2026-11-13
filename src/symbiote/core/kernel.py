@@ -1195,8 +1195,9 @@ class SymbioteKernel:
         """Load approved discovered tools into the ToolGateway and authorize them.
 
         Reads all tools with ``status=approved`` from ``discovered_tools`` for
-        *symbiote_id*, registers each HTTP tool in the ToolGateway, and calls
-        ``EnvironmentManager.configure()`` so the PolicyGate allows them.
+        *symbiote_id*, registers each HTTP tool in the ToolGateway, and adds
+        them to the symbiote's authorized tools (tools it already had stay
+        authorized).
 
         Returns the list of tool_ids that were registered.  Call this once
         during app startup after the kernel is initialized::
@@ -1209,7 +1210,7 @@ class SymbioteKernel:
         )
         tool_ids = loader.load(symbiote_id, base_url=base_url)
         if tool_ids:
-            self._environment.configure(symbiote_id=symbiote_id, tools=tool_ids)
+            self._environment.add_tools(symbiote_id, tool_ids)
         return tool_ids
 
     def load_mcp_tools(self, registry: object, symbiote_id: str) -> list[str]:
@@ -1220,8 +1221,8 @@ class SymbioteKernel:
         The caller is responsible for keeping the McpToolset context manager alive
         for as long as the registered tools are in use.
 
-        Also calls ``EnvironmentManager.configure()`` so PolicyGate authorizes the
-        tools for *symbiote_id*::
+        Also adds the tools to *symbiote_id*'s authorized tools (keeping the
+        ones it already had) so PolicyGate allows them::
 
             async with McpToolset.from_http("http://localhost:8000/mcp") as registry:
                 tool_ids = kernel.load_mcp_tools(registry, symbiote_id="clark")
@@ -1233,7 +1234,7 @@ class SymbioteKernel:
         provider = McpToolProvider()
         tool_ids = provider.load(registry, self._tool_gateway)
         if tool_ids:
-            self._environment.configure(symbiote_id=symbiote_id, tools=tool_ids)
+            self._environment.add_tools(symbiote_id, tool_ids)
         return tool_ids
 
     def configure_tool_visibility(

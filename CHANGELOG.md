@@ -67,6 +67,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
   - **MIGRAÇÃO:** quem usa `get_tool_schema` para ler o schema de tools não autorizadas precisa autorizá-las.
 - fix(environment)!: `configure()` deixa de perder atualizações concorrentes e de duplicar configs (T-4). A leitura-modificação-escrita roda sob um lock, e um índice único em `(symbiote_id, workspace_id)` impede linhas duplicadas entre processos. Na migração, as duplicatas existentes são consolidadas: fica a linha mais recente, com a união das tools de todas. Novos `add_tools()`/`remove_tools()` autorizam e revogam sem corrida; o kernel já os usa. `memory_share=0.0`, `knowledge_share=0.0` e os demais zeros voltam como zero, em vez do valor padrão. Uma config de workspace nova parte da config do symbiote: antes, `configure(workspace_id=..., prompt_caching=True)` criava a config do workspace sem nenhuma tool.
   - **MIGRAÇÃO:** configs de workspace criadas a partir de agora herdam os campos da config do symbiote que não forem informados.
+- fix(kernel)!: `load_discovered_tools()` e `load_mcp_tools()` acrescentam as tools carregadas às já autorizadas do symbiote; antes substituíam a lista inteira e um symbiote perdia `fs_read`, `skill_view` etc. ao carregar tools descobertas (T-5, D-9).
+  - **MIGRAÇÃO:** quem dependia da substituição deve revogar as tools antigas com `environment.remove_tools()`.
 
 ## [v0.7.3] - 2026-07-28
 

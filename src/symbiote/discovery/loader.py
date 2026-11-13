@@ -29,7 +29,7 @@ class DiscoveredToolLoader:
             base_url="http://127.0.0.1:8000",
             header_factory=lambda: {"Cookie": f"access_token=Bearer {token}"},
         )
-        kernel.environment.configure(symbiote_id=clark_id, tools=loaded)
+        kernel.environment.add_tools(clark_id, loaded)
     """
 
     def __init__(
