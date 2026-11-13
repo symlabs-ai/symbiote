@@ -86,6 +86,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
   - **MIGRAÇÃO:** num clone que faça pull desta mudança, o git apaga do disco esses três caminhos, por deixarem de ser versionados. Faça backup antes, se algum deles tiver conteúdo local que importe.
 - chore(lint): `ruff.toml` passa a ser a única configuração do ruff, com `target-version = "py312"` e sem a regra de `src/forgebase/**`, que vinha de outro projeto. O bloco `[tool.ruff]` do `pyproject.toml`, que o ruff ignorava por causa do `ruff.toml`, foi removido (Q-1, D-14). Nada novo foi apontado.
 - ci: o estágio `quality` do `Dockerfile` roda `pytest --cov=src/symbiote --cov-fail-under=85`, e o build falha abaixo de 85% de cobertura; antes o `fail_under` do `pyproject.toml` nunca era aplicado (Q-1). Localmente o mesmo comando passa com 89,99%.
+- fix(dream): o `GeneralizePhase` voltou a generalizar mais de um cluster por ciclo. A guarda da TK-46 contra generalizações repetidas sobrescrevia a lista das existentes com o texto do LLM, e a partir do segundo cluster a fase falhava (`str` não tem `tags`) e ficava registrada como erro no relatório do dream. Achado pelo mypy na TK-83.
 
 ## [v0.7.3] - 2026-07-28
 

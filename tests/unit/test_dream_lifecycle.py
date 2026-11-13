@@ -116,3 +116,32 @@ def test_generalization_is_not_repeated(tmp_path: Path) -> None:
     )
     assert len(rows) == 1
     kernel.shutdown()
+
+
+def test_two_clusters_in_one_dream_are_both_generalized(tmp_path: Path) -> None:
+    # Regression (found by mypy in TK-83): the LLM text overwrote the list of
+    # existing generalizations, so the second cluster crashed on str.tags.
+    llm = ScriptedLLM(lambda i, m: f"General rule number {i}.")
+    kernel = make_kernel(tmp_path, llm)
+    sym = kernel.create_symbiote(name="a", role="r")
+    kernel.environment.configure(symbiote_id=sym.id, dream_mode="full")
+    groups = {
+        ("deploy", "checklist"): ("run the tests before deploy", "check migrations before deploy",
+                                  "announce the deploy in the channel"),
+        ("billing", "invoice"): ("send invoices on the first day", "attach the invoice pdf",
+                                 "mark the invoice as sent"),
+    }
+    for tags, texts in groups.items():
+        for text in texts:
+            kernel._memory.store(MemoryEntry(symbiote_id=sym.id, type="procedural", scope="global",
+                                             source="reflection", content=text,
+                                             tags=list(tags), importance=0.6))
+
+    kernel.dream(sym.id)
+
+    rows = kernel._storage.fetch_all(
+        "SELECT content FROM memory_entries WHERE symbiote_id = ? AND tags_json LIKE '%dream:generalized%'",
+        (sym.id,),
+    )
+    assert len(rows) == 2
+    kernel.shutdown()

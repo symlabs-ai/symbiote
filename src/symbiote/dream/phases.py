@@ -377,7 +377,7 @@ class GeneralizePhase:
             prompt = _GENERALIZE_PROMPT.format(memories=memories_text)
 
             try:
-                generalized = _llm_complete(ctx.llm, prompt).strip()
+                rule = _llm_complete(ctx.llm, prompt).strip()
             except Exception as exc:
                 logger.warning("dream generalize LLM error: %s", exc)
                 details.append({"cluster_size": len(cluster), "error": str(exc)})
@@ -388,7 +388,7 @@ class GeneralizePhase:
 
             detail = {
                 "cluster_size": len(cluster),
-                "generalized": generalized,
+                "generalized": rule,
                 "importance": new_importance,
                 "source_ids": [e.id for e in cluster],
             }
@@ -405,7 +405,7 @@ class GeneralizePhase:
                     symbiote_id=ctx.symbiote_id,
                     type="procedural",
                     scope="global",
-                    content=generalized,
+                    content=rule,
                     tags=sorted(all_tags),
                     importance=new_importance,
                     source="inference",
