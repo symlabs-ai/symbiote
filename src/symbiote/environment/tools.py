@@ -21,6 +21,11 @@ from symbiote.environment.policies import PolicyGate, ToolResult
 
 logger = logging.getLogger(__name__)
 
+# Largest HTTP-tool response read into memory. Bigger responses become a
+# tool error instead of being loaded whole (and then sent to the LLM).
+MAX_HTTP_TOOL_RESPONSE_BYTES = 5 * 1024 * 1024
+_HTTP_ERROR_BODY_BYTES = 4096
+
 # ── Memory/Knowledge tool descriptors ────────────────────────────────────────
 
 # ── Built-in descriptors ─────────────────────────────────────────────────────
@@ -773,7 +778,12 @@ def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
 
             opener = urllib.request.build_opener(_NoRedirect)
             with opener.open(req, timeout=config.timeout) as resp:
-                data = resp.read().decode("utf-8")
+                raw = resp.read(MAX_HTTP_TOOL_RESPONSE_BYTES + 1)
+                if len(raw) > MAX_HTTP_TOOL_RESPONSE_BYTES:
+                    raise RuntimeError(
+                        f"HTTP tool response exceeds {MAX_HTTP_TOOL_RESPONSE_BYTES} bytes"
+                    )
+                data = raw.decode("utf-8", errors="replace")
                 try:
                     parsed = _json.loads(data)
                 except (ValueError, _json.JSONDecodeError):
@@ -781,7 +791,8 @@ def _make_http_handler(config: HttpToolConfig) -> Callable[[dict], Any]:
                 return _wrap_external_content(parsed)
         except urllib.error.HTTPError as exc:
             raise RuntimeError(
-                f"HTTP {exc.code}: {exc.read().decode('utf-8', errors='replace')}"
+                f"HTTP {exc.code}: "
+                f"{exc.read(_HTTP_ERROR_BODY_BYTES).decode('utf-8', errors='replace')}"
             ) from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"URL error: {exc.reason}") from exc

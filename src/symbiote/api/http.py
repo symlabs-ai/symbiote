@@ -14,12 +14,19 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 
 # ── FastAPI app ───────────────────────────────────────────────────────────
 from fastapi.responses import HTMLResponse, JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic import ValidationError as PydanticValidationError
 from starlette.requests import Request
 
 from symbiote.adapters.storage.sqlite import SQLiteAdapter
 from symbiote.api.auth import APIKey, APIKeyManager
+from symbiote.api.limits import (
+    MAX_KEY_CHARS,
+    MAX_MESSAGE_CHARS,
+    MAX_NAME_CHARS,
+    MAX_TEXT_CHARS,
+    BodySizeLimitMiddleware,
+)
 from symbiote.api.middleware import (
     enforce_auth,
     require_admin,
@@ -79,6 +86,7 @@ for _ns in ("symbiote", "forge_llm", "httpx", "openai"):
 # ``symbiote.api.middleware._PUBLIC_PATHS``. Route-level ``require_auth`` /
 # ``require_admin`` dependencies still decide *who* may call each route.
 app = FastAPI(title="Symbiote API", dependencies=[Depends(enforce_auth)])
+app.add_middleware(BodySizeLimitMiddleware)
 
 
 @app.get("/health")
@@ -146,14 +154,14 @@ async def integrity_error_handler(request: Request, exc: sqlite3.IntegrityError)
 
 
 class CreateSymbioteRequest(BaseModel):
-    name: str
-    role: str
+    name: str = Field(max_length=MAX_NAME_CHARS)
+    role: str = Field(max_length=MAX_NAME_CHARS)
     persona_json: dict | None = None
 
 
 class UpdateSymbioteRequest(BaseModel):
-    name: str | None = None
-    role: str | None = None
+    name: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
+    role: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
     persona_json: dict | None = None
 
 
@@ -166,9 +174,9 @@ class SymbioteResponse(BaseModel):
 
 
 class CreateSessionRequest(BaseModel):
-    symbiote_id: str
-    goal: str | None = None
-    external_key: str | None = None
+    symbiote_id: str = Field(max_length=MAX_KEY_CHARS)
+    goal: str | None = Field(default=None, max_length=MAX_TEXT_CHARS)
+    external_key: str | None = Field(default=None, max_length=MAX_KEY_CHARS)
 
 
 class SessionResponse(BaseModel):
@@ -182,7 +190,7 @@ class SessionResponse(BaseModel):
 
 class CreateMessageRequest(BaseModel):
     role: Literal["user", "assistant", "system"]
-    content: str
+    content: str = Field(max_length=MAX_MESSAGE_CHARS)
 
 
 class MessageResponse(BaseModel):
@@ -205,9 +213,9 @@ class MemoryEntryResponse(BaseModel):
 
 
 class RegisterToolRequest(BaseModel):
-    tool_id: str
-    name: str
-    description: str
+    tool_id: str = Field(max_length=MAX_NAME_CHARS)
+    name: str = Field(max_length=MAX_NAME_CHARS)
+    description: str = Field(max_length=MAX_TEXT_CHARS)
     parameters: dict = {}
     http_method: str = "GET"
     url_template: str
@@ -225,7 +233,7 @@ class ToolDescriptorResponse(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    content: str
+    content: str = Field(max_length=MAX_MESSAGE_CHARS)
     extra_context: dict | None = None
     generation_settings: dict | None = None
 
@@ -1242,8 +1250,8 @@ def chat(
 
 
 class CreateAPIKeyRequest(BaseModel):
-    tenant_id: str
-    name: str
+    tenant_id: str = Field(max_length=MAX_NAME_CHARS)
+    name: str = Field(max_length=MAX_NAME_CHARS)
     role: Literal["user", "admin"] = "user"
 
 
