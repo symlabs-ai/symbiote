@@ -1045,13 +1045,26 @@ class ChatRunner:
         High-risk tools require approval via the on_before_tool_call callback.
         If the callback is None, all tools are auto-approved (backward compat).
         """
-        if self._on_before_tool_call is None or self._tool_gateway is None:
-            return calls, {}
-
         approved: list[ToolCall] = []
         denied: dict[int, ToolCallResult] = {}
 
         for idx, call in enumerate(calls):
+            if call.arguments_error is not None:
+                # Arguments could not be decoded (truncated JSON, ...): never
+                # run the tool with guessed/empty params; tell the model.
+                denied[idx] = ToolCallResult(
+                    call_id=call.call_id,
+                    tool_id=call.tool_id,
+                    success=False,
+                    error=(
+                        f"{call.arguments_error}. The tool was not executed; "
+                        "call it again with complete JSON arguments."
+                    ),
+                )
+                continue
+            if self._on_before_tool_call is None or self._tool_gateway is None:
+                approved.append(call)
+                continue
             risk = self._tool_gateway.get_risk_level(call.tool_id)
             if risk == "high" and not self._on_before_tool_call(call.tool_id, call.params, risk):
                 denied[idx] = ToolCallResult(
@@ -1314,8 +1327,8 @@ class ChatRunner:
                         update={"call_id": f"call_{uuid4().hex}"}
                     )
                 calls.append(call)
-            return response.content, calls
-        return parse_tool_calls(response)
+            return response.content or "", calls
+        return parse_tool_calls(response or "")
 
     def _validate_and_fix(
         self,

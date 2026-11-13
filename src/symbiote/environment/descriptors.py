@@ -78,6 +78,10 @@ class ToolCall(BaseModel):
     call_id: str | None = None
     tool_id: str
     params: dict[str, Any] = Field(default_factory=dict)
+    # Set when the model's arguments could not be decoded into an object
+    # (truncated JSON, a list, ...). Such a call is never executed; the error
+    # is returned to the model instead.
+    arguments_error: str | None = Field(default=None, exclude=True)
 
 
 class ToolCallResult(BaseModel):
@@ -104,6 +108,7 @@ class NativeToolCall(BaseModel):
     call_id: str | None = None  # provider-assigned ID (e.g. OpenAI tool_call.id)
     tool_id: str
     params: dict[str, Any] = Field(default_factory=dict)
+    arguments_error: str | None = Field(default=None, exclude=True)
 
     def to_tool_call(self) -> ToolCall:
         """Convert to a ToolCall without losing native correlation state."""
@@ -111,6 +116,7 @@ class NativeToolCall(BaseModel):
             call_id=self.call_id,
             tool_id=self.tool_id,
             params=self.params,
+            arguments_error=self.arguments_error,
         )
 
 

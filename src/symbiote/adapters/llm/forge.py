@@ -98,7 +98,7 @@ class ForgeLLMAdapter:
                     usage=_extract_usage(response),
                     metadata=_extract_opaque_metadata(response),
                 )
-            return response.content
+            return response.content or ""
         except LLMError:
             raise
         except Exception as exc:
@@ -292,6 +292,29 @@ def _extract_opaque_metadata(response: Any) -> dict[str, Any]:
     return opaque
 
 
+def _decode_arguments(raw: Any) -> tuple[dict, str | None]:
+    """Decode native tool-call arguments into a dict.
+
+    Returns ``({}, error)`` when they are not a JSON object — typically
+    truncated by ``finish_reason=length``. Running the tool with ``{}``
+    instead would silently drop every argument (``delete_records`` with no
+    filter), so the caller reports the error to the model instead.
+    """
+    if raw is None or raw == "":
+        return {}, None
+    if isinstance(raw, dict):
+        return raw, None
+    if not isinstance(raw, str):
+        return {}, f"Tool arguments must be a JSON object, got {type(raw).__name__}"
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return {}, f"Tool arguments are not valid JSON (possibly truncated): {exc.msg}"
+    if not isinstance(value, dict):
+        return {}, f"Tool arguments must be a JSON object, got {type(value).__name__}"
+    return value, None
+
+
 def _extract_tool_calls(response: Any) -> list[NativeToolCall]:
     """Extract NativeToolCall list from a forge_llm response."""
     tool_calls: list[NativeToolCall] = []
@@ -309,28 +332,23 @@ def _extract_tool_calls(response: Any) -> list[NativeToolCall]:
             # OpenAI format: {"id": "...", "type": "function", "function": {"name": "...", "arguments": "..."}}
             func = tc.get("function", {})
             name = func.get("name", "")
-            args_str = func.get("arguments", "{}")
-            try:
-                params = json.loads(args_str) if isinstance(args_str, str) else args_str
-            except (json.JSONDecodeError, TypeError):
-                params = {}
+            params, error = _decode_arguments(func.get("arguments", "{}"))
             tool_calls.append(NativeToolCall(
                 call_id=tc.get("id"),
                 tool_id=name,
                 params=params,
+                arguments_error=error,
             ))
         elif hasattr(tc, "function"):
             # Object format
             name = tc.function.name if hasattr(tc.function, "name") else ""
             args_str = tc.function.arguments if hasattr(tc.function, "arguments") else "{}"
-            try:
-                params = json.loads(args_str) if isinstance(args_str, str) else args_str
-            except (json.JSONDecodeError, TypeError):
-                params = {}
+            params, error = _decode_arguments(args_str)
             tool_calls.append(NativeToolCall(
                 call_id=getattr(tc, "id", None),
                 tool_id=name,
                 params=params,
+                arguments_error=error,
             ))
 
     return tool_calls
