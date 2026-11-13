@@ -1,0 +1,12 @@
+<!doctype html><meta charset=utf-8><div id=o></div><script>
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + '...' : (s || '-'); }
+function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + "..." : (s || "-"); }
+const m = {content: "nota\" onmouseover=\"window.__pwned=1\" x=\""};
+document.getElementById("o").innerHTML = `<span class="text-text-bright" title="${esc(m.content)}">${esc(truncate(m.content, 80))}</span>`;
+const sp = document.querySelector("#o span"); document.title = "attrs=" + sp.getAttributeNames().join(",");</script>
