@@ -18,10 +18,32 @@ from symbiote.api.http import (
 from symbiote.api.middleware import (
     require_admin,
 )
+from symbiote.core.inspector import KernelInspector
 from symbiote.core.ports import StoragePort
 from symbiote.core.session import SessionManager
 
 router = APIRouter()
+
+
+def get_inspector(adapter: Annotated[StoragePort, Depends(get_adapter)]) -> KernelInspector:
+    """Read-only views over the same storage the other console routes use."""
+    return KernelInspector(adapter)
+
+
+def _pick(rows: list[dict], *keys: str) -> list[dict]:
+    """Project inspector rows onto the fields (and field order) a console
+    endpoint has always returned — the inspector may return more."""
+    return [{key: row[key] for key in keys} for row in rows]
+
+
+_SESSION_FIELDS = (
+    "id", "symbiote_id", "goal", "status", "started_at", "ended_at",
+    "summary", "external_key", "symbiote_name",
+)
+_SCORE_FIELDS = (
+    "id", "session_id", "symbiote_id", "auto_score", "user_score", "final_score",
+    "stop_reason", "total_iterations", "total_tool_calls", "computed_at",
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -66,31 +88,14 @@ def api_list_symbiotes(
 @router.get("/api/sessions")
 def api_list_sessions(
     auth: Annotated[APIKey, Depends(require_admin)],
-    adapter: Annotated[StoragePort, Depends(get_adapter)],
+    inspector: Annotated[KernelInspector, Depends(get_inspector)],
     symbiote_id: str | None = Query(default=None),
     status: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[dict]:
     """List sessions with optional filters (admin console)."""
-    sql = (
-        "SELECT s.id, s.symbiote_id, s.goal, s.status, s.started_at, s.ended_at, "
-        "s.summary, s.external_key, sym.name as symbiote_name "
-        "FROM sessions s JOIN symbiotes sym ON s.symbiote_id = sym.id"
-    )
-    conditions: list[str] = []
-    params: list[str | int] = []
-    if symbiote_id:
-        conditions.append("s.symbiote_id = ?")
-        params.append(symbiote_id)
-    if status:
-        conditions.append("s.status = ?")
-        params.append(status)
-    if conditions:
-        sql += " WHERE " + " AND ".join(conditions)
-    sql += " ORDER BY s.started_at DESC LIMIT ?"
-    params.append(limit)
-    rows = adapter.fetch_all(sql, tuple(params))
-    return [dict(r) for r in rows]
+    rows = inspector.list_sessions(symbiote_id or None, status=status or None, limit=limit)
+    return _pick(rows, *_SESSION_FIELDS)
 
 
 @router.get("/api/sessions/{session_id}/messages")
@@ -132,16 +137,13 @@ def api_session_score(
     session_id: str,
     auth: Annotated[APIKey, Depends(require_admin)],
     adapter: Annotated[StoragePort, Depends(get_adapter)],
+    inspector: Annotated[KernelInspector, Depends(get_inspector)],
 ) -> list[dict]:
     """Get session scores (admin console)."""
     _require_session_access(adapter, session_id, auth)
-    rows = adapter.fetch_all(
-        "SELECT id, session_id, symbiote_id, auto_score, user_score, final_score, "
-        "stop_reason, total_iterations, total_tool_calls, computed_at "
-        "FROM session_scores WHERE session_id = ? ORDER BY computed_at DESC",
-        (session_id,),
-    )
-    return [dict(r) for r in rows]
+    # The kernel keeps one score row per session (it updates in place), so the
+    # inspector's default limit never truncates this list.
+    return _pick(inspector.list_scores(session_id=session_id), *_SCORE_FIELDS)
 
 
 @router.get("/api/symbiotes/{symbiote_id}/traces")
@@ -149,17 +151,16 @@ def api_symbiote_traces(
     symbiote_id: str,
     auth: Annotated[APIKey, Depends(require_admin)],
     adapter: Annotated[StoragePort, Depends(get_adapter)],
+    inspector: Annotated[KernelInspector, Depends(get_inspector)],
     limit: int = Query(default=20, ge=1, le=100),
 ) -> list[dict]:
     """Get recent execution traces for a symbiote (admin console)."""
     _require_symbiote_access(adapter, symbiote_id, auth)
-    rows = adapter.fetch_all(
-        "SELECT id, session_id, symbiote_id, total_iterations, total_tool_calls, "
-        "total_elapsed_ms, stop_reason, created_at "
-        "FROM execution_traces WHERE symbiote_id = ? ORDER BY created_at DESC LIMIT ?",
-        (symbiote_id, limit),
+    rows = inspector.list_traces(symbiote_id=symbiote_id, limit=limit)
+    return _pick(
+        rows, "id", "session_id", "symbiote_id", "total_iterations", "total_tool_calls",
+        "total_elapsed_ms", "stop_reason", "created_at",
     )
-    return [dict(r) for r in rows]
 
 
 @router.get("/api/symbiotes/{symbiote_id}/scores")
@@ -167,17 +168,12 @@ def api_symbiote_scores(
     symbiote_id: str,
     auth: Annotated[APIKey, Depends(require_admin)],
     adapter: Annotated[StoragePort, Depends(get_adapter)],
+    inspector: Annotated[KernelInspector, Depends(get_inspector)],
     limit: int = Query(default=20, ge=1, le=100),
 ) -> list[dict]:
     """Get recent session scores for a symbiote (admin console)."""
     _require_symbiote_access(adapter, symbiote_id, auth)
-    rows = adapter.fetch_all(
-        "SELECT id, session_id, symbiote_id, auto_score, user_score, final_score, "
-        "stop_reason, total_iterations, total_tool_calls, computed_at "
-        "FROM session_scores WHERE symbiote_id = ? ORDER BY computed_at DESC LIMIT ?",
-        (symbiote_id, limit),
-    )
-    return [dict(r) for r in rows]
+    return _pick(inspector.list_scores(symbiote_id, limit=limit), *_SCORE_FIELDS)
 
 
 @router.get("/api/symbiotes/{symbiote_id}/memory")
@@ -243,16 +239,16 @@ def api_symbiote_activity(
 def dashboard_data(
     auth: Annotated[APIKey, Depends(require_admin)],
     adapter: Annotated[StoragePort, Depends(get_adapter)],
+    inspector: Annotated[KernelInspector, Depends(get_inspector)],
 ) -> dict:
     """Aggregate data for the admin dashboard (no auth — read-only summary)."""
     symbiotes = adapter.fetch_all(
         "SELECT id, name, role, status, created_at FROM symbiotes "
         "WHERE status != 'deleted' ORDER BY created_at DESC"
     )
-    sessions = adapter.fetch_all(
-        "SELECT s.id, s.symbiote_id, s.status, s.goal, s.started_at, sym.name as symbiote_name "
-        "FROM sessions s JOIN symbiotes sym ON s.symbiote_id = sym.id "
-        "ORDER BY s.started_at DESC LIMIT 20"
+    sessions = _pick(
+        inspector.list_sessions(limit=20),
+        "id", "symbiote_id", "status", "goal", "started_at", "symbiote_name",
     )
     tenant_counts = adapter.fetch_all(
         "SELECT tenant_id, COUNT(*) as key_count FROM api_keys "
@@ -281,7 +277,7 @@ def dashboard_data(
     }
     return {
         "symbiotes": [dict(r) for r in symbiotes],
-        "sessions": [dict(r) for r in sessions],
+        "sessions": sessions,
         "tenants": [dict(r) for r in tenant_counts],
         "discovered_tools": [dict(r) for r in discovered_tools],
         "stats": stats,

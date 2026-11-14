@@ -1008,6 +1008,26 @@ def classify(
 # ── audit: reflection ──────────────────────────────────────────────────────
 
 
+def _decoded_json(row: dict, key: str) -> Any:
+    """A JSON column as the inspector decoded it: an empty column reads as
+    ``[]``; a value the inspector could not decode (left as the raw text)
+    raises ``ValueError``."""
+    value = row.get(key)
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raise ValueError(f"undecodable {key}")
+    return value
+
+
+def _reflection_facts(row: dict) -> tuple[Any, Any] | None:
+    """(keyword facts, LLM facts) of a reflection row, or None if either is invalid JSON."""
+    try:
+        return _decoded_json(row, "keyword_facts"), _decoded_json(row, "llm_facts")
+    except ValueError:
+        return None
+
+
 @audit_app.command("reflection")
 def audit_reflection(
     days: int = typer.Option(7, "--days", help="Look back this many days"),
@@ -1019,22 +1039,12 @@ def audit_reflection(
     """Dump rows from reflection_audit (Sprint 1 of the LLM reflection rollout)."""
     kernel = _make_kernel()
     try:
-        where = ["created_at >= ?"]
-        params: list = [days_ago(int(days))]
-        if symbiote_id:
-            where.append("symbiote_id = ?")
-            params.append(symbiote_id)
-        if session_id:
-            where.append("session_id = ?")
-            params.append(session_id)
-        sql = (
-            "SELECT id, session_id, symbiote_id, mode, "
-            "keyword_facts_json, llm_facts_json, llm_error, created_at "
-            "FROM reflection_audit WHERE " + " AND ".join(where) +
-            " ORDER BY created_at DESC LIMIT ?"
+        rows = kernel.inspector.list_reflections(
+            symbiote_id or None,
+            session_id=session_id or None,
+            since=days_ago(int(days)),
+            limit=int(limit),
         )
-        params.append(int(limit))
-        rows = kernel._storage.fetch_all(sql, tuple(params))
 
         if not rows:
             console.print("[yellow]No reflection_audit rows match.[/]")
@@ -1048,11 +1058,7 @@ def audit_reflection(
         table.add_column("LLM Error", max_width=40)
         table.add_column("When", no_wrap=True)
         for r in rows:
-            try:
-                k_facts = json.loads(r["keyword_facts_json"] or "[]")
-                l_facts = json.loads(r["llm_facts_json"] or "[]")
-            except Exception:
-                k_facts, l_facts = [], []
+            k_facts, l_facts = _reflection_facts(r) or ([], [])
             table.add_row(
                 _e((r["session_id"] or "")[:8]),
                 _e(r["mode"] or ""),
@@ -1066,11 +1072,10 @@ def audit_reflection(
         if show_diff:
             console.print()
             for r in rows[:5]:  # limit verbose diff to first 5
-                try:
-                    k_facts = json.loads(r["keyword_facts_json"] or "[]")
-                    l_facts = json.loads(r["llm_facts_json"] or "[]")
-                except Exception:
+                facts = _reflection_facts(r)
+                if facts is None:
                     continue
+                k_facts, l_facts = facts
                 console.print(Panel(
                     f"[cyan]session={_e(r['session_id'][:8])} mode={_e(r['mode'])}[/]\n"
                     f"[yellow]keyword ({len(k_facts)}):[/] "
@@ -1101,25 +1106,13 @@ def audit_skill_review(
     """Dump rows from skill_review_audit (Sprint 5)."""
     kernel = _make_kernel()
     try:
-        where = ["created_at >= ?"]
-        params: list = [days_ago(int(days))]
-        if symbiote_id:
-            where.append("symbiote_id = ?")
-            params.append(symbiote_id)
-        if session_id:
-            where.append("session_id = ?")
-            params.append(session_id)
-        if trigger:
-            where.append("trigger = ?")
-            params.append(trigger)
-        sql = (
-            "SELECT id, session_id, symbiote_id, trigger, applied, skipped, "
-            "ok, error, ops_json, created_at "
-            "FROM skill_review_audit WHERE " + " AND ".join(where) +
-            " ORDER BY created_at DESC LIMIT ?"
+        rows = kernel.inspector.list_skill_reviews(
+            symbiote_id or None,
+            session_id=session_id or None,
+            trigger=trigger or None,
+            since=days_ago(int(days)),
+            limit=int(limit),
         )
-        params.append(int(limit))
-        rows = kernel._storage.fetch_all(sql, tuple(params))
 
         if not rows:
             console.print("[yellow]No skill_review_audit rows match.[/]")
@@ -1149,8 +1142,8 @@ def audit_skill_review(
             console.print()
             for r in rows[:5]:
                 try:
-                    ops = json.loads(r["ops_json"] or "[]")
-                except Exception:
+                    ops = _decoded_json(r, "ops")
+                except ValueError:
                     continue
                 if not ops:
                     continue

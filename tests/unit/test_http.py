@@ -572,6 +572,84 @@ class TestDebugEndpoints:
         assert resp.json()[0]["tool_id"] == "fs_read"
 
 
+class TestConsoleReads:
+    """Console list endpoints read through KernelInspector (B-78) but keep the
+    fields, field order, filters and limits they always had."""
+
+    @staticmethod
+    def _seed(adapter: SQLiteAdapter) -> None:
+        for sym, name in (("sym-a", "Alfa"), ("sym-b", "Beta")):
+            adapter.execute(
+                "INSERT INTO symbiotes (id, name, role, status) VALUES (?, ?, 'assistant', 'active')",
+                (sym, name),
+            )
+        for sess, sym, status, at in (
+            ("sess-1", "sym-a", "closed", "2026-01-01"),
+            ("sess-2", "sym-a", "active", "2026-01-02"),
+            ("sess-3", "sym-b", "active", "2026-01-03"),
+        ):
+            adapter.execute(
+                "INSERT INTO sessions (id, symbiote_id, goal, status, started_at) "
+                "VALUES (?, ?, 'g', ?, ?)",
+                (sess, sym, status, at),
+            )
+        for sc, sess, at in (("sc-1", "sess-1", "2026-01-01"), ("sc-2", "sess-2", "2026-01-02")):
+            adapter.execute(
+                "INSERT INTO session_scores (id, session_id, symbiote_id, auto_score, "
+                "final_score, stop_reason, computed_at) VALUES (?, ?, 'sym-a', 0.7, 0.7, 'end_turn', ?)",
+                (sc, sess, at),
+            )
+        adapter.execute(
+            "INSERT INTO execution_traces (id, session_id, symbiote_id, total_iterations, "
+            "total_tool_calls, total_elapsed_ms, stop_reason, steps_json, created_at) "
+            "VALUES ('tr-1', 'sess-1', 'sym-a', 2, 1, 10, 'end_turn', '[]', '2026-01-01')"
+        )
+
+    def test_sessions(self, client: TestClient, adapter: SQLiteAdapter) -> None:
+        self._seed(adapter)
+        data = client.get("/api/sessions").json()
+        assert [s["id"] for s in data] == ["sess-3", "sess-2", "sess-1"]
+        assert list(data[0]) == [
+            "id", "symbiote_id", "goal", "status", "started_at", "ended_at",
+            "summary", "external_key", "symbiote_name",
+        ]
+        assert data[0]["symbiote_name"] == "Beta"
+        by_sym = client.get("/api/sessions?symbiote_id=sym-a&status=active").json()
+        assert [s["id"] for s in by_sym] == ["sess-2"]
+        # Empty query values mean "no filter", as before.
+        assert len(client.get("/api/sessions?symbiote_id=&status=&limit=2").json()) == 2
+
+    def test_scores(self, client: TestClient, adapter: SQLiteAdapter) -> None:
+        self._seed(adapter)
+        fields = [
+            "id", "session_id", "symbiote_id", "auto_score", "user_score", "final_score",
+            "stop_reason", "total_iterations", "total_tool_calls", "computed_at",
+        ]
+        session_scores = client.get("/api/sessions/sess-1/score").json()
+        assert [list(r) for r in session_scores] == [fields]
+        assert session_scores[0]["id"] == "sc-1"
+        sym_scores = client.get("/api/symbiotes/sym-a/scores?limit=1").json()
+        assert [r["id"] for r in sym_scores] == ["sc-2"]
+        assert list(sym_scores[0]) == fields
+
+    def test_symbiote_traces(self, client: TestClient, adapter: SQLiteAdapter) -> None:
+        self._seed(adapter)
+        traces = client.get("/api/symbiotes/sym-a/traces").json()
+        assert [list(t) for t in traces] == [[
+            "id", "session_id", "symbiote_id", "total_iterations", "total_tool_calls",
+            "total_elapsed_ms", "stop_reason", "created_at",
+        ]]
+        assert traces[0]["total_elapsed_ms"] == 10
+
+    def test_dashboard_sessions(self, client: TestClient, adapter: SQLiteAdapter) -> None:
+        self._seed(adapter)
+        sessions = client.get("/api/dashboard").json()["sessions"]
+        assert [s["id"] for s in sessions] == ["sess-3", "sess-2", "sess-1"]
+        assert list(sessions[0]) == [
+            "id", "symbiote_id", "status", "goal", "started_at", "symbiote_name",
+        ]
+
+
 class TestHarnessEndpoints:
     """Harness version list/create/rollback feeding the Harness tab (item 4)."""
 

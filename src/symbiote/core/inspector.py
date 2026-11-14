@@ -31,6 +31,20 @@ def _decode(row: dict, *columns: str) -> dict:
     return out
 
 
+def _where(sql: str, *, since: str | None = None, **equals: str | None) -> tuple[str, list[Any]]:
+    """Append ``WHERE`` with ``column = ?`` for each non-None filter in
+    ``equals`` (column names come from this module, never from callers) and
+    ``created_at >= ?`` for ``since``."""
+    conditions = [f"{column} = ?" for column, value in equals.items() if value is not None]
+    params: list[Any] = [value for value in equals.values() if value is not None]
+    if since is not None:
+        conditions.append("created_at >= ?")
+        params.append(since)
+    if conditions:
+        sql += " WHERE " + " AND ".join(conditions)
+    return sql, params
+
+
 class KernelInspector:
     """Read-only queries over sessions, messages, memory, scores, traces,
     reflections, dream reports, skill reviews and the tool audit log."""
@@ -107,15 +121,25 @@ class KernelInspector:
 
     # ── scores & traces ────────────────────────────────────────────────
 
-    def list_scores(self, symbiote_id: str, *, limit: int = 50) -> list[dict]:
-        """Session scores of a symbiote, newest first."""
-        return self._storage.fetch_all(
-            "SELECT session_id, auto_score, user_score, final_score, stop_reason, "
-            "total_iterations, total_tool_calls, computed_at "
-            "FROM session_scores WHERE symbiote_id = ? "
-            "ORDER BY computed_at DESC, rowid DESC LIMIT ?",
-            (symbiote_id, limit),
+    def list_scores(
+        self,
+        symbiote_id: str | None = None,
+        *,
+        session_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Session scores of a symbiote and/or a session, newest first."""
+        if symbiote_id is None and session_id is None:
+            raise ValueError("list_scores needs symbiote_id or session_id")
+        sql = (
+            "SELECT id, session_id, symbiote_id, auto_score, user_score, final_score, "
+            "stop_reason, total_iterations, total_tool_calls, computed_at "
+            "FROM session_scores"
         )
+        sql, params = _where(sql, symbiote_id=symbiote_id, session_id=session_id)
+        sql += " ORDER BY computed_at DESC, rowid DESC LIMIT ?"
+        params.append(limit)
+        return self._storage.fetch_all(sql, tuple(params))
 
     def list_traces(
         self,
@@ -169,14 +193,27 @@ class KernelInspector:
 
     # ── learning ───────────────────────────────────────────────────────
 
-    def list_reflections(self, symbiote_id: str, *, limit: int = 50) -> list[dict]:
-        """Reflection audit rows (written by the ``llm``/``hybrid`` modes), newest first."""
-        rows = self._storage.fetch_all(
+    def list_reflections(
+        self,
+        symbiote_id: str | None = None,
+        *,
+        session_id: str | None = None,
+        since: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Reflection audit rows (written by the ``llm``/``hybrid`` modes), newest first.
+
+        Filters combine with AND; with none, rows of every symbiote are listed.
+        ``since`` is an ISO timestamp (e.g. ``symbiote.core.sql.days_ago(7)``).
+        """
+        sql, params = _where(
             "SELECT id, session_id, mode, keyword_facts_json, llm_facts_json, llm_error, "
-            "created_at FROM reflection_audit WHERE symbiote_id = ? "
-            "ORDER BY created_at DESC, rowid DESC LIMIT ?",
-            (symbiote_id, limit),
+            "created_at FROM reflection_audit",
+            symbiote_id=symbiote_id, session_id=session_id, since=since,
         )
+        sql += " ORDER BY created_at DESC, rowid DESC LIMIT ?"
+        params.append(limit)
+        rows = self._storage.fetch_all(sql, tuple(params))
         return [_decode(r, "keyword_facts_json", "llm_facts_json") for r in rows]
 
     def list_dream_reports(self, symbiote_id: str, *, limit: int = 20) -> list[dict]:
@@ -189,14 +226,28 @@ class KernelInspector:
         )
         return [_decode(r, "phases_json") for r in rows]
 
-    def list_skill_reviews(self, symbiote_id: str, *, limit: int = 50) -> list[dict]:
-        """Background skill-review runs with the operations they applied, newest first."""
-        rows = self._storage.fetch_all(
+    def list_skill_reviews(
+        self,
+        symbiote_id: str | None = None,
+        *,
+        session_id: str | None = None,
+        trigger: str | None = None,
+        since: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Background skill-review runs with the operations they applied, newest first.
+
+        Filters combine with AND; with none, runs of every symbiote are listed.
+        ``since`` is an ISO timestamp (e.g. ``symbiote.core.sql.days_ago(7)``).
+        """
+        sql, params = _where(
             "SELECT id, session_id, trigger, applied, skipped, ok, error, ops_json, "
-            "created_at FROM skill_review_audit WHERE symbiote_id = ? "
-            "ORDER BY created_at DESC, rowid DESC LIMIT ?",
-            (symbiote_id, limit),
+            "created_at FROM skill_review_audit",
+            symbiote_id=symbiote_id, session_id=session_id, trigger=trigger, since=since,
         )
+        sql += " ORDER BY created_at DESC, rowid DESC LIMIT ?"
+        params.append(limit)
+        rows = self._storage.fetch_all(sql, tuple(params))
         return [_decode(r, "ops_json") for r in rows]
 
     # ── tools ──────────────────────────────────────────────────────────

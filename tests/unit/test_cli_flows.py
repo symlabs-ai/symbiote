@@ -89,6 +89,44 @@ def test_audit_commands(cli: Cli, bot) -> None:
     assert "dry-run" in prune
 
 
+
+def test_audit_commands_list_filtered_rows(cli: Cli, bot) -> None:
+    """The audit dumps read through kernel.inspector (B-78): same filters
+    (--days, --symbiote, --session, --trigger), same table and panels."""
+    from symbiote.adapters.storage.sqlite import SQLiteAdapter
+    from symbiote.core.sql import days_ago
+
+    sym, session = bot
+    recent, old = days_ago(1), days_ago(30)
+    adp = SQLiteAdapter(db_path=cli.db)
+    for rid, sym_id, kw, at in (
+        ("r1", sym, '["likes tea", "lives in Lisbon"]', recent),
+        ("r2", sym, "{not json", recent),  # undecodable → counted as 0, no diff panel
+        ("r3", sym, '["too old"]', old),
+        ("r4", "other-sym", '["elsewhere"]', recent),
+    ):
+        adp.execute(
+            "INSERT INTO reflection_audit (id, session_id, symbiote_id, mode, "
+            "keyword_facts_json, llm_facts_json, created_at) VALUES (?, ?, ?, 'hybrid', ?, '[]', ?)",
+            (rid, session, sym_id, kw, at),
+        )
+    for kid, trigger, at in (("k1", "final", recent), ("k2", "nudge", recent), ("k3", "final", old)):
+        adp.execute(
+            "INSERT INTO skill_review_audit (id, session_id, symbiote_id, trigger, applied, ok, "
+            "ops_json, created_at) VALUES (?, ?, ?, ?, 1, 1, ?, ?)",
+            (kid, session, sym, trigger, f'[{{"op": "{kid}-op"}}]', at),
+        )
+    adp.close()
+
+    out = cli("audit", "reflection", "--symbiote", sym, "--diff").output
+    assert "2 rows" in out
+    assert "lives in Lisbon" in out and "too old" not in out and "elsewhere" not in out
+    assert "4 rows" in cli("audit", "reflection", "--days", "60").output  # every symbiote
+    assert "3 rows" in cli("audit", "reflection", "--days", "60", "--limit", "3").output
+
+    out = cli("audit", "skill-review", "--session", session, "--trigger", "final", "--ops").output
+    assert "1 rows" in out and "k1-op" in out and "k2-op" not in out
+
 def test_skills_commands(cli: Cli, tmp_path: Path) -> None:
     root = tmp_path / "skills"
     skill = root / "deploy"
