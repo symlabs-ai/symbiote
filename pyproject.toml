@@ -72,7 +72,10 @@ warn_unused_configs = true
 
 [[tool.mypy.overrides]]
 # Optional / untyped dependencies.
-module = ["yaml", "forge_llm", "forge_llm.*", "playwright", "playwright.*", "tomli"]
+module = [
+    "yaml", "forge_llm", "forge_llm.*", "forge_scraper",
+    "playwright", "playwright.*", "tomli",
+]
 ignore_missing_imports = true
 
 [tool.coverage.run]

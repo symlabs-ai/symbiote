@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 def _lazy_forge_scraper() -> Any:
     try:
-        import forge_scraper  # type: ignore[import-not-found]
+        import forge_scraper
     except ImportError as exc:  # pragma: no cover — guarded at register
         raise ImportError(
             "forge_scraper is not installed. Run: "
