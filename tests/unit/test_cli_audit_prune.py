@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,23 +15,27 @@ from symbiote.cli.main import app
 runner = CliRunner()
 
 
-def _insert_reflection(adapter: SQLiteAdapter, *, age_sql: str) -> None:
+def _days_ago(days: int) -> str:
+    return (datetime.now(tz=UTC) - timedelta(days=days)).isoformat()
+
+
+def _insert_reflection(adapter: SQLiteAdapter, *, days_old: int) -> None:
     adapter.execute(
         "INSERT INTO reflection_audit "
         "(id, session_id, symbiote_id, mode, keyword_facts_json, "
         "llm_facts_json, llm_error, created_at) "
-        f"VALUES (?, ?, ?, ?, ?, ?, ?, {age_sql})",
-        (str(uuid4()), "sess", "sym", "kw", "[]", "[]", None),
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (str(uuid4()), "sess", "sym", "kw", "[]", "[]", None, _days_ago(days_old)),
     )
 
 
-def _insert_skill_review(adapter: SQLiteAdapter, *, age_sql: str) -> None:
+def _insert_skill_review(adapter: SQLiteAdapter, *, days_old: int) -> None:
     adapter.execute(
         "INSERT INTO skill_review_audit "
         "(id, session_id, symbiote_id, trigger, applied, skipped, "
         "ok, error, ops_json, created_at) "
-        f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, {age_sql})",
-        (str(uuid4()), "sess", "sym", "nudge", 0, 0, 1, None, "[]"),
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (str(uuid4()), "sess", "sym", "nudge", 0, 0, 1, None, "[]", _days_ago(days_old)),
     )
 
 
@@ -41,11 +46,11 @@ def _seed_audit_rows(adapter: SQLiteAdapter, *, recent: int = 0, old: int = 0) -
     'old'    rows have created_at = 200 days ago (well past any reasonable cutoff).
     """
     for _ in range(recent):
-        _insert_reflection(adapter, age_sql="datetime('now')")
-        _insert_skill_review(adapter, age_sql="datetime('now')")
+        _insert_reflection(adapter, days_old=0)
+        _insert_skill_review(adapter, days_old=0)
     for _ in range(old):
-        _insert_reflection(adapter, age_sql="datetime('now', '-200 days')")
-        _insert_skill_review(adapter, age_sql="datetime('now', '-200 days')")
+        _insert_reflection(adapter, days_old=200)
+        _insert_skill_review(adapter, days_old=200)
 
 
 @pytest.fixture()

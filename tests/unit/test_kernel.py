@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -70,6 +69,7 @@ class TestKernelInit:
         """Kernel exposes CapabilitySurface via property."""
         assert isinstance(kernel.capabilities, CapabilitySurface)
 
+    @pytest.mark.sqlite_only
     def test_db_file_created(self, config: KernelConfig) -> None:
         """Kernel creates the SQLite database file on init."""
         k = SymbioteKernel(config)
@@ -236,5 +236,5 @@ class TestShutdown:
         k = SymbioteKernel(config)
         k.shutdown()
         # After shutdown, storage should be closed — attempting to use it should fail
-        with pytest.raises(sqlite3.ProgrammingError):
+        with pytest.raises(Exception, match="(?i)closed"):
             k._storage.execute("SELECT 1")

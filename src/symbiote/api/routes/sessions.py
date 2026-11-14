@@ -6,7 +6,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from symbiote.adapters.storage.sqlite import SQLiteAdapter
 from symbiote.api.auth import APIKey
 from symbiote.api.http import (
     _require_session_access,
@@ -32,6 +31,7 @@ from symbiote.core.exceptions import (
     EntityNotFoundError,
 )
 from symbiote.core.kernel import SymbioteKernel
+from symbiote.core.ports import StoragePort
 from symbiote.core.session import SessionManager
 from symbiote.memory.store import MemoryStore
 
@@ -45,7 +45,7 @@ router = APIRouter()
 def create_session(
     body: CreateSessionRequest,
     auth: Annotated[APIKey, Depends(require_auth)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     sessions: Annotated[SessionManager, Depends(get_session_manager)],
 ) -> SessionResponse:
     _require_symbiote_access(adapter, body.symbiote_id, auth)
@@ -70,7 +70,7 @@ def create_session(
 def get_session(
     session_id: str,
     auth: Annotated[APIKey, Depends(require_auth)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     sessions: Annotated[SessionManager, Depends(get_session_manager)],
 ) -> SessionResponse:
     _require_session_access(adapter, session_id, auth)
@@ -91,7 +91,7 @@ def get_session(
 def get_session_by_key(
     external_key: str,
     auth: Annotated[APIKey, Depends(require_auth)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     sessions: Annotated[SessionManager, Depends(get_session_manager)],
 ) -> SessionResponse:
     sess = sessions.find_by_external_key(external_key)
@@ -117,7 +117,7 @@ def add_message(
     session_id: str,
     body: CreateMessageRequest,
     auth: Annotated[APIKey, Depends(require_auth)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     sessions: Annotated[SessionManager, Depends(get_session_manager)],
 ) -> MessageResponse:
     _require_session_access(adapter, session_id, auth)
@@ -137,7 +137,7 @@ def add_message(
 def close_session(
     session_id: str,
     auth: Annotated[APIKey, Depends(require_auth)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
 ) -> SessionResponse:
     """Close a session through the kernel: score, failure memory, reflection,
@@ -165,7 +165,7 @@ def search_memory(
     query: Annotated[str, Query()],
     symbiote_id: Annotated[str, Query()],
     auth: Annotated[APIKey, Depends(require_auth)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     memory: Annotated[MemoryStore, Depends(get_memory_store)],
     scope: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 10,

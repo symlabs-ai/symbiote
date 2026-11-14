@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 
 from symbiote.core.models import MemoryEntry
 from symbiote.core.ports import StoragePort
+from symbiote.core.sql import contains, like_contains
 
 # Common English stop words to filter out
 _STOP_WORDS = frozenset({
@@ -215,12 +216,11 @@ class SemanticRecallProvider:
         # Match any keyword in content or tags
         keyword_clauses = []
         for kw in list(keywords)[:10]:  # cap at 10 keywords to avoid huge queries
-            # Escape LIKE metacharacters to prevent false positives
-            safe_kw = kw.replace("%", r"\%").replace("_", r"\_")
+            # Literal match: LIKE metacharacters in the keyword are escaped.
             keyword_clauses.append(
-                "(content LIKE ? ESCAPE '\\' OR tags_json LIKE ? ESCAPE '\\')"
+                f"({contains('content')} OR {contains('tags_json')})"
             )
-            params.extend([f"%{safe_kw}%", f"%{safe_kw}%"])
+            params.extend([like_contains(kw), like_contains(kw)])
 
         if keyword_clauses:
             conditions.append(f"({' OR '.join(keyword_clauses)})")
@@ -237,7 +237,7 @@ class SemanticRecallProvider:
         where = " AND ".join(conditions)
         sql = (
             f"SELECT * FROM memory_entries WHERE {where} "
-            f"ORDER BY importance DESC LIMIT ?"
+            "ORDER BY importance DESC, rowid LIMIT ?"
         )
         params.append(fetch_limit)
 

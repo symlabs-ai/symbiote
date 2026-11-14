@@ -56,15 +56,17 @@ def test_api_key_with_invalid_role(owned) -> None:
 
 
 def test_integrity_error_maps_to_409(owned) -> None:
-    import sqlite3
-
     from fastapi.testclient import TestClient
 
-    from symbiote.api.http import app
+    from symbiote.api.http import app, get_adapter
 
     @app.get("/__test_integrity_error")
     def _boom() -> None:
-        raise sqlite3.IntegrityError("UNIQUE constraint failed: x.y")
+        # A real constraint violation, raised by whatever adapter is in use.
+        for _ in range(2):
+            get_adapter().execute(
+                "INSERT INTO symbiotes (id, name) VALUES (?, ?)", ("dup-409", "x")
+            )
 
     try:
         api, h, _sym, _sess = owned

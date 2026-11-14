@@ -11,6 +11,9 @@ import pytest
 
 from symbiote.adapters.storage.sqlite import SQLiteAdapter
 
+# SQLite-specific behaviour (file, pragmas, query plans, legacy migrations).
+pytestmark = pytest.mark.sqlite_only
+
 EXPECTED_TABLES = [
     "symbiotes",
     "sessions",

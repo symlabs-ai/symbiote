@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +25,7 @@ from symbiote.config.models import KernelConfig
 from symbiote.core.exceptions import EntityNotFoundError, SymbioteError
 from symbiote.core.kernel import SymbioteKernel
 from symbiote.core.ports import LLMPort
+from symbiote.core.sql import days_ago
 
 console = Console()
 err_console = Console(stderr=True)
@@ -35,7 +35,7 @@ _DEFAULT_SERVER = "http://localhost:8008"
 
 # Errors caused by what the user typed: one line and exit code 1, no
 # traceback. (ValueError covers bad JSON and pydantic validation errors.)
-_INPUT_ERRORS = (ValueError, sqlite3.IntegrityError, FileNotFoundError, SymbioteError)
+_INPUT_ERRORS = (ValueError, FileNotFoundError, SymbioteError)
 
 
 def _describe(exc: BaseException) -> str:
@@ -1019,8 +1019,8 @@ def audit_reflection(
     """Dump rows from reflection_audit (Sprint 1 of the LLM reflection rollout)."""
     kernel = _make_kernel()
     try:
-        where = ["created_at >= datetime('now', ?)"]
-        params: list = [f"-{int(days)} days"]
+        where = ["created_at >= ?"]
+        params: list = [days_ago(int(days))]
         if symbiote_id:
             where.append("symbiote_id = ?")
             params.append(symbiote_id)
@@ -1101,8 +1101,8 @@ def audit_skill_review(
     """Dump rows from skill_review_audit (Sprint 5)."""
     kernel = _make_kernel()
     try:
-        where = ["created_at >= datetime('now', ?)"]
-        params: list = [f"-{int(days)} days"]
+        where = ["created_at >= ?"]
+        params: list = [days_ago(int(days))]
         if symbiote_id:
             where.append("symbiote_id = ?")
             params.append(symbiote_id)
@@ -1218,8 +1218,8 @@ def audit_prune(
 
     kernel = _make_kernel()
     try:
-        cutoff_clause = "datetime('now', ?)"
-        cutoff_arg = f"-{int(days)} days"
+        cutoff_clause = "?"
+        cutoff_arg = days_ago(int(days))
 
         table_rows = Table(
             title=f"Audit prune ({'dry-run' if dry_run else 'live'}, "
@@ -1233,7 +1233,7 @@ def audit_prune(
         total_deleted = 0
         for tbl in targets:
             # Defense in depth: table names are interpolated into SQL below
-            # (SQLite can't parameterize them). The CLI arg is allowlisted
+            # (SQL cannot parameterize them). The CLI arg is allowlisted
             # above, but assert again so any future refactor that loosens
             # the validator can't sneak an unknown table into a DELETE.
             assert tbl in _PRUNE_TABLES, f"Refusing to prune unknown table {tbl!r}"

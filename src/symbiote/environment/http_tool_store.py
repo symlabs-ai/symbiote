@@ -14,21 +14,12 @@ from datetime import UTC, datetime
 from symbiote.core.ports import StoragePort
 from symbiote.environment.descriptors import HttpToolConfig, ToolDescriptor
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS http_tools (
-    tool_id         TEXT PRIMARY KEY,
-    symbiote_id     TEXT NOT NULL,
-    descriptor_json TEXT NOT NULL,
-    config_json     TEXT NOT NULL,
-    created_at      TEXT NOT NULL
-)
-"""
-
 
 class HttpToolRepository:
+    """Table ``http_tools`` is created by the storage adapter's schema."""
+
     def __init__(self, storage: StoragePort) -> None:
         self._storage = storage
-        self._storage.execute(_SCHEMA)
 
     def owner(self, tool_id: str) -> str | None:
         row = self._storage.fetch_one(

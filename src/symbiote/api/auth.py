@@ -1,6 +1,6 @@
 """API Key authentication for hosted Symbiote service.
 
-Keys are stored in the same SQLite DB. Each key is scoped to a tenant
+Keys are stored in the kernel's database. Each key is scoped to a tenant
 and carries a role (admin, user). The middleware extracts the key from
 the Authorization header and injects the tenant_id into the request state.
 """
@@ -16,22 +16,6 @@ from pydantic import BaseModel
 
 from symbiote.core.exceptions import ValidationError
 from symbiote.core.ports import StoragePort
-
-_API_KEYS_SCHEMA = """\
-CREATE TABLE IF NOT EXISTS api_keys (
-    id          TEXT PRIMARY KEY,
-    tenant_id   TEXT NOT NULL,
-    name        TEXT NOT NULL,
-    key_hash    TEXT NOT NULL UNIQUE,
-    key_prefix  TEXT NOT NULL,
-    role        TEXT NOT NULL DEFAULT 'user',
-    is_active   INTEGER DEFAULT 1,
-    created_at  TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
-CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys(tenant_id);
-"""
 
 
 class APIKey(BaseModel):
@@ -58,11 +42,12 @@ class APIKeyManager:
         self._storage = storage
 
     def init_schema(self) -> None:
-        """Create api_keys table if not exists."""
-        for statement in _API_KEYS_SCHEMA.split(";"):
-            stmt = statement.strip()
-            if stmt:
-                self._storage.execute(stmt)
+        """Make sure the ``api_keys`` table exists.
+
+        The table belongs to the storage adapter's schema; this runs the
+        adapter's (idempotent) ``init_schema``.
+        """
+        self._storage.init_schema()
 
     def create_key(self, tenant_id: str, name: str, role: str = "user") -> tuple[APIKey, str]:
         """Create a new API key.

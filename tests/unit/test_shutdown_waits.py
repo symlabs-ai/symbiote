@@ -3,10 +3,10 @@ the database (report item M-9)."""
 
 from __future__ import annotations
 
-import sqlite3
 import time
 from pathlib import Path
 
+from symbiote.adapters.storage.sqlite import SQLiteAdapter
 from tests.support import ScriptedLLM, make_kernel
 
 
@@ -35,9 +35,9 @@ def test_shutdown_waits_for_review(tmp_path: Path, caplog) -> None:
 
     kernel.shutdown()
 
-    conn = sqlite3.connect(tmp_path / "symbiote.db")
-    audits = conn.execute("SELECT COUNT(*) FROM skill_review_audit").fetchone()[0]
-    conn.close()
+    reopened = SQLiteAdapter(tmp_path / "symbiote.db")
+    audits = reopened.fetch_one("SELECT COUNT(*) AS c FROM skill_review_audit")["c"]
+    reopened.close()
     assert audits == 1
     assert "closed database" not in caplog.text
 

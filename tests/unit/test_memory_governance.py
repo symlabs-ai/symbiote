@@ -49,10 +49,7 @@ def _count(kernel: SymbioteKernel, table: str, where: str = "1 = 1", params: tup
 
 
 def _tables(kernel: SymbioteKernel) -> list[str]:
-    rows = kernel._storage.fetch_all(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
-    )
-    return [r["name"] for r in rows]
+    return kernel._storage.table_names()
 
 
 def _dump(kernel: SymbioteKernel) -> str:

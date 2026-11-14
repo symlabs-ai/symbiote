@@ -7,6 +7,7 @@ from datetime import datetime
 
 from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.ports import StoragePort
+from symbiote.core.sql import contains, like_contains
 from symbiote.knowledge.models import KnowledgeEntry
 from symbiote.memory.recall import terms
 
@@ -78,10 +79,10 @@ class KnowledgeService:
         whole user message finds the entry about its subject, not only a
         literal substring of it.
         """
-        pattern = f"%{theme}%"
+        pattern = like_contains(theme)
         rows = self._storage.fetch_all(
             "SELECT * FROM knowledge_entries "
-            "WHERE symbiote_id = ? AND (name LIKE ? OR content LIKE ?) "
+            f"WHERE symbiote_id = ? AND ({contains('name')} OR {contains('content')}) "
             "ORDER BY created_at DESC LIMIT ?",
             (symbiote_id, pattern, pattern, limit),
         )

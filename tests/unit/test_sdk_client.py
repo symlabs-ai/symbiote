@@ -33,12 +33,6 @@ def setup(tmp_path: Path):
     config = KernelConfig(db_path=db)
     llm = MockLLMAdapter(default_response="SDK mock response.")
     kernel = SymbioteKernel(config=config, llm=llm)
-    import sqlite3
-    kernel._storage._conn.close()
-    kernel._storage._conn = sqlite3.connect(str(db), check_same_thread=False)
-    kernel._storage._conn.row_factory = sqlite3.Row
-    kernel._storage._conn.execute("PRAGMA journal_mode=WAL")
-    kernel._storage._conn.execute("PRAGMA foreign_keys=ON")
 
     fastapi_app.dependency_overrides[get_adapter] = lambda: adapter
     fastapi_app.dependency_overrides[get_kernel] = lambda: kernel

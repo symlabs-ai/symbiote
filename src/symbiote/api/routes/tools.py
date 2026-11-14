@@ -6,7 +6,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from symbiote.adapters.storage.sqlite import SQLiteAdapter
 from symbiote.api.auth import APIKey
 from symbiote.api.http import (
     _require_symbiote_access,
@@ -25,6 +24,7 @@ from symbiote.api.schemas import (
     ToolExecResponse,
 )
 from symbiote.core.kernel import SymbioteKernel
+from symbiote.core.ports import StoragePort
 from symbiote.environment.descriptors import HttpToolConfig, ToolDescriptor
 from symbiote.environment.manager import EnvironmentManager
 from symbiote.environment.tools import ToolGateway
@@ -44,7 +44,7 @@ def register_tool(
     symbiote_id: str,
     body: RegisterToolRequest,
     auth: Annotated[APIKey, Depends(require_auth)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     env: Annotated[EnvironmentManager, Depends(get_env_manager)],
     kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
 ) -> ToolDescriptorResponse:
@@ -82,7 +82,7 @@ def register_tool(
 def list_tools(
     symbiote_id: str,
     auth: Annotated[APIKey, Depends(require_auth)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     env: Annotated[EnvironmentManager, Depends(get_env_manager)],
     gw: Annotated[ToolGateway, Depends(get_tool_gateway)],
 ) -> list[ToolDescriptorResponse]:
@@ -107,7 +107,7 @@ def remove_tool(
     symbiote_id: str,
     tool_id: str,
     auth: Annotated[APIKey, Depends(require_auth)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
 ) -> dict:
     """Remove a tool from a symbiote.
@@ -129,7 +129,7 @@ def exec_tool(
     tool_id: str,
     body: ToolExecRequest,
     auth: Annotated[APIKey, Depends(require_auth)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     gw: Annotated[ToolGateway, Depends(get_tool_gateway)],
 ) -> ToolExecResponse:
     """Execute a tool manually (for testing)."""

@@ -142,12 +142,12 @@ def session_id_h2(adapter):
     sid = str(uuid4())
     adapter.execute(
         "INSERT INTO sessions (id, symbiote_id, status, started_at) "
-        "VALUES (?, ?, 'active', datetime('now'))",
+        "VALUES (?, ?, 'active', CURRENT_TIMESTAMP)",
         (sid, sym.id),
     )
     adapter.execute(
         "INSERT INTO messages (id, session_id, role, content, created_at) "
-        "VALUES (?, ?, ?, ?, datetime('now'))",
+        "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
         (str(uuid4()), sid, "user", "any message"),
     )
     return sid, sym.id
@@ -186,12 +186,12 @@ class TestSpawnDeduplication:
             s = str(uuid4())
             adapter.execute(
                 "INSERT INTO sessions (id, symbiote_id, status, started_at) "
-                "VALUES (?, ?, 'active', datetime('now'))",
+                "VALUES (?, ?, 'active', CURRENT_TIMESTAMP)",
                 (s, sym.id),
             )
             adapter.execute(
                 "INSERT INTO messages (id, session_id, role, content, created_at) "
-                "VALUES (?, ?, ?, ?, datetime('now'))",
+                "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
                 (str(uuid4()), s, "user", "msg"),
             )
             sids.append(s)

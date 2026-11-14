@@ -41,6 +41,9 @@ extract = [
     # ForgeScraper v0.12.4 — immutable release commit.
     "forge-scraper[article,transcript,sofascore] @ git+https://github.com/symlabs-ai/forge_scraper.git@632e4ce5d218bedebad3411df48625f4b34d7f29",
 ]
+postgres = [
+    "psycopg[binary,pool]>=3.2",
+]
 browser = [
     "playwright>=1.40.0",
 ]
@@ -62,6 +65,7 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
     "integration: tests that require browser binaries or external integration services",
+    "sqlite_only: tests of SQLite-specific behaviour, skipped when the suite runs on PostgreSQL",
 ]
 
 [tool.mypy]

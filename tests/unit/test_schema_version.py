@@ -7,7 +7,12 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from symbiote.adapters.storage.sqlite import SCHEMA_VERSION, SQLiteAdapter
+
+# SQLite-specific behaviour (file, pragmas, query plans, legacy migrations).
+pytestmark = pytest.mark.sqlite_only
 
 # sessions as created by the first releases (no external_key column).
 _OLD_SCHEMA = """

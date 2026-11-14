@@ -6,7 +6,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from symbiote.adapters.storage.sqlite import SQLiteAdapter
 from symbiote.api.auth import APIKey
 from symbiote.api.http import (
     _require_symbiote,
@@ -27,6 +26,7 @@ from symbiote.api.schemas import (
     UpdateDiscoveredToolRequest,
 )
 from symbiote.core.identity import IdentityManager
+from symbiote.core.ports import StoragePort
 from symbiote.discovery.models import DiscoveredTool
 from symbiote.discovery.repository import DiscoveredToolRepository
 from symbiote.discovery.service import DiscoveryService
@@ -64,7 +64,7 @@ def list_discovered_tools(
     symbiote_id: str,
     auth: Annotated[APIKey, Depends(require_auth)],
     identity: Annotated[IdentityManager, Depends(get_identity_manager)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     status: str | None = Query(default=None),
 ) -> list[DiscoveredToolResponse]:
     """List tools discovered for a Symbiote, optionally filtered by status."""
@@ -85,7 +85,7 @@ def update_discovered_tool(
     body: UpdateDiscoveredToolRequest,
     auth: Annotated[APIKey, Depends(require_auth)],
     identity: Annotated[IdentityManager, Depends(get_identity_manager)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
 ) -> DiscoveredToolResponse:
     """Update a discovered tool's status (approved / disabled / pending)."""
     if body.status not in ("approved", "disabled", "pending"):
@@ -113,7 +113,7 @@ def classify_discovered_tools(
     body: ClassifyToolsRequest,
     auth: Annotated[APIKey, Depends(require_auth)],
     identity: Annotated[IdentityManager, Depends(get_identity_manager)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
 ) -> ClassifyToolsResponse:
     """Batch approve/disable discovered tools by OpenAPI tags."""
     _require_symbiote(identity, symbiote_id, auth)
@@ -133,7 +133,7 @@ def reset_discovered_tools(
     symbiote_id: str,
     auth: Annotated[APIKey, Depends(require_auth)],
     identity: Annotated[IdentityManager, Depends(get_identity_manager)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
 ) -> ResetToolsResponse:
     """Reset all disabled discovered tools back to pending."""
     _require_symbiote(identity, symbiote_id, auth)
@@ -149,7 +149,7 @@ def delete_discovered_tool(
     tool_id: str,
     auth: Annotated[APIKey, Depends(require_auth)],
     identity: Annotated[IdentityManager, Depends(get_identity_manager)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
 ) -> dict:
     """Remove a discovered tool entry."""
     _require_symbiote(identity, symbiote_id, auth)

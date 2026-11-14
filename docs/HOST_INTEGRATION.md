@@ -49,8 +49,61 @@ kernel = SymbioteKernel(config=KernelConfig(), llm=llm, storage=storage)
 
 The kernel calls `storage.init_schema()` once and never closes an injected
 adapter: `kernel.shutdown()` leaves it open and the host closes it. Several
-kernels can share one adapter. The SQL the kernel sends is still SQLite dialect
-with `?` placeholders, so this is not yet a way to run on another database.
+kernels can share one adapter.
+
+### PostgreSQL (several replicas, one database)
+
+`PostgresAdapter` is maintained with the kernel and passes the same test suite
+as SQLite. Install the extra and inject it:
+
+```python
+# pip install 'symbiote[postgres]'   (psycopg 3 + psycopg_pool)
+from symbiote.adapters.storage.postgres import PostgresAdapter
+
+storage = PostgresAdapter(
+    "postgresql://user:password@host:5432/dbname",
+    schema="symbiote",      # created if missing; None = the default search_path
+    min_size=1, max_size=10,  # connection pool
+)
+kernel = SymbioteKernel(config=KernelConfig(), llm=llm, storage=storage)
+...
+kernel.shutdown()
+storage.close()
+```
+
+- **Schema.** `init_schema()` creates the schema and applies the versioned
+  migrations in `symbiote/adapters/storage/postgres_migrations.py`, recording
+  them in `schema_migrations`. It runs in one transaction under an advisory
+  lock, so replicas that start together migrate one at a time. The role needs
+  `CREATE` on the database (or on the schema, if it already exists).
+- **Pool.** One connection per thread while a statement runs; a transaction
+  holds one until it ends. Pass `pool=` to use a `psycopg_pool.ConnectionPool`
+  the host already owns (autocommit connections; the adapter does not close
+  it). `schema=` is sent as a connection option (`search_path`): behind
+  PgBouncer in transaction mode, leave `schema=None` and set the role's
+  `search_path` instead.
+- **Same behaviour as SQLite.** The kernel sends one SQL text to every adapter
+  (the rules are in the `StoragePort` docstring). Text columns use the `C`
+  collation, so comparison, ordering and substring search give the same
+  results on both databases; timestamps stay ISO-8601 text and booleans 0/1.
+- **Errors.** A constraint violation raises `StorageIntegrityError`
+  (`symbiote.core.exceptions`) on every adapter. `SQLiteAdapter` raises a
+  subclass that is also a `sqlite3.IntegrityError`, so older `except` clauses
+  keep working.
+- **What still lives outside the database** with several replicas: the skill
+  library (files; see `skill_writes`) and the per-session turn lock (in
+  process). Both get a port in this same series of changes.
+
+To run the suite on PostgreSQL: `scripts/test-postgres.sh` starts a throwaway
+`postgres:15-alpine` container and runs pytest against it (or export
+`SYMBIOTE_TEST_POSTGRES_DSN` to use a server you already have). Tests of
+SQLite-only behaviour carry the `sqlite_only` marker and are skipped there.
+
+A third-party adapter has to satisfy `StoragePort`: `init_schema`, `execute`
+(returns an object with `rowcount`), `fetch_one`, `fetch_all`,
+`transaction()` and `close`, plus the portable-SQL rules of its docstring.
+`tests/unit/test_storage_contract.py` is the executable version of that
+contract.
 
 ### LLM through SymGateway
 

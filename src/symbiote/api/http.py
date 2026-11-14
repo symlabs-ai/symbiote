@@ -6,7 +6,6 @@ import collections
 import functools
 import logging
 import os
-import sqlite3
 import threading
 import time as _time
 from collections.abc import AsyncIterator
@@ -21,7 +20,6 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError as PydanticValidationError
 from starlette.requests import Request
 
-from symbiote.adapters.storage.sqlite import SQLiteAdapter
 from symbiote.api.auth import APIKey, APIKeyManager
 from symbiote.api.limits import (
     BodySizeLimitMiddleware,
@@ -35,6 +33,7 @@ from symbiote.config.models import KernelConfig
 from symbiote.core.exceptions import (
     DuplicateEntityError,
     EntityNotFoundError,
+    StorageIntegrityError,
     SymbioteError,
     ValidationError,
 )
@@ -182,8 +181,8 @@ async def model_validation_error_handler(
     )
 
 
-@app.exception_handler(sqlite3.IntegrityError)
-async def integrity_error_handler(request: Request, exc: sqlite3.IntegrityError) -> JSONResponse:
+@app.exception_handler(StorageIntegrityError)
+async def integrity_error_handler(request: Request, exc: StorageIntegrityError) -> JSONResponse:
     return JSONResponse(status_code=409, content={"detail": "Conflict with existing data"})
 
 
@@ -357,25 +356,25 @@ set_auth_initializer(_ensure_initialized)
 
 
 def get_identity_manager(
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
 ) -> IdentityManager:
     return IdentityManager(storage=adapter)
 
 
 def get_session_manager(
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
 ) -> SessionManager:
     return SessionManager(storage=adapter)
 
 
 def get_memory_store(
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
 ) -> MemoryStore:
     return MemoryStore(storage=adapter)
 
 
 def get_env_manager(
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
 ) -> EnvironmentManager:
     return EnvironmentManager(storage=adapter)
 
@@ -386,7 +385,7 @@ def get_tool_gateway() -> ToolGateway:
 
 
 def get_discovery_service(
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
 ) -> DiscoveryService:
     return DiscoveryService(DiscoveredToolRepository(adapter))
 

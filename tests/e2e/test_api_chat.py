@@ -39,13 +39,6 @@ def setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     config = KernelConfig(db_path=db)
     llm = MockLLMAdapter(default_response="Mock LLM response.")
     kernel = SymbioteKernel(config=config, llm=llm)
-    # Patch storage to be thread-safe for TestClient
-    kernel._storage._conn.close()
-    import sqlite3
-    kernel._storage._conn = sqlite3.connect(str(db), check_same_thread=False)
-    kernel._storage._conn.row_factory = sqlite3.Row
-    kernel._storage._conn.execute("PRAGMA journal_mode=WAL")
-    kernel._storage._conn.execute("PRAGMA foreign_keys=ON")
 
     # Override dependencies
     fastapi_app.dependency_overrides[get_adapter] = lambda: adapter

@@ -30,7 +30,7 @@ def symbiote_id(adapter: SQLiteAdapter) -> str:
     sid = "sym-export-001"
     adapter.execute(
         "INSERT INTO symbiotes (id, name, role, created_at, updated_at) "
-        "VALUES (?, ?, ?, datetime('now'), datetime('now'))",
+        "VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
         (sid, "ExportBot", "assistant"),
     )
     return sid

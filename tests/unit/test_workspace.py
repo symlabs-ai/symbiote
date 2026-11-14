@@ -37,7 +37,7 @@ def session_id(adapter: SQLiteAdapter, symbiote_id: str) -> str:
     sid = str(uuid4())
     adapter.execute(
         "INSERT INTO sessions (id, symbiote_id, status, started_at) "
-        "VALUES (?, ?, 'active', datetime('now'))",
+        "VALUES (?, ?, 'active', CURRENT_TIMESTAMP)",
         (sid, symbiote_id),
     )
     return sid

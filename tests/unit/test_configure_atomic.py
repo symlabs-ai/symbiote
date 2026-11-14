@@ -9,6 +9,8 @@ import sqlite3
 import threading
 from pathlib import Path
 
+import pytest
+
 from symbiote.adapters.storage.sqlite import SQLiteAdapter
 from symbiote.core.identity import IdentityManager
 from tests.support import ScriptedLLM, make_kernel
@@ -80,6 +82,7 @@ def test_new_workspace_config_starts_from_the_symbiote_config(tmp_path: Path) ->
     kernel.shutdown()
 
 
+@pytest.mark.sqlite_only
 def test_migration_merges_duplicate_rows(tmp_path: Path) -> None:
     db = tmp_path / "dup.db"
     adapter = SQLiteAdapter(db_path=db)

@@ -231,12 +231,12 @@ class TestSkillReviewAudit:
         sid = str(uuid4())
         adapter.execute(
             "INSERT INTO sessions (id, symbiote_id, status, started_at) "
-            "VALUES (?, ?, 'active', datetime('now'))",
+            "VALUES (?, ?, 'active', CURRENT_TIMESTAMP)",
             (sid, symbiote_id),
         )
         adapter.execute(
             "INSERT INTO messages (id, session_id, role, content, created_at) "
-            "VALUES (?, ?, ?, ?, datetime('now'))",
+            "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
             (str(uuid4()), sid, "user", "anything"),
         )
 
@@ -266,12 +266,12 @@ class TestSkillReviewAudit:
         sid = str(uuid4())
         adapter.execute(
             "INSERT INTO sessions (id, symbiote_id, status, started_at) "
-            "VALUES (?, ?, 'active', datetime('now'))",
+            "VALUES (?, ?, 'active', CURRENT_TIMESTAMP)",
             (sid, symbiote_id),
         )
         adapter.execute(
             "INSERT INTO messages (id, session_id, role, content, created_at) "
-            "VALUES (?, ?, ?, ?, datetime('now'))",
+            "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
             (str(uuid4()), sid, "user", "anything"),
         )
 
@@ -308,12 +308,12 @@ class TestSkillReviewAudit:
         sid = str(uuid4())
         adapter.execute(
             "INSERT INTO sessions (id, symbiote_id, status, started_at) "
-            "VALUES (?, ?, 'active', datetime('now'))",
+            "VALUES (?, ?, 'active', CURRENT_TIMESTAMP)",
             (sid, symbiote_id),
         )
         adapter.execute(
             "INSERT INTO messages (id, session_id, role, content, created_at) "
-            "VALUES (?, ?, ?, ?, datetime('now'))",
+            "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
             (str(uuid4()), sid, "user", "anything"),
         )
 
@@ -343,12 +343,12 @@ class TestSkillReviewAudit:
         sid = str(uuid4())
         adapter.execute(
             "INSERT INTO sessions (id, symbiote_id, status, started_at) "
-            "VALUES (?, ?, 'active', datetime('now'))",
+            "VALUES (?, ?, 'active', CURRENT_TIMESTAMP)",
             (sid, symbiote_id),
         )
         adapter.execute(
             "INSERT INTO messages (id, session_id, role, content, created_at) "
-            "VALUES (?, ?, ?, ?, datetime('now'))",
+            "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
             (str(uuid4()), sid, "user", "anything"),
         )
         store = SkillsStore(roots=[tmp_path / "skills"])

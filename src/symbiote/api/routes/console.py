@@ -7,7 +7,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import HTMLResponse
 
-from symbiote.adapters.storage.sqlite import SQLiteAdapter
 from symbiote.api import http as _api
 from symbiote.api.auth import APIKey
 from symbiote.api.http import (
@@ -19,6 +18,7 @@ from symbiote.api.http import (
 from symbiote.api.middleware import (
     require_admin,
 )
+from symbiote.core.ports import StoragePort
 from symbiote.core.session import SessionManager
 
 router = APIRouter()
@@ -53,7 +53,7 @@ def api_logs(
 @router.get("/api/symbiotes")
 def api_list_symbiotes(
     auth: Annotated[APIKey, Depends(require_admin)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
 ) -> list[dict]:
     """List all symbiotes (admin console)."""
     rows = adapter.fetch_all(
@@ -66,7 +66,7 @@ def api_list_symbiotes(
 @router.get("/api/sessions")
 def api_list_sessions(
     auth: Annotated[APIKey, Depends(require_admin)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     symbiote_id: str | None = Query(default=None),
     status: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
@@ -97,7 +97,7 @@ def api_list_sessions(
 def api_session_messages(
     session_id: str,
     auth: Annotated[APIKey, Depends(require_admin)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     sessions: Annotated[SessionManager, Depends(get_session_manager)],
     limit: int = Query(default=100, ge=1, le=500),
 ) -> list[dict]:
@@ -114,7 +114,7 @@ def api_session_messages(
 def api_session_trace(
     session_id: str,
     auth: Annotated[APIKey, Depends(require_admin)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
 ) -> list[dict]:
     """Get execution traces for a session (admin console)."""
     _require_session_access(adapter, session_id, auth)
@@ -131,7 +131,7 @@ def api_session_trace(
 def api_session_score(
     session_id: str,
     auth: Annotated[APIKey, Depends(require_admin)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
 ) -> list[dict]:
     """Get session scores (admin console)."""
     _require_session_access(adapter, session_id, auth)
@@ -148,7 +148,7 @@ def api_session_score(
 def api_symbiote_traces(
     symbiote_id: str,
     auth: Annotated[APIKey, Depends(require_admin)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     limit: int = Query(default=20, ge=1, le=100),
 ) -> list[dict]:
     """Get recent execution traces for a symbiote (admin console)."""
@@ -166,7 +166,7 @@ def api_symbiote_traces(
 def api_symbiote_scores(
     symbiote_id: str,
     auth: Annotated[APIKey, Depends(require_admin)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     limit: int = Query(default=20, ge=1, le=100),
 ) -> list[dict]:
     """Get recent session scores for a symbiote (admin console)."""
@@ -184,7 +184,7 @@ def api_symbiote_scores(
 def api_symbiote_memory(
     symbiote_id: str,
     auth: Annotated[APIKey, Depends(require_admin)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[dict]:
     """Get active memory entries for a symbiote (admin console — what it knows)."""
@@ -203,7 +203,7 @@ def api_symbiote_memory(
 def api_symbiote_reflections(
     symbiote_id: str,
     auth: Annotated[APIKey, Depends(require_admin)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     limit: int = Query(default=20, ge=1, le=100),
 ) -> list[dict]:
     """Get reflection audit rows for a symbiote (admin console — what it learned)."""
@@ -221,7 +221,7 @@ def api_symbiote_reflections(
 def api_symbiote_activity(
     symbiote_id: str,
     auth: Annotated[APIKey, Depends(require_admin)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[dict]:
     """Get tool-execution audit log for a symbiote (admin console — what it did)."""
@@ -242,7 +242,7 @@ def api_symbiote_activity(
 @router.get("/api/dashboard", response_model=dict)
 def dashboard_data(
     auth: Annotated[APIKey, Depends(require_admin)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
 ) -> dict:
     """Aggregate data for the admin dashboard (no auth — read-only summary)."""
     symbiotes = adapter.fetch_all(

@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from symbiote.core.sql import days_ago
 from symbiote.harness.versions import HarnessVersionRepository
 
 if TYPE_CHECKING:
@@ -358,27 +359,27 @@ class HarnessEvolver:
         "SELECT ss.*, et.stop_reason as trace_stop, et.steps_json, "
         "et.total_iterations as trace_iters "
         "FROM session_scores ss "
-        "LEFT JOIN (SELECT session_id, stop_reason, steps_json, total_iterations, "
-        "MAX(created_at) AS latest FROM execution_traces GROUP BY session_id) et "
-        "ON ss.session_id = et.session_id "
+        "LEFT JOIN execution_traces et ON et.id = ("
+        "SELECT t.id FROM execution_traces t WHERE t.session_id = ss.session_id "
+        "ORDER BY t.created_at DESC, t.rowid DESC LIMIT 1) "
     )
 
     def _get_failed_sessions(self, symbiote_id: str, days: int) -> list[dict]:
         return self._storage.fetch_all(
             self._SESSIONS_WITH_LATEST_TRACE
             + "WHERE ss.symbiote_id = ? AND ss.final_score < 0.5 "
-            "AND ss.computed_at >= datetime('now', ?) "
+            "AND ss.computed_at >= ? "
             "ORDER BY ss.final_score ASC LIMIT 20",
-            (symbiote_id, f"-{days} days"),
+            (symbiote_id, days_ago(days)),
         )
 
     def _get_successful_sessions(self, symbiote_id: str, days: int) -> list[dict]:
         return self._storage.fetch_all(
             self._SESSIONS_WITH_LATEST_TRACE
             + "WHERE ss.symbiote_id = ? AND ss.final_score >= 0.8 "
-            "AND ss.computed_at >= datetime('now', ?) "
+            "AND ss.computed_at >= ? "
             "ORDER BY ss.final_score DESC LIMIT 10",
-            (symbiote_id, f"-{days} days"),
+            (symbiote_id, days_ago(days)),
         )
 
     @staticmethod

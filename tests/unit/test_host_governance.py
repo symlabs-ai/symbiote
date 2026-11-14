@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 import threading
 import time
 from collections import Counter
@@ -76,11 +75,10 @@ def _text(reply: Any) -> str:
 
 def _dump_database(storage: Any) -> str:
     """Every row of every table as one string."""
-    tables = storage.fetch_all("SELECT name FROM sqlite_master WHERE type = 'table'")
     return "\n".join(
         json.dumps(row, default=str)
-        for t in tables
-        for row in storage.fetch_all(f"SELECT * FROM {t['name']}")  # noqa: S608
+        for table in storage.table_names()
+        for row in storage.fetch_all(f"SELECT * FROM {table}")  # noqa: S608
     )
 
 
@@ -105,7 +103,7 @@ class TestStorageInjection:
     def test_default_storage_is_closed_on_shutdown(self, tmp_path: Path) -> None:
         kernel = make_kernel(tmp_path)
         kernel.shutdown()
-        with pytest.raises(sqlite3.ProgrammingError):
+        with pytest.raises(Exception, match="(?i)closed"):
             kernel._storage.fetch_one("SELECT 1 AS one")
 
     def test_two_kernels_on_one_storage_see_the_same_session(

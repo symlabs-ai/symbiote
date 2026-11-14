@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from symbiote.core.ports import StoragePort
+from symbiote.core.sql import days_ago
 
 logger = logging.getLogger(__name__)
 
@@ -280,17 +281,17 @@ class ParameterTuner:
     def _get_recent_traces(self, symbiote_id: str, days: int) -> list[dict]:
         return self._storage.fetch_all(
             "SELECT * FROM execution_traces "
-            "WHERE symbiote_id = ? AND created_at >= datetime('now', ?) "
+            "WHERE symbiote_id = ? AND created_at >= ? "
             "ORDER BY created_at DESC",
-            (symbiote_id, f"-{days} days"),
+            (symbiote_id, days_ago(days)),
         )
 
     def _get_recent_scores(self, symbiote_id: str, days: int) -> list[dict]:
         return self._storage.fetch_all(
             "SELECT * FROM session_scores "
-            "WHERE symbiote_id = ? AND computed_at >= datetime('now', ?) "
+            "WHERE symbiote_id = ? AND computed_at >= ? "
             "ORDER BY computed_at DESC",
-            (symbiote_id, f"-{days} days"),
+            (symbiote_id, days_ago(days)),
         )
 
     def _get_current_config(self, symbiote_id: str) -> dict:

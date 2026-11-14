@@ -2,28 +2,73 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from symbiote.environment.descriptors import LLMResponse
 
 
+class WriteResult(Protocol):
+    """What ``StoragePort.execute`` returns."""
+
+    @property
+    def rowcount(self) -> int:
+        """Rows changed by the statement."""
+        ...
+
+
 class StoragePort(Protocol):
     """Structural interface every storage adapter must satisfy.
 
     An adapter can be injected with ``SymbioteKernel(config, storage=...)``.
-    The SQL it receives is still SQLite dialect with ``?`` placeholders.
+    The project maintains two: ``SQLiteAdapter`` (the default) and
+    ``PostgresAdapter``.
+
+    **Portable SQL.** The kernel sends the same SQL text to every adapter:
+
+    * positional ``?`` placeholders (an adapter rewrites them if its driver
+      uses another style);
+    * standard statements only: ``INSERT ... ON CONFLICT (...) DO UPDATE``,
+      ``COALESCE``, ``REPLACE``, ``LOWER``, ``LIMIT ?``; no database-specific
+      functions (dates are computed in Python and compared as ISO text);
+    * text is compared and ordered by code point, and ``LOWER`` changes ASCII
+      letters only (substring search goes through ``symbiote.core.sql``);
+    * booleans are stored as ``0`` / ``1``, timestamps as ISO-8601 text;
+    * every table has an insertion-order column ``rowid`` that may be used in
+      ``ORDER BY`` (as a tie-break) and is not returned by ``SELECT *``;
+    * ``ORDER BY`` on a column that may be NULL goes through ``COALESCE``
+      (databases disagree on where NULL sorts), and a null-safe comparison
+      through ``symbiote.core.sql.differs``.
+
+    **Errors.** A constraint violation raises ``StorageIntegrityError``.
+
+    **Concurrency.** ``execute`` / ``fetch_*`` may be called from any thread.
     """
 
     def init_schema(self) -> None:
         """Create or migrate the schema. Idempotent; the kernel calls it once."""
         ...
 
-    def execute(self, sql: str, params: tuple | None = None) -> Any: ...
+    def execute(self, sql: str, params: tuple | None = None) -> WriteResult:
+        """Run one INSERT / UPDATE / DELETE. Outside ``transaction()`` it is
+        committed before the call returns."""
+        ...
 
     def fetch_one(self, sql: str, params: tuple | None = None) -> dict | None: ...
 
     def fetch_all(self, sql: str, params: tuple | None = None) -> list[dict]: ...
+
+    def transaction(self) -> AbstractContextManager[None]:
+        """Statements run by this thread inside the block are committed
+        together when it ends, or all rolled back if it raises.
+
+        Nested blocks join the outer one. Reads inside the block see its own
+        writes. An exception raised by a statement must leave the block
+        (after an error, the rest of the block may not run on every
+        database). The block must be short: no LLM or tool call inside.
+        """
+        ...
 
     def close(self) -> None: ...
 

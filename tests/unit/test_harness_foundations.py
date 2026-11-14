@@ -381,10 +381,7 @@ class TestContextSplits:
 
 class TestTracePersistence:
     def test_schema_creates_tables(self, adapter: SQLiteAdapter) -> None:
-        tables = adapter.fetch_all(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('execution_traces', 'session_scores')"
-        )
-        names = {t["name"] for t in tables}
+        names = set(adapter.table_names())
         assert "execution_traces" in names
         assert "session_scores" in names
 

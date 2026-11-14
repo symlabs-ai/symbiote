@@ -86,12 +86,12 @@ def session_id(adapter, symbiote_id):
     sid = str(uuid4())
     adapter.execute(
         "INSERT INTO sessions (id, symbiote_id, status, started_at) "
-        "VALUES (?, ?, 'active', datetime('now'))",
+        "VALUES (?, ?, 'active', CURRENT_TIMESTAMP)",
         (sid, symbiote_id),
     )
     adapter.execute(
         "INSERT INTO messages (id, session_id, role, content, created_at) "
-        "VALUES (?, ?, 'user', 'oi', datetime('now'))",
+        "VALUES (?, ?, 'user', 'oi', CURRENT_TIMESTAMP)",
         (str(uuid4()), sid),
     )
     return sid
@@ -174,12 +174,12 @@ class TestEngineAppliesCriteria:
             sid = str(uuid4())
             adapter.execute(
                 "INSERT INTO sessions (id, symbiote_id, status, started_at) "
-                "VALUES (?, ?, 'active', datetime('now'))",
+                "VALUES (?, ?, 'active', CURRENT_TIMESTAMP)",
                 (sid, sym),
             )
             adapter.execute(
                 "INSERT INTO messages (id, session_id, role, content, created_at) "
-                "VALUES (?, ?, 'user', 'oi', datetime('now'))",
+                "VALUES (?, ?, 'user', 'oi', CURRENT_TIMESTAMP)",
                 (str(uuid4()), sid),
             )
             return sid

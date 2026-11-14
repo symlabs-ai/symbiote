@@ -18,7 +18,31 @@ os.environ.setdefault(
 # the dev-mode default is in place before any symbiote module is loaded.
 import pytest  # noqa: E402
 
+# With SYMBIOTE_TEST_POSTGRES_DSN the whole suite runs on PostgreSQL (see
+# tests/support/postgres_mode.py); installed before the kernel is imported.
+from tests.support import postgres_mode  # noqa: E402
+
+if os.environ.get("SYMBIOTE_TEST_POSTGRES_DSN"):
+    postgres_mode.install(os.environ["SYMBIOTE_TEST_POSTGRES_DSN"])
+
 from tests.support import api_client  # noqa: E402,F401
+
+
+def pytest_collection_modifyitems(config, items):
+    if not postgres_mode.enabled():
+        return
+    skip = pytest.mark.skip(reason="SQLite-specific behaviour")
+    for item in items:
+        if "sqlite_only" in item.keywords:
+            item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def _postgres_cleanup():
+    """PostgreSQL mode: close the adapters the test opened, drop their schemas."""
+    yield
+    if postgres_mode.enabled():
+        postgres_mode.cleanup()
 
 
 @pytest.fixture(autouse=True)

@@ -7,6 +7,9 @@ import sqlite3
 import threading
 from pathlib import Path
 
+import pytest
+
+from symbiote.core.exceptions import StorageIntegrityError
 from tests.support import ScriptedLLM, make_kernel
 
 
@@ -36,13 +39,18 @@ def test_concurrent_get_or_create_makes_one_session(tmp_path: Path) -> None:
 
 def test_unique_index_exists(tmp_path: Path) -> None:
     kernel = make_kernel(tmp_path, ScriptedLLM("ok"))
-    rows = kernel._storage.fetch_all(
-        "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'sessions'"
+    sym = kernel.create_symbiote(name="a", role="r")
+    insert = (
+        "INSERT INTO sessions (id, symbiote_id, external_key, status, started_at) "
+        "VALUES (?, ?, 'dup', 'active', '2026-01-01')"
     )
-    assert any(r["sql"] and "UNIQUE" in r["sql"].upper() and "external_key" in r["sql"] for r in rows)
+    kernel._storage.execute(insert, ("s0", sym.id))
+    with pytest.raises(StorageIntegrityError):
+        kernel._storage.execute(insert, ("s1", sym.id))
     kernel.shutdown()
 
 
+@pytest.mark.sqlite_only
 def test_existing_duplicates_do_not_break_boot(tmp_path: Path) -> None:
     db = tmp_path / "old.db"
     kernel = make_kernel(tmp_path, ScriptedLLM("ok"), db_path=db)

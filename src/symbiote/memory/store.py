@@ -10,23 +10,13 @@ from datetime import UTC, datetime
 from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.models import MemoryEntry
 from symbiote.core.ports import StoragePort
+from symbiote.core.sql import contains, like_contains
 
 logger = logging.getLogger(__name__)
 
-_LIKE_ESCAPE = "\\"
 # How many of a symbiote's memories (most important / recently used first)
 # the term-based recall scores per message.
 _RECALL_CANDIDATES = 500
-
-
-def _like_contains(text: str) -> str:
-    """Build a ``LIKE ... ESCAPE '\\'`` pattern matching ``text`` literally."""
-    escaped = (
-        text.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)
-        .replace("%", _LIKE_ESCAPE + "%")
-        .replace("_", _LIKE_ESCAPE + "_")
-    )
-    return f"%{escaped}%"
 
 
 class MemoryStore:
@@ -118,23 +108,21 @@ class MemoryStore:
             return []
         sql = (
             "SELECT * FROM memory_entries "
-            "WHERE is_active = 1 AND symbiote_id = ? AND content LIKE ? ESCAPE '\\'"
+            f"WHERE is_active = 1 AND symbiote_id = ? AND {contains('content')}"
         )
-        params: list = [symbiote_id, _like_contains(query)]
+        params: list = [symbiote_id, like_contains(query)]
 
         if scope is not None:
             sql += " AND scope = ?"
             params.append(scope)
 
         if tags:
-            tag_clauses = " OR ".join(
-                "tags_json LIKE ?" for _ in tags
-            )
+            tag_clauses = " OR ".join(contains("tags_json") for _ in tags)
             sql += f" AND ({tag_clauses})"
             for tag in tags:
-                params.append(f'%"{tag}"%')
+                params.append(like_contains(f'"{tag}"'))
 
-        sql += " ORDER BY importance DESC, created_at DESC LIMIT ?"
+        sql += " ORDER BY importance DESC, created_at DESC, rowid LIMIT ?"
         params.append(limit)
 
         rows = self._storage.fetch_all(sql, tuple(params))
@@ -161,7 +149,8 @@ class MemoryStore:
 
         rows = self._storage.fetch_all(
             "SELECT * FROM memory_entries WHERE is_active = 1 AND symbiote_id = ? "
-            "ORDER BY importance DESC, last_used_at DESC LIMIT ?",
+            # COALESCE: never-used memories (NULL) sort last on every database.
+            "ORDER BY importance DESC, COALESCE(last_used_at, '') DESC, rowid LIMIT ?",
             (symbiote_id, _RECALL_CANDIDATES),
         )
         results = rank_entries(
@@ -184,7 +173,7 @@ class MemoryStore:
         rows = self._storage.fetch_all(
             "SELECT * FROM memory_entries "
             "WHERE is_active = 1 AND symbiote_id = ? AND type = ? "
-            "ORDER BY importance DESC, created_at DESC LIMIT ?",
+            "ORDER BY importance DESC, created_at DESC, rowid LIMIT ?",
             (symbiote_id, entry_type, limit),
         )
         return [self._row_to_entry(r) for r in rows]
@@ -198,7 +187,7 @@ class MemoryStore:
         rows = self._storage.fetch_all(
             "SELECT * FROM memory_entries "
             "WHERE is_active = 1 AND symbiote_id = ? AND category = ? "
-            "ORDER BY importance DESC, created_at DESC LIMIT ?",
+            "ORDER BY importance DESC, created_at DESC, rowid LIMIT ?",
             (symbiote_id, category, limit),
         )
         return [self._row_to_entry(r) for r in rows]

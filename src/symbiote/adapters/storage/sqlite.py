@@ -7,7 +7,10 @@ import json
 import logging
 import sqlite3
 import threading
+from collections.abc import Iterator
 from pathlib import Path
+
+from symbiote.core.exceptions import StorageIntegrityError
 
 logger = logging.getLogger(__name__)
 
@@ -176,8 +179,17 @@ _MIGRATIONS: tuple[str, ...] = (
     "_ensure_unique_environment_config",
     "_ensure_hot_indexes",
     "_migrate_governance",
+    "_migrate_host_tables",
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
+
+
+class SQLiteIntegrityError(StorageIntegrityError, sqlite3.IntegrityError):
+    """``StorageIntegrityError`` raised by this adapter.
+
+    Also a ``sqlite3.IntegrityError``, so code written before the neutral
+    type existed (``except sqlite3.IntegrityError``) keeps working.
+    """
 
 
 class SQLiteAdapter:
@@ -190,16 +202,23 @@ class SQLiteAdapter:
     when background threads (consolidation, skill/reflection review, dream)
     write while the main thread reads, every statement is serialized through a
     per-adapter lock. Single-user is the common case, so the contention cost is
-    negligible; multi-tenant deployments should move to a connection pool.
+    negligible; multi-replica deployments use ``PostgresAdapter`` instead.
+
+    ``transaction()`` holds that lock from the first statement to the commit,
+    so the statements of one composite operation are never interleaved with
+    another thread's and are committed (or rolled back) together.
     """
 
     def __init__(self, db_path: Path, *, check_same_thread: bool = False) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Serializes all statements against the shared connection. ``execute``
-        # never calls ``fetch_*`` (and vice versa), so a plain Lock is enough.
-        self._lock = threading.Lock()
+        # Serializes all statements against the shared connection. Reentrant
+        # because ``transaction()`` holds it while the statements inside run.
+        self._lock = threading.RLock()
+        # Depth of ``transaction()`` nesting; only read or written under the
+        # lock, so it always belongs to the thread that holds it.
+        self._tx_depth = 0
 
         self._conn = sqlite3.connect(
             str(self._db_path), check_same_thread=check_same_thread
@@ -233,6 +252,15 @@ class SQLiteAdapter:
         # Skipped when the database had duplicated keys: retried every boot.
         if not self._index_exists("idx_sessions_symbiote_external_key"):
             self._ensure_unique_external_key()
+
+    def table_names(self) -> list[str]:
+        """Names of the kernel's tables."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            ).fetchall()
+        return [row[0] for row in rows]
 
     def _index_exists(self, name: str) -> bool:
         row = self._conn.execute(
@@ -500,6 +528,33 @@ class SQLiteAdapter:
         )
         self._conn.commit()
 
+    def _migrate_host_tables(self) -> None:
+        """7: tables that used to be created by the modules that use them
+        (API keys, HTTP tools registered at runtime)."""
+        for stmt in (
+            """CREATE TABLE IF NOT EXISTS api_keys (
+                id          TEXT PRIMARY KEY,
+                tenant_id   TEXT NOT NULL,
+                name        TEXT NOT NULL,
+                key_hash    TEXT NOT NULL UNIQUE,
+                key_prefix  TEXT NOT NULL,
+                role        TEXT NOT NULL DEFAULT 'user',
+                is_active   INTEGER DEFAULT 1,
+                created_at  TEXT NOT NULL
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash)",
+            "CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys(tenant_id)",
+            """CREATE TABLE IF NOT EXISTS http_tools (
+                tool_id         TEXT PRIMARY KEY,
+                symbiote_id     TEXT NOT NULL,
+                descriptor_json TEXT NOT NULL,
+                config_json     TEXT NOT NULL,
+                created_at      TEXT NOT NULL
+            )""",
+        ):
+            self._conn.execute(stmt)
+        self._conn.commit()
+
     def execute(self, sql: str, params: tuple | None = None) -> sqlite3.Cursor:
         """Run an INSERT / UPDATE / DELETE and auto-commit.
 
@@ -508,9 +563,38 @@ class SQLiteAdapter:
         not iterate rows off it. Row reads go through ``fetch_one``/``fetch_all``.
         """
         with self._lock:
-            cur = self._conn.execute(sql, params or ())
-            self._conn.commit()
+            try:
+                cur = self._conn.execute(sql, params or ())
+            except sqlite3.IntegrityError as exc:
+                if not self._tx_depth:
+                    self._conn.rollback()
+                raise SQLiteIntegrityError(*exc.args) from exc
+            if not self._tx_depth:
+                self._conn.commit()
             return cur
+
+    @contextlib.contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Run the statements of the block as one unit: all or nothing.
+
+        Nested blocks join the outer one (no savepoints): an exception that
+        leaves the outermost block rolls everything back. Keep the block
+        short and free of slow work (no LLM or tool calls): other threads
+        wait for it.
+        """
+        with self._lock:
+            self._tx_depth += 1
+            try:
+                yield
+            except BaseException:
+                if self._tx_depth == 1:
+                    self._conn.rollback()
+                raise
+            else:
+                if self._tx_depth == 1:
+                    self._conn.commit()
+            finally:
+                self._tx_depth -= 1
 
     def fetch_one(self, sql: str, params: tuple | None = None) -> dict | None:
         """Return a single row as a dict, or ``None``."""

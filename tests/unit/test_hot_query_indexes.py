@@ -9,6 +9,9 @@ import pytest
 
 from symbiote.adapters.storage.sqlite import SQLiteAdapter
 
+# SQLite-specific behaviour (file, pragmas, query plans, legacy migrations).
+pytestmark = pytest.mark.sqlite_only
+
 
 @pytest.fixture()
 def adapter(tmp_path: Path):

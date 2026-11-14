@@ -30,9 +30,10 @@ import re
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
+from contextlib import AbstractContextManager
 from typing import Any
 
-from symbiote.core.ports import StoragePort
+from symbiote.core.ports import StoragePort, WriteResult
 
 logger = logging.getLogger(__name__)
 
@@ -242,7 +243,7 @@ class RedactingStorage:
     def init_schema(self) -> None:
         self._inner.init_schema()
 
-    def execute(self, sql: str, params: tuple | None = None) -> Any:
+    def execute(self, sql: str, params: tuple | None = None) -> WriteResult:
         if params and self._redactor.active and _is_redacted_statement(sql):
             params = tuple(self._redactor.redact_param(p) for p in params)
         return self._inner.execute(sql, params)
@@ -252,6 +253,9 @@ class RedactingStorage:
 
     def fetch_all(self, sql: str, params: tuple | None = None) -> list[dict]:
         return self._inner.fetch_all(sql, params)
+
+    def transaction(self) -> AbstractContextManager[None]:
+        return self._inner.transaction()
 
     def close(self) -> None:
         self._inner.close()

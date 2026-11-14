@@ -36,7 +36,7 @@ def session_id(adapter: SQLiteAdapter, symbiote_id: str) -> str:
     sid = str(uuid4())
     adapter.execute(
         "INSERT INTO sessions (id, symbiote_id, status, started_at) "
-        "VALUES (?, ?, 'active', datetime('now'))",
+        "VALUES (?, ?, 'active', CURRENT_TIMESTAMP)",
         (sid, symbiote_id),
     )
     return sid
@@ -57,7 +57,7 @@ def _insert_message(
 ) -> None:
     adapter.execute(
         "INSERT INTO messages (id, session_id, role, content, created_at) "
-        "VALUES (?, ?, ?, ?, datetime('now'))",
+        "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
         (str(uuid4()), session_id, role, content),
     )
 

@@ -48,6 +48,15 @@ class DuplicateEntityError(SymbioteError):
         super().__init__(f"{entity_type} {entity_id!r} already exists")
 
 
+class StorageIntegrityError(SymbioteError):
+    """Raised by a storage adapter when a write violates a constraint
+    (unique key, foreign key, NOT NULL).
+
+    Every adapter translates its driver's error into this type, so the kernel
+    and the hosts catch one exception whatever the database is.
+    """
+
+
 class LLMError(SymbioteError):
     """Raised when an LLM operation fails.
 

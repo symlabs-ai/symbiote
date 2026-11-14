@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import threading
 from datetime import datetime
 from typing import Literal
 
-from symbiote.core.exceptions import EntityNotFoundError
+from symbiote.core.exceptions import EntityNotFoundError, StorageIntegrityError
 from symbiote.core.models import Decision, Message, Session, _utcnow
 from symbiote.core.ports import StoragePort
 
@@ -79,7 +78,7 @@ class SessionManager:
         with _external_key_lock(symbiote_id, external_key):
             try:
                 return self._get_or_create_by_external_key(symbiote_id, external_key, goal)
-            except sqlite3.IntegrityError:
+            except StorageIntegrityError:
                 # Another process created it between our SELECT and INSERT.
                 return self._get_or_create_by_external_key(symbiote_id, external_key, goal)
 
@@ -190,7 +189,8 @@ class SessionManager:
     def get_messages(self, session_id: str, limit: int = 50) -> list[Message]:
         """Return messages for a session, most recent first."""
         rows = self._storage.fetch_all(
-            "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
+            "SELECT * FROM messages WHERE session_id = ? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT ?",
             (session_id, limit),
         )
         return [self._row_to_message(r) for r in rows]
@@ -247,7 +247,8 @@ class SessionManager:
     def _generate_summary(self, session_id: str) -> str:
         """Concatenate content of last 5 messages, or 'No messages'."""
         rows = self._storage.fetch_all(
-            "SELECT content FROM messages WHERE session_id = ? ORDER BY created_at DESC LIMIT 5",
+            "SELECT content FROM messages WHERE session_id = ? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 5",
             (session_id,),
         )
         if not rows:

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from symbiote.core.ports import StoragePort
+from symbiote.core.sql import differs
 from symbiote.discovery.models import DiscoveredTool
 
 
@@ -19,27 +20,25 @@ class DiscoveredToolRepository:
 
     def save(self, tool: DiscoveredTool) -> DiscoveredTool:
         """Insert or replace a discovered tool."""
+        # An approved tool whose behaviour changed (method, URL, parameters
+        # or risk) needs a human to approve it again.
+        changed = " OR ".join(
+            differs(f"discovered_tools.{column}", f"excluded.{column}")
+            for column in ("method", "url_template", "parameters_json", "risk_level")
+        )
         self._storage.execute(
-            """
+            f"""
             INSERT INTO discovered_tools
                 (id, symbiote_id, tool_id, name, description, handler_type,
                  method, url_template, parameters_json, tags_json, risk_level,
                  status, source_path, discovered_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(symbiote_id, tool_id) DO UPDATE SET
-                -- An approved tool whose behaviour changed (method, URL,
-                -- parameters or risk) needs a human to approve it again.
                 status = CASE
-                    WHEN discovered_tools.method IS NOT excluded.method
-                      OR discovered_tools.url_template IS NOT excluded.url_template
-                      OR discovered_tools.parameters_json IS NOT excluded.parameters_json
-                      OR discovered_tools.risk_level IS NOT excluded.risk_level
+                    WHEN {changed}
                     THEN 'pending' ELSE discovered_tools.status END,
                 approved_at = CASE
-                    WHEN discovered_tools.method IS NOT excluded.method
-                      OR discovered_tools.url_template IS NOT excluded.url_template
-                      OR discovered_tools.parameters_json IS NOT excluded.parameters_json
-                      OR discovered_tools.risk_level IS NOT excluded.risk_level
+                    WHEN {changed}
                     THEN NULL ELSE discovered_tools.approved_at END,
                 name           = excluded.name,
                 description    = excluded.description,
@@ -113,14 +112,14 @@ class DiscoveredToolRepository:
             "WHERE symbiote_id = ? AND tool_id = ?",
             (status, approved_at, symbiote_id, tool_id),
         )
-        return cur.rowcount > 0  # type: ignore[union-attr]
+        return cur.rowcount > 0
 
     def delete(self, symbiote_id: str, tool_id: str) -> bool:
         cur = self._storage.execute(
             "DELETE FROM discovered_tools WHERE symbiote_id = ? AND tool_id = ?",
             (symbiote_id, tool_id),
         )
-        return cur.rowcount > 0  # type: ignore[union-attr]
+        return cur.rowcount > 0
 
     def classify_by_tags(
         self,
@@ -161,7 +160,7 @@ class DiscoveredToolRepository:
             "WHERE symbiote_id = ? AND status = 'disabled'",
             (symbiote_id,),
         )
-        return cur.rowcount  # type: ignore[union-attr]
+        return cur.rowcount
 
     # ── private ──────────────────────────────────────────────────────────
 

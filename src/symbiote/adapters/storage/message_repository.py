@@ -22,14 +22,14 @@ class MessageRepository:
         if since is None:
             rows = self._storage.fetch_all(
                 "SELECT role, content, created_at FROM messages "
-                "WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
+                "WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
                 (session_id, limit),
             )
         else:
             rows = self._storage.fetch_all(
                 "SELECT role, content, created_at FROM messages "
                 "WHERE session_id = ? AND created_at > ? "
-                "ORDER BY created_at DESC LIMIT ?",
+                "ORDER BY created_at DESC, rowid DESC LIMIT ?",
                 (session_id, since, limit),
             )
         return [

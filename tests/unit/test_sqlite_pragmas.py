@@ -6,7 +6,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from symbiote.adapters.storage.sqlite import SQLiteAdapter
+
+# SQLite-specific behaviour (file, pragmas, query plans, legacy migrations).
+pytestmark = pytest.mark.sqlite_only
 
 
 def test_new_connection_uses_wal_and_synchronous_normal(tmp_path: Path) -> None:

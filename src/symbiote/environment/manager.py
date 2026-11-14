@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import threading
 from typing import Any
 
-from symbiote.core.exceptions import ValidationError
+from symbiote.core.exceptions import StorageIntegrityError, ValidationError
 from symbiote.core.models import EnvironmentConfig
 from symbiote.core.ports import StoragePort
 
@@ -173,7 +172,7 @@ class EnvironmentManager:
                 try:
                     self._write(cfg, insert=existing is None)
                     return cfg
-                except sqlite3.IntegrityError:
+                except StorageIntegrityError:
                     # Another process created this config first: merge onto it.
                     if existing is not None or attempt:
                         raise

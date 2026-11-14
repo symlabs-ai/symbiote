@@ -7,7 +7,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from symbiote.adapters.storage.sqlite import SQLiteAdapter
 from symbiote.api.auth import APIKey
 from symbiote.api.http import (
     _require_symbiote_access,
@@ -16,6 +15,7 @@ from symbiote.api.http import (
 from symbiote.api.middleware import (
     require_admin,
 )
+from symbiote.core.ports import StoragePort
 from symbiote.harness.evolver import EVOLVABLE_COMPONENTS
 from symbiote.harness.versions import HarnessVersionRepository
 
@@ -28,7 +28,7 @@ router = APIRouter()
 
 
 def get_harness_repo(
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
 ) -> HarnessVersionRepository:
     return HarnessVersionRepository(storage=adapter)
 
@@ -43,7 +43,7 @@ class HarnessVersionBody(BaseModel):
 def api_symbiote_harness(
     symbiote_id: str,
     auth: Annotated[APIKey, Depends(require_admin)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     repo: Annotated[HarnessVersionRepository, Depends(get_harness_repo)],
 ) -> list[dict]:
     """List harness components for a symbiote with their active version.
@@ -77,7 +77,7 @@ def api_symbiote_harness_versions(
     symbiote_id: str,
     component: str,
     auth: Annotated[APIKey, Depends(require_admin)],
-    adapter: Annotated[SQLiteAdapter, Depends(get_adapter)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
     repo: Annotated[HarnessVersionRepository, Depends(get_harness_repo)],
     limit: int = Query(default=20, ge=1, le=100),
 ) -> list[dict]:
