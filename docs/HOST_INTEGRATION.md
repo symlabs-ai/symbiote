@@ -91,13 +91,62 @@ storage.close()
   subclass that is also a `sqlite3.IntegrityError`, so older `except` clauses
   keep working.
 - **What still lives outside the database** with several replicas: the skill
-  library (files; see `skill_writes`) and the per-session turn lock (in
-  process). Both get a port in this same series of changes.
+  library (files; see `skill_writes`), and the per-session turn lock unless
+  you inject one (next section).
 
 To run the suite on PostgreSQL: `scripts/test-postgres.sh` starts a throwaway
 `postgres:15-alpine` container and runs pytest against it (or export
 `SYMBIOTE_TEST_POSTGRES_DSN` to use a server you already have). Tests of
 SQLite-only behaviour carry the `sqlite_only` marker and are skipped there.
+
+### Session lock (one turn at a time per session)
+
+The kernel takes a lock on the session before a turn and releases it after,
+whatever the outcome. The default (`InProcessSessionLock`) serializes the
+turns of one process, as the kernel always did. With several replicas, inject
+a lock they all see:
+
+```python
+from symbiote.core.session_lock import StorageSessionLock
+
+storage = PostgresAdapter(dsn, schema="symbiote")
+kernel = SymbioteKernel(
+    KernelConfig(
+        session_lock_wait=10,            # give up after 10 s -> SessionBusyError
+        session_lock_ttl=60,             # a held lock is valid for 60 s...
+        session_lock_renew_interval=20,  # ...and renewed every 20 s while the turn runs
+    ),
+    llm=llm,
+    storage=storage,
+    session_lock=StorageSessionLock(storage),   # a row in `session_locks`
+)
+```
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `session_lock_wait` | `None` | Seconds a turn waits for a busy session before `SessionBusyError`. `None` waits forever. |
+| `session_lock_ttl` | `None` | Validity of a held lock. `None` uses the lock's own default: never for the in-process lock, 60 s for `StorageSessionLock`. |
+| `session_lock_renew_interval` | `None` | While a turn runs the lock is renewed every N seconds. `None` renews at a third of the ttl (no renewal for a lock that never expires). |
+
+- **Release is guaranteed**: it runs in a `finally`, for turns that fail too.
+  If the replica dies, the lock expires after its ttl.
+- **Renewal.** A background thread renews the lock at the interval. When the
+  lock says it is no longer ours, or renewing keeps failing until the ttl
+  runs out, the turn is stopped **before its next step**: no further model
+  call and no further tool call start, the call already running finishes,
+  no reply is stored and `kernel.message()` raises `SessionLockLostError`.
+  What had already run (tool side effects) is not undone.
+- **`SessionBusyError`** means nothing was stored; the turn can be retried.
+  The HTTP API answers 409 for both errors.
+- **Your own lock** (Redis, advisory locks): implement `SessionLockPort`
+  (`symbiote.core.ports`): `acquire(session_id, wait=, ttl=) -> token | None`,
+  `renew(session_id, token, ttl=) -> bool`, `release(session_id, token)`.
+  They are called from worker threads. Optional `acquire_async` /
+  `release_async` are used by `message_async`; without them the blocking
+  ones run in a thread, never on the event loop.
+- **`StorageSessionLock`** polls while waiting (`poll_interval`, 0.1 s) and
+  judges expiry by each replica's clock: keep the ttl well above the clock
+  skew between replicas.
 
 ### Transactions
 

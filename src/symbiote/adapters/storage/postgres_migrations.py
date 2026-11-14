@@ -371,8 +371,18 @@ CREATE INDEX idx_api_keys_hash ON api_keys(key_hash);
 CREATE INDEX idx_api_keys_tenant ON api_keys(tenant_id);
 """
 
+_V2_SESSION_LOCKS = """
+CREATE TABLE session_locks (
+    rowid BIGINT GENERATED ALWAYS AS IDENTITY,
+    session_id TEXT COLLATE "C" PRIMARY KEY,
+    owner      TEXT COLLATE "C" NOT NULL,
+    expires_at DOUBLE PRECISION NOT NULL
+);
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "baseline", _V1_BASELINE),
+    (2, "session_locks", _V2_SESSION_LOCKS),
 )
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

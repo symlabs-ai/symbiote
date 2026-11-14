@@ -57,6 +57,32 @@ class StorageIntegrityError(SymbioteError):
     """
 
 
+class SessionBusyError(SymbioteError):
+    """Raised by ``kernel.message()`` when the session's lock could not be
+    taken within ``KernelConfig.session_lock_wait``: another turn is running
+    on that session. Nothing was stored; the turn can be retried."""
+
+    def __init__(self, session_id: str, waited: float | None = None) -> None:
+        self.session_id = session_id
+        self.waited = waited
+        suffix = f" after {waited:g}s" if waited is not None else ""
+        super().__init__(f"session {session_id!r} is busy with another turn{suffix}")
+
+
+class SessionLockLostError(SymbioteError):
+    """Raised by ``kernel.message()`` when the session's lock could not be
+    renewed while the turn ran. The turn stopped before its next step (no
+    further model or tool call started) and stored no reply; what had already
+    run (tool side effects, memories written by tools) is not undone."""
+
+    def __init__(self, session_id: str) -> None:
+        self.session_id = session_id
+        super().__init__(
+            f"the lock of session {session_id!r} was lost during the turn; "
+            "the turn was stopped"
+        )
+
+
 class LLMError(SymbioteError):
     """Raised when an LLM operation fails.
 

@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING
 from symbiote.core.context import AssembledContext
 from symbiote.core.models import Message
 from symbiote.core.ports import LLMPort
+from symbiote.core.turn_control import check_turn
 from symbiote.runners.base import (
     BlockResult,
     LongRunPlan,
@@ -410,6 +411,7 @@ class LongRunRunner:
             {"role": "user", "content": context.user_input},
         ]
 
+        check_turn()  # no model call starts once the turn has to stop
         try:
             response = self._llm.complete(messages, config=self._config_for(context))
             raw = _response_text(response)
@@ -675,6 +677,7 @@ class LongRunRunner:
             )},
         ]
 
+        check_turn()
         try:
             response = self._evaluator_llm.complete(
                 eval_messages, config=self._config_for(context)

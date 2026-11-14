@@ -19,6 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from symbiote.core.turn_control import check_turn
 from symbiote.core.turn_record import current_turn_record
 from symbiote.environment.descriptors import (
     HttpToolConfig,
@@ -525,6 +526,7 @@ class ToolGateway:
         _guard_checked: bool = False,
     ) -> ToolResult:
         """Async variant of execute() — awaits coroutine handlers via the policy gate."""
+        check_turn()  # no tool call starts once the turn has to stop
         if tool_id not in self._registry:
             from symbiote.environment.policies import ToolResult
 
@@ -569,6 +571,7 @@ class ToolGateway:
         """Async variant of execute_tool_calls() — runs calls concurrently via asyncio.gather."""
         if not calls:
             return []
+        check_turn()
 
         tasks = [
             self.execute_async(
@@ -633,6 +636,7 @@ class ToolGateway:
         _guard_checked: bool = False,
     ) -> ToolResult:
         """Execute a tool through the policy gate."""
+        check_turn()  # no tool call starts once the turn has to stop
         if tool_id not in self._registry:
             return ToolResult(
                 success=False,
@@ -676,6 +680,7 @@ class ToolGateway:
         See ``_execute_tool_calls``; this wrapper binds the execution context
         (calling symbiote/session) that builtin handlers rely on.
         """
+        check_turn()
         with tool_exec_context(symbiote_id, session_id):
             return self._execute_tool_calls(
                 symbiote_id, session_id, calls, workspace_id, timeout

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal, Self
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 _VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
@@ -77,6 +77,17 @@ class KernelConfig(BaseModel):
     # review engines) stay cached. Least recently used ones are dropped and
     # rebuilt on demand, so memory does not grow with the number of symbiotes.
     symbiote_cache_size: int = Field(default=256, ge=1)
+    # Session lock (one turn at a time per session; see SessionLockPort).
+    # ``session_lock_wait``: seconds a turn waits for the lock before
+    # ``SessionBusyError``; None waits forever (the historical behaviour).
+    session_lock_wait: float | None = Field(default=None, ge=0)
+    # ``session_lock_ttl``: validity of a held lock, in seconds; None uses the
+    # lock implementation's default (the in-process lock never expires).
+    session_lock_ttl: float | None = Field(default=None, gt=0)
+    # ``session_lock_renew_interval``: while a turn runs, the lock is renewed
+    # every N seconds; a turn whose lock cannot be renewed stops before its
+    # next step. None renews at a third of the ttl (no renewal without ttl).
+    session_lock_renew_interval: float | None = Field(default=None, gt=0)
     # Root directory for the builtin filesystem tools (fs_read / fs_write /
     # fs_list) and the default working directory of ``bash``. When set, every
     # path must resolve (symlinks included) inside it and an ``allowed_root``
@@ -136,6 +147,15 @@ class KernelConfig(BaseModel):
         if not v:
             raise ValueError("agent_protocol must not be empty")
         return v
+
+    @model_validator(mode="after")
+    def _renew_before_expiry(self) -> Self:
+        ttl, interval = self.session_lock_ttl, self.session_lock_renew_interval
+        if ttl is not None and interval is not None and interval >= ttl:
+            raise ValueError(
+                "session_lock_renew_interval must be shorter than session_lock_ttl"
+            )
+        return self
 
     # ── class methods ─────────────────────────────────────────────────
 

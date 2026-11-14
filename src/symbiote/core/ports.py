@@ -73,6 +73,48 @@ class StoragePort(Protocol):
     def close(self) -> None: ...
 
 
+class SessionLockPort(Protocol):
+    """Lock that lets one turn at a time run on a session.
+
+    The kernel takes it before a turn and releases it after, whatever the
+    outcome. Inject an implementation with
+    ``SymbioteKernel(config, session_lock=...)``. The default,
+    ``InProcessSessionLock``, serializes the turns of one process; hosts
+    with several replicas use ``StorageSessionLock`` (a row in the kernel's
+    database) or their own (Redis, advisory locks, ...).
+
+    Contract:
+
+    * ``acquire`` blocks until the lock of ``session_id`` is taken or
+      ``wait`` seconds pass (``None`` waits forever, ``0`` tries once). It
+      returns an opaque owner token, or ``None`` when the wait ran out.
+    * A lock taken with ``ttl`` expires that many seconds after it was taken
+      or last renewed, so a replica that died does not hold a session
+      forever. ``ttl=None`` asks for the implementation's default
+      (``default_ttl``; ``None`` there means the lock never expires).
+    * ``renew`` extends the lock and returns ``False`` when ``token`` no
+      longer owns it (it expired and another owner took it). While a turn
+      runs, the kernel calls ``renew`` every
+      ``KernelConfig.session_lock_renew_interval`` seconds; a ``False``, or
+      errors for longer than the ttl, stop the turn before its next step.
+    * ``release`` gives the lock up if ``token`` still owns it and never
+      raises for a lock already lost.
+
+    All three are called from worker threads and must be thread-safe. An
+    implementation may also offer ``acquire_async`` and ``release_async``
+    (same signatures, awaitable): ``message_async`` uses them when present
+    and otherwise runs the blocking ones in a thread.
+    """
+
+    def acquire(
+        self, session_id: str, *, wait: float | None = None, ttl: float | None = None
+    ) -> str | None: ...
+
+    def renew(self, session_id: str, token: str, *, ttl: float | None = None) -> bool: ...
+
+    def release(self, session_id: str, token: str) -> None: ...
+
+
 @runtime_checkable
 class LLMPort(Protocol):
     """Structural interface for LLM adapters.

@@ -33,6 +33,8 @@ from symbiote.config.models import KernelConfig
 from symbiote.core.exceptions import (
     DuplicateEntityError,
     EntityNotFoundError,
+    SessionBusyError,
+    SessionLockLostError,
     StorageIntegrityError,
     SymbioteError,
     ValidationError,
@@ -160,6 +162,16 @@ async def validation_error_handler(request: Request, exc: ValidationError) -> JS
 
 @app.exception_handler(DuplicateEntityError)
 async def duplicate_entity_handler(request: Request, exc: DuplicateEntityError) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(SessionBusyError)
+async def session_busy_handler(request: Request, exc: SessionBusyError) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(SessionLockLostError)
+async def session_lock_lost_handler(request: Request, exc: SessionLockLostError) -> JSONResponse:
     return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import logging
 import threading
 import time
@@ -22,17 +24,32 @@ from symbiote.config.models import KernelConfig
 from symbiote.core.background_review import BackgroundReviewEngine
 from symbiote.core.capabilities import CapabilityError, CapabilitySurface
 from symbiote.core.context import ContextAssembler
-from symbiote.core.exceptions import DuplicateEntityError, EntityNotFoundError
+from symbiote.core.exceptions import (
+    DuplicateEntityError,
+    EntityNotFoundError,
+    SessionBusyError,
+    SessionLockLostError,
+)
 from symbiote.core.hooks import CompositeHook
 from symbiote.core.identity import IdentityManager
 from symbiote.core.inspector import KernelInspector
 from symbiote.core.models import Session, Symbiote
-from symbiote.core.ports import LLMPort, SessionRecallPort, StoragePort
+from symbiote.core.ports import LLMPort, SessionLockPort, SessionRecallPort, StoragePort
 from symbiote.core.redaction import RedactingStorage, Redactor
 from symbiote.core.reflection import ReflectionEngine
 from symbiote.core.scoring import compute_auto_score, compute_final_score
 from symbiote.core.session import SessionManager
-from symbiote.core.session_lock import SessionLock
+from symbiote.core.session_lock import (
+    InProcessSessionLock,
+    SessionLease,
+    renew_interval,
+)
+from symbiote.core.turn_control import (
+    TurnControl,
+    TurnStop,
+    bind_turn_control,
+    reset_turn_control,
+)
 from symbiote.core.turn_record import TurnRecord, close_turn_record, open_turn_record
 from symbiote.discovery.loader import DiscoveredToolLoader
 from symbiote.discovery.repository import DiscoveredToolRepository
@@ -106,6 +123,7 @@ class SymbioteKernel:
         llm: LLMPort | None = None,
         *,
         storage: StoragePort | None = None,
+        session_lock: SessionLockPort | None = None,
         agent_protocol: str | AgentProtocol | None = None,
         protocol_registry: AgentProtocolRegistry | None = None,
     ) -> None:
@@ -114,8 +132,13 @@ class SymbioteKernel:
         ``storage`` injects the storage adapter; by default the kernel opens
         the SQLite file at ``config.db_path``. An injected adapter belongs to
         the host: the kernel calls its ``init_schema()`` once and never closes
-        it. It must accept the SQL the kernel sends today (SQLite dialect,
-        ``?`` placeholders).
+        it. ``SQLiteAdapter`` and ``PostgresAdapter`` are maintained with the
+        kernel; any other must satisfy ``StoragePort``.
+
+        ``session_lock`` injects the lock that lets one turn at a time run on
+        a session (``SessionLockPort``). The default serializes the turns of
+        this process only; with several replicas pass
+        ``StorageSessionLock(storage)`` or the host's own lock.
         """
         active_protocol_registry = (
             protocol_registry or create_default_protocol_registry()
@@ -236,7 +259,9 @@ class SymbioteKernel:
         self._subagent.register()
 
         # Per-session concurrency control
-        self._session_lock = SessionLock()
+        self._session_lock: SessionLockPort = (
+            session_lock if session_lock is not None else InProcessSessionLock()
+        )
 
         # Export
         self._export = ExportService(self._storage)
@@ -718,12 +743,52 @@ class SymbioteKernel:
         """
         host_token = bind_host_context(host_context)
         try:
-            with self._session_lock.acquire(session_id):
+            ttl, wait = self._lock_ttl(), self._config.session_lock_wait
+            token = self._session_lock.acquire(session_id, wait=wait, ttl=ttl)
+            if token is None:
+                raise SessionBusyError(session_id, wait)
+            lease, control_token = self._begin_turn(session_id, token, ttl)
+            try:
                 return self._message_inner(
                     session_id, content, extra_context, llm_config=llm_config
                 )
+            except TurnStop:
+                raise SessionLockLostError(session_id) from None
+            finally:
+                reset_turn_control(control_token)
+                lease.stop()
+                try:
+                    self._session_lock.release(session_id, token)
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "could not release the lock of session %s", session_id
+                    )
         finally:
             reset_host_context(host_token)
+
+    def _lock_ttl(self) -> float | None:
+        """Validity of a held session lock: the configured one, or the lock
+        implementation's default."""
+        if self._config.session_lock_ttl is not None:
+            return self._config.session_lock_ttl
+        return getattr(self._session_lock, "default_ttl", None)
+
+    def _begin_turn(
+        self, session_id: str, token: str, ttl: float | None
+    ) -> tuple[SessionLease, contextvars.Token]:
+        """Bind the turn's control and start renewing its session lock."""
+        control = TurnControl()
+        lease = SessionLease(
+            self._session_lock,
+            session_id,
+            token,
+            ttl=ttl,
+            interval=renew_interval(ttl, self._config.session_lock_renew_interval),
+            on_lost=control.lose_lock,
+        )
+        control_token = bind_turn_control(control)
+        lease.start()
+        return lease, control_token
 
     def _message_inner(
         self,
@@ -799,10 +864,37 @@ class SymbioteKernel:
         """
         host_token = bind_host_context(host_context)
         try:
-            async with self._session_lock.acquire_async(session_id):
+            lock = self._session_lock
+            ttl, wait = self._lock_ttl(), self._config.session_lock_wait
+            acquire_async = getattr(lock, "acquire_async", None)
+            if acquire_async is not None:
+                token = await acquire_async(session_id, wait=wait, ttl=ttl)
+            else:
+                token = await asyncio.to_thread(
+                    lambda: lock.acquire(session_id, wait=wait, ttl=ttl)
+                )
+            if token is None:
+                raise SessionBusyError(session_id, wait)
+            lease, control_token = self._begin_turn(session_id, token, ttl)
+            try:
                 return await self._message_async_inner(
                     session_id, content, extra_context, on_token, llm_config=llm_config
                 )
+            except TurnStop:
+                raise SessionLockLostError(session_id) from None
+            finally:
+                reset_turn_control(control_token)
+                lease.stop()
+                try:
+                    release_async = getattr(lock, "release_async", None)
+                    if release_async is not None:
+                        await release_async(session_id, token)
+                    else:
+                        await asyncio.to_thread(lock.release, session_id, token)
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "could not release the lock of session %s", session_id
+                    )
         finally:
             reset_host_context(host_token)
 
@@ -1608,7 +1700,13 @@ class SymbioteKernel:
 
     # Rows that belong to a symbiote through one of its sessions, then the
     # rows that carry its id. Children first: foreign keys are enforced.
-    _PURGE_BY_SESSION = ("messages", "decisions", "process_instances", "artifacts")
+    _PURGE_BY_SESSION = (
+        "messages",
+        "decisions",
+        "process_instances",
+        "artifacts",
+        "session_locks",
+    )
     _PURGE_BY_SYMBIOTE = (
         "turn_contexts",
         "execution_traces",

@@ -180,6 +180,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "_ensure_hot_indexes",
     "_migrate_governance",
     "_migrate_host_tables",
+    "_migrate_session_locks",
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -553,6 +554,17 @@ class SQLiteAdapter:
             )""",
         ):
             self._conn.execute(stmt)
+        self._conn.commit()
+
+    def _migrate_session_locks(self) -> None:
+        """8: locks held by ``StorageSessionLock`` (one row per busy session)."""
+        self._conn.execute(
+            """CREATE TABLE IF NOT EXISTS session_locks (
+                session_id TEXT PRIMARY KEY,
+                owner      TEXT NOT NULL,
+                expires_at REAL NOT NULL
+            )"""
+        )
         self._conn.commit()
 
     def execute(self, sql: str, params: tuple | None = None) -> sqlite3.Cursor:

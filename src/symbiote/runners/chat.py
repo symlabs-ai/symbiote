@@ -28,6 +28,7 @@ from symbiote.core.context import AssembledContext
 from symbiote.core.exceptions import is_transient_llm_error
 from symbiote.core.models import Message
 from symbiote.core.ports import LLMPort
+from symbiote.core.turn_control import check_turn
 from symbiote.environment.descriptors import LLMResponse, ToolCall, ToolCallResult
 from symbiote.environment.exec_context import tool_exec_context
 from symbiote.environment.parser import parse_tool_calls
@@ -1410,6 +1411,7 @@ class ChatRunner:
         forwarded to *on_token* here — the caller must do so after the
         response has been validated.
         """
+        check_turn()  # no model call starts once the turn has to stop
         if on_token is not None and hasattr(self._llm, "stream"):
             chunks: list[str] = []
             response: str | LLMResponse = ""
