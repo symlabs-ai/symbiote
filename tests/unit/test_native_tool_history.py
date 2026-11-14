@@ -7,9 +7,11 @@ import copy
 import logging
 from types import SimpleNamespace
 
+import pytest
 from forge_llm import ChatMessage
 
 from symbiote.adapters.llm.forge import ForgeLLMAdapter
+from symbiote.agent_protocols.base import flatten_tool_exchanges
 from symbiote.core.context import AssembledContext
 from symbiote.environment.descriptors import (
     LLMResponse,
@@ -25,10 +27,12 @@ class SequenceLLM:
     def __init__(self, responses: list[str | LLMResponse]) -> None:
         self.responses = responses
         self.calls: list[list[dict]] = []
+        self.tools: list[list[dict] | None] = []
         self._index = 0
 
     def complete(self, messages: list[dict], **kwargs):
         self.calls.append(copy.deepcopy(messages))
+        self.tools.append(kwargs.get("tools"))
         response = self.responses[min(self._index, len(self.responses) - 1)]
         self._index += 1
         return response
@@ -121,6 +125,49 @@ def _assert_native_exchange(
     assert f'"success":{expected_success}' in tool["content"]
 
 
+class TestFlattenToolExchanges:
+    def test_messages_without_tool_structures_are_returned_as_they_are(self) -> None:
+        messages = [
+            {"role": "system", "content": "s"},
+            {"role": "user", "content": "u"},
+            {"role": "assistant", "content": "a"},
+        ]
+
+        assert flatten_tool_exchanges(messages) == messages
+
+    def test_parallel_results_become_one_user_message(self) -> None:
+        messages = [
+            {"role": "user", "content": "go"},
+            {
+                "role": "assistant",
+                "content": "checking both",
+                "tool_calls": [
+                    {"id": "a", "type": "function",
+                     "function": {"name": "one", "arguments": '{"x":1}'}},
+                    {"id": "b", "type": "function",
+                     "function": {"name": "two", "arguments": ""}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "a", "name": "one", "content": "r1"},
+            {"role": "tool", "tool_call_id": "b", "content": "r2"},
+            {"role": "user", "content": "stop"},
+        ]
+        original = copy.deepcopy(messages)
+
+        flat = flatten_tool_exchanges(messages)
+
+        assert flat == [
+            {"role": "user", "content": "go"},
+            {
+                "role": "assistant",
+                "content": 'checking both\n[Called tool: one]\n{"x":1}\n[Called tool: two]\n{}',
+            },
+            {"role": "user", "content": "[Tool result: one]\nr1\n\n[Tool result: b]\nr2"},
+            {"role": "user", "content": "stop"},
+        ]
+        assert messages == original  # the loop's own list is not touched
+
+
 class TestNativeHistory:
     def test_sync_loop_replays_native_turn_and_keeps_reasoning_ephemeral(
         self,
@@ -203,7 +250,13 @@ class TestNativeHistory:
         )
         assert '"success":false' in tool_message["content"]
 
-    def test_stagnation_injection_receives_native_exchanges(self) -> None:
+    @pytest.mark.parametrize("use_async", [False, True])
+    def test_stagnation_injection_receives_the_exchanges_as_text(
+        self, use_async: bool
+    ) -> None:
+        """The forced final answer is asked without ``tools``, so the request
+        carries no tool-call or tool-result structure either: providers refuse
+        those when no tool is declared. Nothing of the exchanges is lost."""
         llm = SequenceLLM(
             [
                 _native_call("call-one", reasoning="reason-one"),
@@ -216,22 +269,47 @@ class TestNativeHistory:
             tool_gateway=ResultGateway(),
             native_tools=True,
         )
+        context = _context()
+        context.available_tools = [
+            {
+                "tool_id": "lookup",
+                "name": "lookup",
+                "description": "look something up",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ]
 
-        result = runner.run(_context())
+        if use_async:
+            result = asyncio.run(runner.run_async(context))
+        else:
+            result = runner.run(context)
 
         assert result.success
         assert len(llm.calls) == 3
+        # The loop calls declare the tools and replay the native exchange...
+        assert llm.tools[0] and llm.tools[1]
+        _assert_native_exchange(llm.calls[1], call_id="call-one", reasoning="reason-one")
+        # ...the final one declares none and carries none.
+        assert llm.tools[2] is None
         injection_messages = llm.calls[2]
-        _assert_native_exchange(
-            injection_messages,
-            call_id="call-one",
-            reasoning="reason-one",
-        )
-        _assert_native_exchange(
-            injection_messages,
-            call_id="call-two",
-            reasoning="reason-two",
-        )
+        assert not any("tool_calls" in m or "tool_call_id" in m for m in injection_messages)
+        assert {m["role"] for m in injection_messages} <= {"system", "user", "assistant"}
+
+        assistants = [m for m in injection_messages if m["role"] == "assistant"]
+        assert [m["reasoning_content"] for m in assistants] == ["reason-one", "reason-two"]
+        assert [m["reasoning_state"] for m in assistants] == [
+            {"signature": "state-call-one"},
+            {"signature": "state-call-two"},
+        ]
+        for message in assistants:
+            assert message["content"] == '[Called tool: lookup]\n{"q":"value"}'
+        results = [
+            m for m in injection_messages
+            if m["role"] == "user" and m["content"].startswith("[Tool result: lookup]")
+        ]
+        assert len(results) == 2
+        assert all('"success":true' in m["content"] for m in results)
+
         assert injection_messages[-1]["role"] == "user"
         assert "repeating the same action" in injection_messages[-1]["content"]
 

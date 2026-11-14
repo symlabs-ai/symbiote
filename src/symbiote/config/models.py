@@ -25,11 +25,15 @@ class KernelConfig(BaseModel):
     # not cut mid-payload — the LLM treats the missing tail as nonexistent.
     # Raise loop_context_budget with it: a result larger than about half
     # the loop budget is truncated again by autocompact.
-    tool_result_max_chars: int = 2000
+    tool_result_max_chars: int = 3000
     # Token budget for the chat tool loop (system prompt + history + loop
     # messages). Past 80% of it, older loop steps are summarized; the most
     # recent tool results are kept (truncated if they alone overflow).
     loop_context_budget: int = 16_000
+    # What the kernel prepends to the user message it sends to the model (it
+    # is never persisted): "full" = timestamp and session id (the historical
+    # behaviour), "timestamp" = no session id, "off" = nothing.
+    runtime_context: Literal["full", "timestamp", "off"] = "full"
     llm_provider: str = "forge"
     agent_protocol: str = "legacy_text_v1"
     log_level: str = "INFO"

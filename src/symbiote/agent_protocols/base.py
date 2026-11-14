@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -16,6 +17,12 @@ from symbiote.environment.descriptors import (
 
 if TYPE_CHECKING:
     from symbiote.core.context import AssembledContext
+
+
+logger = logging.getLogger(__name__)
+
+# Tools whose cut result was already reported at WARNING (later cuts: DEBUG).
+_cut_reported: set[str] = set()
 
 
 class AgentProtocolError(ValueError):
@@ -159,12 +166,36 @@ def format_legacy_assistant(text: str, calls: list[ToolCall]) -> str:
     return "\n".join(parts)
 
 
-def compact_tool_result(result_text: str, max_chars: int) -> str:
-    """Apply the runner's historical per-result truncation contract."""
+def compact_tool_result(
+    result_text: str,
+    max_chars: int,
+    *,
+    tool_id: str | None = None,
+) -> str:
+    """Apply the runner's historical per-result truncation contract.
+
+    A cut is logged with the tool, the sizes and the setting that decides it
+    (never the content): the host still receives the whole result, so without
+    the log nothing tells it that the model read less. The first cut of each
+    tool is a WARNING, the following ones DEBUG.
+    """
     if len(result_text) <= max_chars:
         return result_text
     truncated = result_text[:max_chars]
     remaining = len(result_text) - max_chars
+    name = tool_id or "unknown"
+    level = logging.DEBUG if name in _cut_reported else logging.WARNING
+    _cut_reported.add(name)
+    logger.log(
+        level,
+        "tool result cut before reaching the model: tool=%s, %d chars, limit %d "
+        "(KernelConfig.tool_result_max_chars); the model does not see the last "
+        "%d. Raise tool_result_max_chars together with loop_context_budget.",
+        name,
+        len(result_text),
+        max_chars,
+        remaining,
+    )
     return f"{truncated}\n... ({remaining} chars truncated)"
 
 
@@ -183,7 +214,7 @@ def format_legacy_tool_results(
             )
         else:
             raw = f"[Tool error: {result.tool_id}]\n{result.error}"
-        parts.append(compact_tool_result(raw, max_chars))
+        parts.append(compact_tool_result(raw, max_chars, tool_id=result.tool_id))
     return "\n\n".join(parts)
 
 
@@ -285,7 +316,59 @@ def serialize_native_exchange(
                 "role": "tool",
                 "tool_call_id": result.call_id or call.call_id,
                 "name": call.tool_id,
-                "content": compact_tool_result(content, max_chars),
+                "content": compact_tool_result(
+                    content, max_chars, tool_id=call.tool_id
+                ),
             }
         )
     return messages
+
+
+def flatten_tool_exchanges(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return *messages* with structured tool exchanges rewritten as text.
+
+    For a model call made without ``tools``: several providers refuse a
+    history that carries tool-call or tool-result blocks when the request
+    declares no tool. An assistant message keeps its text followed by one
+    ``[Called tool: name]`` line per call; the ``tool`` messages that answer
+    it become one ``user`` message, as in the text protocol. Messages without
+    tool structures are returned unchanged, and *messages* is not modified.
+    """
+    flat: list[dict[str, Any]] = []
+    merging_results = False
+    for message in messages:
+        if message.get("role") == "tool":
+            name = message.get("name") or message.get("tool_call_id") or "unknown"
+            block = f"[Tool result: {name}]\n{_text_content(message)}"
+            if merging_results:
+                flat[-1]["content"] += f"\n\n{block}"
+            else:
+                flat.append({"role": "user", "content": block})
+                merging_results = True
+            continue
+        merging_results = False
+        calls = message.get("tool_calls")
+        if not calls:
+            flat.append(message)
+            continue
+        text = _text_content(message)
+        parts = [text] if text else []
+        for call in calls:
+            function = call.get("function") or {}
+            arguments = function.get("arguments") or "{}"
+            if not isinstance(arguments, str):
+                arguments = json.dumps(arguments, default=str, ensure_ascii=False)
+            parts.append(
+                f"[Called tool: {function.get('name', 'unknown')}]\n{arguments}"
+            )
+        rewritten = {k: v for k, v in message.items() if k != "tool_calls"}
+        rewritten["content"] = "\n".join(parts)
+        flat.append(rewritten)
+    return flat
+
+
+def _text_content(message: dict[str, Any]) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    return "" if content is None else json.dumps(content, default=str, ensure_ascii=False)

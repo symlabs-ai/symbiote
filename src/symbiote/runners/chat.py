@@ -7,7 +7,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Mapping
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -21,11 +21,12 @@ from symbiote.agent_protocols import (
 )
 from symbiote.agent_protocols.base import (
     compact_tool_result,
+    flatten_tool_exchanges,
     format_legacy_assistant,
     format_legacy_tool_results,
 )
 from symbiote.core.context import AssembledContext
-from symbiote.core.exceptions import is_transient_llm_error
+from symbiote.core.exceptions import ValidationError, is_transient_llm_error
 from symbiote.core.models import Message
 from symbiote.core.ports import LLMPort
 from symbiote.core.turn_control import TurnStop, check_turn
@@ -61,12 +62,14 @@ _MAX_TOOL_ITERATIONS = 10
 _MAX_VALIDATION_RETRIES = 2
 _COMPACTION_THRESHOLD = 4  # compact after this many loop-added message pairs
 _CHARS_PER_TOKEN = 4  # rough estimate for token counting
-_MICROCOMPACT_MAX_CHARS = 2000  # truncate individual tool results beyond this
+_MICROCOMPACT_MAX_CHARS = 3000  # truncate individual tool results beyond this
 _AUTOCOMPACT_THRESHOLD = 0.80  # trigger autocompact at 80% of context budget
 # Loop context budget (tokens) used by Layer 3 autocompact. The kernel passes
 # KernelConfig.loop_context_budget; this is the default for hosts that build
 # a ChatRunner directly.
 _DEFAULT_CONTEXT_BUDGET = 16000
+_RUNTIME_CONTEXT_MODES = frozenset({"full", "timestamp", "off"})
+_HISTORY_ROLES = frozenset({"user", "assistant"})
 # After autocompact, a fresh tool result is never cut below this many chars.
 _MIN_RESULT_CHARS_AFTER_AUTOCOMPACT = 2000
 _MAX_LLM_RETRIES = 3
@@ -211,7 +214,17 @@ class ChatRunner:
         agent_protocol: str | AgentProtocol | None = None,
         protocol_registry: AgentProtocolRegistry | None = None,
         token_streaming: str = "final",
+        # What is prepended to the user message sent to the model: "full"
+        # (timestamp + session id, the historical behaviour), "timestamp"
+        # (no session id) or "off" (the message goes as the user wrote it).
+        runtime_context: str = "full",
     ) -> None:
+        if runtime_context not in _RUNTIME_CONTEXT_MODES:
+            raise ValidationError(
+                f"runtime_context must be one of {sorted(_RUNTIME_CONTEXT_MODES)}, "
+                f"got {runtime_context!r}"
+            )
+        self._runtime_context = runtime_context
         self._llm = llm
         self._working_memory = working_memory
         self._tool_gateway = tool_gateway
@@ -870,11 +883,17 @@ class ChatRunner:
                     # final_text empty and triggering a deterministic
                     # fallback bubble. With tools absent the model has no
                     # choice but to text-respond.
+                    #
+                    # A request without ``tools`` must not carry structured
+                    # tool calls either: several providers refuse a history
+                    # with tool-call / tool-result blocks when no tool is
+                    # declared. The exchanges go to this call as plain text.
                     inj_kwargs = dict(kwargs)
                     inj_kwargs.pop("tools", None)
+                    inj_messages = flatten_tool_exchanges(messages)
                     try:
                         inj_response, inj_chunks = yield _Blocking(
-                            self._call_llm_sync, messages, inj_kwargs, on_token,
+                            self._call_llm_sync, inj_messages, inj_kwargs, on_token,
                             live=sink.begin_round(),
                         )
                     except Exception:
@@ -1631,6 +1650,14 @@ class ChatRunner:
                 continue
             keep = max(_MIN_RESULT_CHARS_AFTER_AUTOCOMPACT, len(content) - per_result_cut)
             if keep < len(content):
+                logger.warning(
+                    "tool result cut to fit the loop: %d of %d chars kept "
+                    "(KernelConfig.loop_context_budget=%d tokens). Raise "
+                    "loop_context_budget so the model reads the whole result.",
+                    keep,
+                    len(content),
+                    self._context_budget,
+                )
                 messages[idx] = {
                     **messages[idx],
                     "content": content[:keep]
@@ -1737,22 +1764,69 @@ class ChatRunner:
                 messages.append({"role": msg.role, "content": msg.content})
 
         # 3. Conversation history from extra_context (when working_memory is not used)
-        #    The host app (e.g. YouNews) can inject "conversation_history" as a
-        #    newline-separated list of "Role: content" lines. We promote these to
-        #    real user/assistant message pairs so the LLM sees proper multi-turn.
+        #    The host passes "conversation_history" either as a list of
+        #    {"role", "content"} turns (taken as they are) or, the older form,
+        #    as "Role: content" lines. Both become real user/assistant
+        #    messages so the LLM sees proper multi-turn.
         if self._working_memory is None and context.extra_context:
-            history_text = context.extra_context.get("conversation_history")
-            if history_text:
-                for turn in self._parse_conversation_history(history_text):
-                    messages.append(turn)
+            history = context.extra_context.get("conversation_history")
+            if history:
+                messages.extend(self._history_messages(history))
 
         # 4. Current user input (with ephemeral runtime context for the LLM)
-        user_content = inject_runtime_context(
-            context.user_input,
-            session_id=context.session_id,
-        )
+        user_content = context.user_input
+        if self._runtime_context != "off":
+            user_content = inject_runtime_context(
+                user_content,
+                session_id=(
+                    context.session_id if self._runtime_context == "full" else None
+                ),
+            )
         messages.append({"role": "user", "content": user_content})
 
+        return messages
+
+    @classmethod
+    def _history_messages(cls, history: object) -> list[dict]:
+        """Turn ``extra_context["conversation_history"]`` into messages.
+
+        A list of ``{"role": "user" | "assistant", "content": str}`` is taken
+        as it is: nothing inside a content is read as a role label, and blank
+        lines and indentation are kept. Turns with an empty content are left
+        out (providers refuse empty messages).
+
+        A string is parsed as "Label: content" lines. That form cannot tell a
+        label from a line of a message that merely starts like one ("User: "
+        pasted by the user opens a new turn), so hosts that relay text they
+        did not write should send the list.
+        """
+        if isinstance(history, str):
+            return cls._parse_conversation_history(history)
+        if not isinstance(history, (list, tuple)):
+            raise ValidationError(
+                "conversation_history must be a list of {'role', 'content'} "
+                f"turns or a string, got {type(history).__name__}"
+            )
+        messages: list[dict] = []
+        for index, turn in enumerate(history):
+            if not isinstance(turn, Mapping):
+                raise ValidationError(
+                    f"conversation_history[{index}] must be a mapping with "
+                    f"'role' and 'content', got {type(turn).__name__}"
+                )
+            role, content = turn.get("role"), turn.get("content")
+            if role not in _HISTORY_ROLES:
+                raise ValidationError(
+                    f"conversation_history[{index}].role must be 'user' or "
+                    f"'assistant', got {role!r}"
+                )
+            if not isinstance(content, str):
+                raise ValidationError(
+                    f"conversation_history[{index}].content must be a string, "
+                    f"got {type(content).__name__}"
+                )
+            if content.strip():
+                messages.append({"role": role, "content": content})
         return messages
 
     @staticmethod
@@ -1763,7 +1837,10 @@ class ChatRunner:
             Usuário: message text
             Clark: response text
 
-        Consecutive lines with the same role are merged.
+        Lines without a recognized label belong to the turn above them, with
+        their indentation and the blank lines between them. Any line that
+        starts with a recognized label opens a new turn, whoever wrote it:
+        see ``_history_messages`` for the form without that ambiguity.
         """
         messages: list[dict] = []
         role_map = {
@@ -1773,29 +1850,29 @@ class ChatRunner:
         current_role = None
         current_lines: list[str] = []
 
+        def flush() -> None:
+            # Blank lines around a turn only separate it from its neighbours.
+            content = "\n".join(current_lines).strip("\n")
+            if current_role and content:
+                messages.append({"role": current_role, "content": content})
+
         for line in text.split("\n"):
-            stripped = line.strip()
-            if not stripped:
-                continue
+            line = line.rstrip()
+            stripped = line.lstrip()
 
             # Try to parse "Role: content"
-            parsed = False
+            mapped = None
             if ": " in stripped:
                 prefix, rest = stripped.split(": ", 1)
                 mapped = role_map.get(prefix.lower())
-                if mapped:
-                    if current_role and current_lines:
-                        messages.append({"role": current_role, "content": "\n".join(current_lines)})
-                    current_role = mapped
-                    current_lines = [rest]
-                    parsed = True
+            if mapped:
+                flush()
+                current_role = mapped
+                current_lines = [rest]
+            elif current_role:
+                current_lines.append(line)
 
-            if not parsed and current_role:
-                current_lines.append(stripped)
-
-        if current_role and current_lines:
-            messages.append({"role": current_role, "content": "\n".join(current_lines)})
-
+        flush()
         return messages
 
     def _build_system(

@@ -247,6 +247,7 @@ class SymbioteKernel:
                     background_review=self._background_review_for,
                     agent_protocol=resolved_agent_protocol,
                     protocol_registry=active_protocol_registry,
+                    runtime_context=config.runtime_context,
                 )
             )
 
@@ -257,6 +258,8 @@ class SymbioteKernel:
                     llm,
                     tool_gateway=self._tool_gateway,
                     context_budget=config.loop_context_budget,
+                    tool_result_max_chars=config.tool_result_max_chars,
+                    runtime_context=config.runtime_context,
                 )
             )
 

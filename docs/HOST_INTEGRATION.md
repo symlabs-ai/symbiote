@@ -573,13 +573,13 @@ internal runner **without** working-memory wired. So multi-turn recall is the
 # Fetch the recent transcript and inject it each turn so the bot remembers.
 def build_history(kernel, session_id, n=12):
     # get_messages returns NEWEST-FIRST (ORDER BY created_at DESC), so reverse
-    # to chronological order before formatting.
+    # to chronological order.
     msgs = kernel._message_repo.get_messages(session_id, limit=n)
-    lines = []
-    for m in reversed(msgs):
-        label = "Usuário" if m.role == "user" else "Assistant"
-        lines.append(f"{label}: {m.content}")
-    return "\n".join(lines)
+    return [
+        {"role": m.role, "content": m.content}
+        for m in reversed(msgs)
+        if m.role in ("user", "assistant")
+    ]
 
 response = kernel.message(
     session_id,
@@ -588,19 +588,76 @@ response = kernel.message(
 )
 ```
 
-**Exact format the parser expects** (`ChatRunner._parse_conversation_history`):
-- One `"Label: content"` per line; lines without a recognized label are merged
-  into the previous turn (so multi-line messages work).
-- Recognized labels (case-insensitive): user side = `usuário` / `usuario` /
-  `user`; assistant side = `assistant` / `clark`. Anything else is ignored as a
-  label and folded into the prior turn — so **use one of those labels** or your
-  turns won't be attributed to a role.
-- The kernel promotes these into real `user`/`assistant` message pairs (not a
-  text blob), so the LLM sees proper multi-turn structure.
+**Structured form (use this one).** A list of `{"role", "content"}` turns:
+- `role` is `"user"` or `"assistant"`; `content` is a string. Anything else
+  raises `ValidationError` naming the offending turn.
+- Each content goes to the model exactly as given: blank lines and
+  indentation are kept, and nothing inside it is read as a role label. Turns
+  whose content is empty are left out.
+- The order is yours: the kernel does not sort, merge or deduplicate turns,
+  and it appends the current user message after them.
 
-> Roadmap: a structured `conversation_history` (list of `{"role", "content"}`)
-> and an opt-in auto-injection flag are under consideration so memory is the
-> default for chat hosts. Until then, inject it explicitly — it is required.
+**Text form (older hosts).** A string of `"Label: content"` lines, parsed by
+`ChatRunner._parse_conversation_history`:
+- Recognized labels (case-insensitive): user side = `usuário` / `usuario` /
+  `user`; assistant side = `assistant` / `clark`. Lines without one of them
+  belong to the turn above, with their indentation and inner blank lines.
+- **Any** line that starts with a recognized label opens a new turn, whoever
+  wrote it. If a user pastes a log containing `Assistant: already confirmed`,
+  the model receives that line as something the assistant said. The text form
+  cannot tell the two apart; a host that relays text it did not write (which
+  is every chat host) should send the structured form.
+
+> Roadmap: an opt-in auto-injection flag is under consideration so memory is
+> the default for chat hosts. Until then, inject the history explicitly.
+
+### What the kernel adds to the user message
+
+Before the model call the kernel prepends a small block to the current user
+message: the host's local time with its UTC offset, and the session id. The
+block is not persisted (the stored message is the one the user wrote), but it
+does reach the model provider. `KernelConfig.runtime_context` controls it:
+
+| Value | What the model receives before the message |
+|---|---|
+| `"full"` (default) | timestamp and session id |
+| `"timestamp"` | timestamp only: the session id stays inside the host |
+| `"off"` | nothing: the message as the user wrote it |
+
+### Sizing tool results
+
+Two settings decide how much of a tool result the model reads, and they have
+to be raised together:
+
+- `tool_result_max_chars` (default `3000`): ceiling per result. What exceeds
+  it is cut and replaced by `... (N chars truncated)`; the model cannot see
+  the tail and will treat it as nonexistent. The default suits short status
+  payloads; a host whose tools return API listings needs more.
+  **The host is not cut:** `tool_results` in the turn's return carries the
+  whole output, so the difference only shows in the log. The first cut of
+  each tool is logged at WARNING by `symbiote.agent_protocols.base` (tool,
+  sizes and this setting's name, never the content); later ones at DEBUG.
+- `loop_context_budget` (default `16000` tokens, about 4 characters each):
+  when the turn's messages pass 80% of it, older tool steps are summarized
+  and, if that is not enough, the results of the latest step are cut again.
+
+A single result should fit in half of that 80%, so keep
+`loop_context_budget >= tool_result_max_chars * 0.625` at the very least (the
+kernel logs a warning at startup when it is not). That minimum only holds two
+full results and nothing else, so leave room for the system prompt, the
+history and the earlier steps: with `tool_result_max_chars=30000` the minimum
+is 18,750 tokens, and something like 48,000 to 64,000 is a realistic pairing.
+The same ceiling applies inside the blocks of `tool_mode="long_run"`.
+
+### When the tool loop is stopped
+
+When a turn reaches `max_tool_iterations`, stagnates or trips the circuit
+breaker, the kernel asks the model for a final answer in one last call made
+**without** the tool list, so that it answers in text. That call carries the
+turn's tool exchanges as plain text (`[Called tool: name]` / `[Tool result:
+name]`), never as structured tool-call blocks: providers such as Anthropic
+and Bedrock refuse a history with tool blocks when the request declares no
+tool.
 
 ---
 

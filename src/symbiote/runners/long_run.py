@@ -128,7 +128,13 @@ class LongRunRunner:
         on_block_complete: Callable[[BlockResult], None] | None = None,
         on_plan: Callable[[LongRunPlan], None] | None = None,
         on_before_tool_call: Callable[[str, dict, str], bool] | None = None,
+        *,
+        # Handed to the ChatRunner of each block (see ChatRunner).
+        tool_result_max_chars: int | None = None,
+        runtime_context: str = "full",
     ) -> None:
+        self._tool_result_max_chars = tool_result_max_chars
+        self._runtime_context = runtime_context
         self._llm = llm
         self._working_memory = working_memory
         self._tool_gateway = tool_gateway
@@ -517,6 +523,9 @@ class LongRunRunner:
         from symbiote.runners.chat import ChatRunner
 
         # Create a brief-mode ChatRunner for this block
+        limits: dict = {}
+        if self._tool_result_max_chars is not None:
+            limits["tool_result_max_chars"] = self._tool_result_max_chars
         runner = ChatRunner(
             llm=self._llm,
             working_memory=None,  # managed at long-run level
@@ -524,6 +533,8 @@ class LongRunRunner:
             consolidator=self._consolidator,
             native_tools=self._native_tools,
             context_budget=self._context_budget,
+            runtime_context=self._runtime_context,
+            **limits,
             # High-risk tools inside a block go through the same human gate
             # as a plain chat turn.
             on_before_tool_call=self._on_before_tool_call,
