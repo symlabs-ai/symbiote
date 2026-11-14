@@ -51,7 +51,13 @@ def _optional_dependency_missing(module: str) -> bool:
 def test_doc_imports_resolve(doc: str, module: str, name: str) -> None:
     if _optional_dependency_missing(module):
         pytest.skip(f"{module} not installed")
-    mod = importlib.import_module(module)
+    try:
+        mod = importlib.import_module(module)
+    except ImportError as exc:
+        # A module of ours that needs an optional extra (``symbiote[postgres]``).
+        if "symbiote[" in str(exc):
+            pytest.skip(str(exc))
+        raise
     if name and not hasattr(mod, name):
         importlib.import_module(f"{module}.{name}")  # a submodule is fine too
 

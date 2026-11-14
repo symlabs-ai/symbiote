@@ -78,7 +78,8 @@ warn_unused_configs = true
 # Optional / untyped dependencies.
 module = [
     "yaml", "forge_llm", "forge_llm.*", "forge_scraper",
-    "playwright", "playwright.*", "tomli",
+    "playwright", "playwright.*", "psycopg", "psycopg.*",
+    "psycopg_pool", "psycopg_pool.*", "tomli",
 ]
 ignore_missing_imports = true
 

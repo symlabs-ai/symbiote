@@ -19,7 +19,8 @@ from symbiote.knowledge.service import KnowledgeService
 from symbiote.memory.store import MemoryStore
 from tests.support import postgres_mode
 
-pytest.importorskip("psycopg")
+pytest.importorskip("psycopg", exc_type=ImportError)
+pytest.importorskip("psycopg_pool", exc_type=ImportError)
 
 from symbiote.adapters.storage.postgres import PostgresAdapter, translate  # noqa: E402
 from symbiote.adapters.storage.postgres_migrations import SCHEMA_VERSION  # noqa: E402
