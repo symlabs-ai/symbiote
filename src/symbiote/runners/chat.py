@@ -7,7 +7,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -154,6 +154,31 @@ def _on_loop_thread(
         loop.call_soon_threadsafe(callback, token)
 
     return forward
+
+
+class _Blocking:
+    """Loop request: call ``fn(*args, **kwargs)``, which may block (a model
+    call, the approval callback)."""
+
+    __slots__ = ("args", "fn", "kwargs")
+
+    def __init__(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
+        self.fn = fn
+        self.args = args
+        self.kwargs = kwargs
+
+
+class _ToolCalls:
+    """Loop request: execute these (approved) tool calls through the gateway."""
+
+    __slots__ = ("calls", "context")
+
+    def __init__(self, calls: list[ToolCall], context: AssembledContext) -> None:
+        self.calls = calls
+        self.context = context
+
+
+_LoopRequest = _Blocking | _ToolCalls
 
 
 class ChatRunner:
@@ -546,6 +571,24 @@ class ChatRunner:
         llm_config: dict | None = None,
     ) -> RunResult:
         """Full loop execution for brief/continuous modes."""
+        return self._drive(self._loop_steps(context, on_token, llm_config))
+
+    def _loop_steps(
+        self,
+        context: AssembledContext,
+        on_token: Callable[[str], None] | None = None,
+        llm_config: dict | None = None,
+    ) -> Generator[_LoopRequest, Any, RunResult]:
+        """The tool loop of brief/continuous modes, without I/O.
+
+        A generator: wherever the loop needs something slow (a model call,
+        the approval callback, the execution of tool calls) it yields a
+        request and receives the result, or the exception, back. ``_drive``
+        serves the requests on the calling thread and ``_drive_async`` on
+        the event loop, so ``run()`` and ``run_async()`` share this one body
+        and cannot drift apart. Everything else (callbacks, ``on_token``,
+        bookkeeping) runs on the thread that drives the generator.
+        """
         prepared = self._prepare_protocol_turn(context, llm_config)
         protocol_state = prepared.state
         messages = self._build_messages(
@@ -580,7 +623,9 @@ class ChatRunner:
                 self._on_progress("iteration_start", iteration + 1, max_iters)
 
             try:
-                response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
+                response, buffered_chunks = yield _Blocking(
+                    self._call_llm_with_retry, messages, kwargs, on_token
+                )
             except Exception as exc:
                 # Totals are normally filled after the loop; fill them here
                 # so a failed turn still records what it did.
@@ -610,7 +655,8 @@ class ChatRunner:
             # Only validate when there are no tool calls (a tool-call
             # response is intentionally structured and not meant for the user).
             if not tool_calls:
-                clean_text, buffered_chunks = self._validate_and_fix(
+                clean_text, buffered_chunks = yield _Blocking(
+                    self._validate_and_fix,
                     clean_text,
                     buffered_chunks,
                     messages,
@@ -645,10 +691,17 @@ class ChatRunner:
                 tool_calls, schema_cache, context.tool_loading,
             )
 
-            # Approval gate: check high-risk tools before execution
-            approved_calls, denial_results = self._check_approval(
-                remaining_calls, context
-            )
+            # Approval gate: check high-risk tools before execution. The
+            # callback is synchronous and may wait for a human, so it is a
+            # blocking request (a worker thread under the async driver).
+            if self._on_before_tool_call is not None:
+                approved_calls, denial_results = yield _Blocking(
+                    self._check_approval, remaining_calls, context
+                )
+            else:
+                approved_calls, denial_results = self._check_approval(
+                    remaining_calls, context
+                )
 
             if self._on_progress is not None:
                 self._on_progress("tool_start", iteration + 1, max_iters)
@@ -656,12 +709,7 @@ class ChatRunner:
             step_start = time.monotonic()
             gateway_results: list[ToolCallResult] = []
             if approved_calls:
-                exec_results = self._tool_gateway.execute_tool_calls(
-                    symbiote_id=context.symbiote_id,
-                    session_id=context.session_id,
-                    calls=approved_calls,
-                    timeout=context.tool_call_timeout,
-                )
+                exec_results = yield _ToolCalls(approved_calls, context)
                 exec_results = self._correlate_tool_results(
                     approved_calls,
                     exec_results,
@@ -703,6 +751,10 @@ class ChatRunner:
                     error=tr.error,
                     elapsed_ms=step_elapsed,
                 ))
+                logger.info(
+                    "[tool-loop] iter=%d tool=%s success=%s elapsed=%dms",
+                    iteration + 1, tc.tool_id, tr.success, step_elapsed,
+                )
                 controller.record(tc.tool_id, tc.params, tr.success)
             controller.end_round()
 
@@ -753,7 +805,9 @@ class ChatRunner:
                     inj_kwargs = dict(kwargs)
                     inj_kwargs.pop("tools", None)
                     try:
-                        inj_response, inj_chunks = self._call_llm_sync(messages, inj_kwargs, on_token)
+                        inj_response, inj_chunks = yield _Blocking(
+                            self._call_llm_sync, messages, inj_kwargs, on_token
+                        )
                     except Exception:
                         pass  # keep the last final_text
                     else:
@@ -861,306 +915,65 @@ class ChatRunner:
                 _on_loop_thread(asyncio.get_running_loop(), on_token),
                 llm_config=llm_config,
             )
-        prepared = self._prepare_protocol_turn(context, llm_config)
-        protocol_state = prepared.state
-        messages = self._build_messages(
-            context,
-            native_tools=prepared.native_tools,
-        )
-        kwargs = prepared.to_llm_kwargs()
-        max_iters = self._resolve_max_iters(context)
-        initial_msg_count = len(messages)
-        controller = LoopController(
-            max_iterations=max_iters,
-            stagnation_msg=context.injection_stagnation_override,
-            circuit_breaker_msg=context.injection_circuit_breaker_override,
-        )
+        return await self._drive_async(self._loop_steps(context, on_token, llm_config))
 
-        all_tool_results: list[ToolCallResult] = []
-        schema_cache: dict[str, dict] = {}  # loop-local cache for index mode
-        trace = LoopTrace(tool_mode=context.tool_mode)
-        final_text = ""
-        loop_start = time.monotonic()
-        loop_timeout = context.loop_timeout
-        rounds = 0  # model rounds actually executed (LLM calls in the loop)
+    # ── drivers of ``_loop_steps`` ─────────────────────────────────────
 
-        for iteration in range(max_iters):
-            # Check loop timeout before each iteration
-            if time.monotonic() - loop_start > loop_timeout:
-                logger.info("[tool-loop] loop timeout exceeded (%.1fs)", loop_timeout)
-                trace.stop_reason = "timeout"
-                break
-
-            if self._on_progress is not None:
-                self._on_progress("iteration_start", iteration + 1, max_iters)
-
-            try:
-                response, buffered_chunks = await asyncio.to_thread(
-                    self._call_llm_with_retry, messages, kwargs, on_token
-                )
-            except Exception as exc:
-                # Totals are normally filled after the loop; fill them here
-                # so a failed turn still records what it did.
-                trace.total_iterations = rounds
-                trace.total_tool_calls = len(trace.steps)
-                trace.total_elapsed_ms = int((time.monotonic() - loop_start) * 1000)
-                trace.stop_reason = trace.stop_reason or "error"
-                return self._complete_protocol_run(
-                    RunResult(
-                        success=False,
-                        error=str(exc),
-                        runner_type=self.runner_type,
-                        loop_trace=trace,
-                    ),
-                    prepared,
-                )
-            rounds += 1
-
-            clean_text, tool_calls = self._parse_response(response)
-            self._validate_protocol_response(
-                response,
-                tool_calls,
-                protocol_state,
-            )
-
-            # ── Response validation ───────────────────────────────────────
-            if not tool_calls:
-                clean_text, buffered_chunks = await asyncio.to_thread(
-                    self._validate_and_fix,
-                    clean_text,
-                    buffered_chunks,
-                    messages,
-                    kwargs,
-                    protocol_state=protocol_state,
-                )
-
-            final_text = clean_text
-
-            # Emit intermediate text via on_stream for ALL iterations
-            if self._on_stream is not None and clean_text:
-                self._on_stream(clean_text, iteration + 1)
-
-            # Release tokens to the caller after validation.
-            if on_token is not None and not tool_calls:
-                if buffered_chunks is not None:
-                    for chunk in buffered_chunks:
-                        on_token(chunk)
+    def _drive(self, steps: Generator[_LoopRequest, Any, RunResult]) -> RunResult:
+        """Serve the loop's requests on the calling thread."""
+        try:
+            request = next(steps)
+            while True:
+                try:
+                    value = self._serve(request)
+                except BaseException as exc:  # noqa: BLE001 - handed to the loop
+                    request = steps.throw(exc)
                 else:
-                    on_token(clean_text)
+                    request = steps.send(value)
+        except StopIteration as done:
+            result: RunResult = done.value
+            return result
 
-            if not tool_calls or self._tool_gateway is None:
-                if self._on_progress is not None:
-                    self._on_progress("iteration_end", iteration + 1, max_iters)
-                break
+    async def _drive_async(
+        self, steps: Generator[_LoopRequest, Any, RunResult]
+    ) -> RunResult:
+        """Serve the loop's requests without blocking the event loop."""
+        try:
+            request = next(steps)
+            while True:
+                try:
+                    value = await self._serve_async(request)
+                except BaseException as exc:  # noqa: BLE001 - handed to the loop
+                    request = steps.throw(exc)
+                else:
+                    request = steps.send(value)
+        except StopIteration as done:
+            result: RunResult = done.value
+            return result
 
-            # Schema cache: intercept repeated get_tool_schema in index mode
-            cached_results, remaining_calls = self._split_cached_schema_calls(
-                tool_calls, schema_cache, context.tool_loading,
+    def _serve(self, request: _LoopRequest) -> Any:
+        if isinstance(request, _ToolCalls):
+            assert self._tool_gateway is not None
+            return self._tool_gateway.execute_tool_calls(
+                symbiote_id=request.context.symbiote_id,
+                session_id=request.context.session_id,
+                calls=request.calls,
+                timeout=request.context.tool_call_timeout,
             )
+        return request.fn(*request.args, **request.kwargs)
 
-            # Approval gate: check high-risk tools before execution. The
-            # callback is synchronous and may wait for a human, so it runs in
-            # a worker thread instead of blocking this event loop.
-            if self._on_before_tool_call is not None:
-                approved_calls, denial_results = await asyncio.to_thread(
-                    self._check_approval, remaining_calls, context
-                )
-            else:
-                approved_calls, denial_results = self._check_approval(
-                    remaining_calls, context
-                )
-
-            if self._on_progress is not None:
-                self._on_progress("tool_start", iteration + 1, max_iters)
-
-            step_start = time.monotonic()
-            gateway_results: list[ToolCallResult] = []
-            if approved_calls:
-                exec_results = await self._tool_gateway.execute_tool_calls_async(
-                    symbiote_id=context.symbiote_id,
-                    session_id=context.session_id,
-                    calls=approved_calls,
-                    timeout=context.tool_call_timeout,
-                )
-                exec_results = self._correlate_tool_results(
-                    approved_calls,
-                    exec_results,
-                )
-                gateway_results.extend(exec_results)
-            step_elapsed = int((time.monotonic() - step_start) * 1000)
-
-            if self._on_progress is not None:
-                self._on_progress("tool_end", iteration + 1, max_iters)
-
-            remaining_results = self._merge_tool_results(
-                remaining_calls,
-                denial_results,
-                gateway_results,
+    async def _serve_async(self, request: _LoopRequest) -> Any:
+        if isinstance(request, _ToolCalls):
+            assert self._tool_gateway is not None
+            return await self._tool_gateway.execute_tool_calls_async(
+                symbiote_id=request.context.symbiote_id,
+                session_id=request.context.session_id,
+                calls=request.calls,
+                timeout=request.context.tool_call_timeout,
             )
-
-            # Update schema cache with new results
-            self._update_schema_cache(
-                remaining_calls,
-                remaining_results,
-                schema_cache,
-            )
-
-            # Merge cached + gateway results in original order
-            results = self._merge_tool_results(
-                tool_calls,
-                cached_results,
-                remaining_results,
-            )
-            all_tool_results.extend(results)
-
-            # Record trace for each tool call
-            for tc, tr in zip(tool_calls, results, strict=False):
-                step = LoopStep(
-                    iteration=iteration + 1,
-                    tool_id=tc.tool_id,
-                    params=tc.params,
-                    success=tr.success,
-                    error=tr.error,
-                    elapsed_ms=step_elapsed,
-                )
-                trace.steps.append(step)
-                logger.info(
-                    "[tool-loop] iter=%d tool=%s success=%s elapsed=%dms",
-                    iteration + 1, tc.tool_id, tr.success, step_elapsed,
-                )
-
-                # Record in loop controller
-                controller.record(tc.tool_id, tc.params, tr.success)
-            controller.end_round()
-
-            # Hook: let the caller decide whether tool results end the loop
-            # (same contract as run()).
-            if self._on_after_tool_result is not None:
-                hook_text = self._on_after_tool_result(tool_calls, results)
-                if hook_text is not None:
-                    trace.stop_reason = "on_after_tool_result"
-                    final_text = hook_text
-                    if self._on_progress is not None:
-                        self._on_progress("iteration_end", iteration + 1, max_iters)
-                    break
-
-            # Skill review nudge (same cadence as run()).
-            self._maybe_nudge_skill_review(context)
-
-            # Check loop health — stop early on stagnation or circuit breaker
-            should_stop, stop_reason = controller.should_stop()
-            if should_stop:
-                trace.stop_reason = stop_reason
-                injection = controller.get_injection_message()
-                if stop_reason == "max_iterations" and not context.tool_loop:
-                    # Single-shot turn (tool_loop disabled): the host takes
-                    # the tool results as they are; no follow-up model call.
-                    injection = None
-                if injection:
-                    self._append_tool_exchange(
-                        messages,
-                        response,
-                        clean_text,
-                        tool_calls,
-                        results,
-                        protocol_state=protocol_state,
-                    )
-                    messages.append({"role": "user", "content": injection})
-                    # Drop ``tools`` from kwargs for the injection call so
-                    # the LLM is forced to emit assistant text rather than
-                    # yet-another tool_call. Observed in sym_talk_lt
-                    # 2026-05-27: stagnation fired correctly, but the
-                    # injection call still had tools exposed and Sonnet
-                    # emitted one more tool_call instead of text, leaving
-                    # final_text empty and triggering a deterministic
-                    # fallback bubble. With tools absent the model has no
-                    # choice but to text-respond.
-                    inj_kwargs = dict(kwargs)
-                    inj_kwargs.pop("tools", None)
-                    try:
-                        inj_response, inj_chunks = await asyncio.to_thread(
-                            self._call_llm_sync, messages, inj_kwargs, on_token
-                        )
-                    except Exception:
-                        pass  # keep the last final_text
-                    else:
-                        inj_text, inj_calls = self._parse_response(inj_response)
-                        self._validate_protocol_response(
-                            inj_response,
-                            inj_calls,
-                            protocol_state,
-                        )
-                        # A reply that still asks for tools ignored the stop
-                        # instruction; its text is narration, not an answer.
-                        final_text = inj_text if not inj_calls else ""
-                        if on_token is not None:
-                            if inj_chunks is not None:
-                                for chunk in inj_chunks:
-                                    on_token(chunk)
-                            else:
-                                on_token(inj_text)
-                break
-
-            self._append_tool_exchange(
-                messages,
-                response,
-                clean_text,
-                tool_calls,
-                results,
-                protocol_state=protocol_state,
-            )
-
-            # Layer 2: compact old loop messages to prevent context growth
-            self._compact_loop_messages(messages, initial_msg_count)
-            # Layer 3: aggressive autocompact if approaching context budget
-            self._autocompact_if_needed(messages, initial_msg_count)
-
-            if self._on_progress is not None:
-                self._on_progress("iteration_end", iteration + 1, max_iters)
-
-        trace.total_iterations = rounds if context.tool_loop else 0
-        trace.total_tool_calls = len(trace.steps)
-        trace.total_elapsed_ms = int((time.monotonic() - loop_start) * 1000)
-        if trace.stop_reason is None:
-            trace.stop_reason = "end_turn" if trace.total_iterations > 0 else None
-        final_text = self._ensure_final_text(
-            final_text,
-            trace.stop_reason,
-            bool(all_tool_results) and context.tool_loop,
-            on_token,
-        )
-
-        if self._working_memory is not None:
-            if all_tool_results:
-                summary = self._build_loop_summary(all_tool_results)
-                memory_text = f"{summary}\n\n{final_text}"
-            else:
-                memory_text = final_text
-            self._working_memory.update_message(
-                Message(session_id=context.session_id, role="assistant", content=memory_text)
-            )
-            if self._consolidator is not None:
-                self._consolidator.consolidate_if_needed(self._working_memory, context.symbiote_id)
-
-        output: str | dict[str, Any] = final_text
-        if all_tool_results:
-            output = {"text": final_text, "tool_results": [r.model_dump() for r in all_tool_results]}
-
-        if trace.steps:
-            logger.info(
-                "[tool-loop] completed: %d iterations, %d tool calls, %dms total",
-                trace.total_iterations, trace.total_tool_calls, trace.total_elapsed_ms,
-            )
-
-        return self._complete_protocol_run(
-            RunResult(
-                success=True,
-                output=output,
-                runner_type=self.runner_type,
-                loop_trace=trace if trace.steps else None,
-            ),
-            prepared,
-        )
+        # The LLM adapter and the approval callback are synchronous: a
+        # worker thread keeps other sessions on this event loop running.
+        return await asyncio.to_thread(request.fn, *request.args, **request.kwargs)
 
     def _check_approval(
         self,
