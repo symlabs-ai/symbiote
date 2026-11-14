@@ -321,7 +321,7 @@ class TestFailureModes:
         adapter.execute(
             "INSERT INTO execution_traces (id, session_id, symbiote_id, total_iterations, "
             "total_tool_calls, total_elapsed_ms, stop_reason, steps_json, tool_mode, created_at) "
-            "VALUES (?, ?, ?, 3, 3, 10, 'end_turn', ?, 'brief', datetime('now'))",
+            "VALUES (?, ?, ?, 3, 3, 10, 'end_turn', ?, 'brief', CURRENT_TIMESTAMP)",
             (str(uuid4()), session_id, symbiote_id, json.dumps(steps)),
         )
         llm = _RecordingLLM("[]")
