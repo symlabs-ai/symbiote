@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.3] - 2026-11-14
+
+Streaming token a token e endpoint SSE de chat, conferência de contagens no long-run e o retorno do SymGateway sobre a 0.8.2: histórico estruturado, resposta final sem tools aceita por qualquer provedor e limites de resultado visíveis ao host.
+
+**Mudança de padrão:** `tool_result_max_chars` passa de 2.000 para 3.000 caracteres.
+
 ### Novas funcionalidades
 
 - feat(kernel): streaming token a token (B-73). `kernel.set_token_streaming("live")` faz o `on_token` receber o texto enquanto o modelo escreve, em todas as rodadas do loop de tools, e não mais só a resposta final validada de uma vez. A narração antes de uma tool call aparece; a marcação da chamada (bloco `tool_call`, JSON `{"tool": ...}` solto) é retida e descartada. As rodadas são separadas por uma linha em branco, e o valor devolvido por `message_async` continua sendo a resposta oficial (quando a validação troca uma resposta, a nova vem como parágrafo novo). O padrão continua `"final"`, sem mudança para hosts existentes. `ForgeLLMAdapter(..., stream_tool_calls=True)` transmite também com tools nativas, montando as tool calls a partir do stream (desligado por padrão: o Groq não monta tool calls em stream e o stream não traz o estado de raciocínio que o `poolside_laguna_v1` reenvia). Ver `docs/HOST_INTEGRATION.md`, "Token Streaming".
@@ -30,6 +36,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ### Outros
 
+- ci: o estágio `quality` da imagem (o gate do deploy de staging) copia `QUICKSTART.md` e `docs/HOST_INTEGRATION.md`; sem eles o teste que confere os exemplos dos guias quebrava na coleta dentro do container.
 - docs(host): `HOST_INTEGRATION.md` descreve a forma estruturada do histórico e o limite da forma em texto, o bloco acrescentado à mensagem do usuário, como dimensionar `tool_result_max_chars` junto com `loop_context_budget` (o padrão, agora 3.000 caracteres, ainda corta respostas de API grandes; `loop_context_budget >= tool_result_max_chars * 0,625` é o mínimo) e a chamada final sem tools.
 
 ## [v0.8.2] - 2026-11-13
