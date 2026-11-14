@@ -661,11 +661,59 @@ async def handle_message(session_id: str, content: str):
     return response
 ```
 
-What `on_token` receives: the text of the **final** reply only, after the
-runner has validated it (tool-call turns emit nothing). The adapter's stream is
-buffered for that validation, so the tokens arrive as a burst when the model
-finishes, not as it writes. Use the progress callbacks and tool hooks below to
-show activity while the loop runs.
+What `on_token` receives depends on `kernel.set_token_streaming(mode)`:
+
+| Mode | What reaches `on_token` |
+|------|-------------------------|
+| `"final"` (default) | The text of the **final** reply only, after the runner has validated it (tool-call rounds emit nothing). The adapter's stream is buffered for that validation, so the tokens arrive as a burst when the model finishes. |
+| `"live"` | The text **as the model writes it**, in every round of the tool loop. The narration before a tool call ("let me check...") is shown; the tool-call markup itself (a `tool_call` fence, a bare `{"tool": ...}` object) is held back and dropped. Rounds are separated by a blank line. |
+
+```python
+kernel.set_token_streaming("live")
+```
+
+In `"live"` mode the concatenated tokens are not always the answer: they carry
+the narration of earlier rounds, and when validation rejects a reply (empty,
+leaked tool JSON) its replacement follows as a new paragraph, since what was
+sent cannot be taken back. The value `message_async` returns is the
+authoritative answer; a UI should replace the streamed text with it when the
+turn ends (`<symbiote-chat>` does this on `response_done`).
+
+Token by token needs an adapter with `stream()`. `ForgeLLMAdapter` streams
+text-mode turns; with native tools (`set_native_tools(True)`) it falls back to
+one complete call unless built with `ForgeLLMAdapter(..., stream_tool_calls=True)`,
+which streams the text and collects the tool calls from the stream. Leave it off
+for providers that do not assemble tool calls in a stream (Groq) and for agent
+protocols that replay the reasoning state (`poolside_laguna_v1`): the stream
+does not carry it. `SymGatewayLLMAdapter` does not stream. Use the progress
+callbacks and tool hooks below to show activity while the loop runs.
+
+### Streaming over HTTP
+
+`POST /sessions/{session_id}/chat/stream` takes the body of `POST /chat` and
+answers with Server-Sent Events (`data` is JSON):
+
+| Event | Data |
+|-------|------|
+| `token` | `{"text": ...}`: a piece of the answer |
+| `done` | `{"response": ..., "session_id": ...}`: the body `POST /chat` returns; `response` is authoritative |
+| `error` | `{"status": ..., "detail": ...}`: the turn failed; `status` is what `POST /chat` would answer (409 busy or cancelled, 500, ...) |
+
+Access and LLM checks answer with plain HTTP errors (401/403/404/503) before
+the stream starts. If the client disconnects mid-turn, the turn is cancelled
+(`kernel.cancel_turn`). The API server streams `live` by default;
+`SYMBIOTE_TOKEN_STREAMING=final` sends only the validated answer. The SDK reads
+it with `chat_stream`:
+
+```python
+from symbiote.sdk import SymbioteClient, SymbioteStreamError
+
+for event in client.chat_stream(session_id=sid, content="Resuma minha semana"):
+    if event["event"] == "token":
+        print(event["text"], end="", flush=True)
+    elif event["event"] == "done":
+        answer = event["response"]
+```
 
 ### Mid-Loop Progress Callbacks
 
@@ -944,6 +992,14 @@ kernel.environment.configure(
     context_strategy="hybrid",  # compaction within blocks, reset between
     max_blocks=15,
 )
+
+# The evaluator receives the tool calls the block really ran (per-tool totals
+# plus a digest) and lists in "count_claims" every count the block's output
+# states ("created 24 tasks"). The runtime checks each one against the
+# successful calls of that tool; a mismatch fails the block (score capped at
+# 0.5) whatever the evaluator scored, and the retry is told to fix the report,
+# not to repeat or undo calls. A host evaluator_prompt keeps this: the request
+# goes in the evaluation message, not in the system prompt.
 
 # continuous: Always-on agent (placeholder, not yet implemented)
 kernel.environment.configure(symbiote_id=sym.id, tool_mode="continuous")

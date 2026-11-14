@@ -48,6 +48,7 @@ from symbiote.runners.response_validator import (
     is_valid_response,
     reformulate_message,
 )
+from symbiote.runners.token_stream import TOKEN_STREAMING_MODES, TokenSink
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +210,7 @@ class ChatRunner:
         skill_nudge_interval: int = 10,
         agent_protocol: str | AgentProtocol | None = None,
         protocol_registry: AgentProtocolRegistry | None = None,
+        token_streaming: str = "final",
     ) -> None:
         self._llm = llm
         self._working_memory = working_memory
@@ -228,6 +230,8 @@ class ChatRunner:
             protocol_registry or create_default_protocol_registry()
         )
         self._agent_protocol = self._protocol_registry.resolve(agent_protocol)
+        self._token_streaming = "final"
+        self.set_token_streaming(token_streaming)
 
     def can_handle(self, intent: str) -> bool:
         return intent in _HANDLED_INTENTS
@@ -262,6 +266,17 @@ class ChatRunner:
     def set_native_tools(self, enabled: bool) -> None:
         """Use the provider's structured tool calls instead of text parsing."""
         self._native_tools = enabled
+
+    def set_token_streaming(self, mode: str) -> None:
+        """How text reaches ``on_token``: ``"final"`` or ``"live"``.
+
+        See ``symbiote.runners.token_stream``.
+        """
+        if mode not in TOKEN_STREAMING_MODES:
+            raise ValueError(
+                f"token_streaming must be one of {TOKEN_STREAMING_MODES}, got {mode!r}"
+            )
+        self._token_streaming = mode
 
     def set_agent_protocol(
         self,
@@ -445,10 +460,13 @@ class ChatRunner:
         )
         kwargs = prepared.to_llm_kwargs()
         loop_start = time.monotonic()
+        sink = TokenSink(on_token, self._token_streaming)
 
         # Single LLM call with retry
         try:
-            response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
+            response, buffered_chunks = self._call_llm_with_retry(
+                messages, kwargs, on_token, sink
+            )
         except Exception as exc:
             return self._complete_protocol_run(
                 RunResult(
@@ -531,7 +549,9 @@ class ChatRunner:
                 )
 
                 try:
-                    final_response, buffered_chunks = self._call_llm_with_retry(messages, kwargs, on_token)
+                    final_response, buffered_chunks = self._call_llm_with_retry(
+                        messages, kwargs, on_token, sink
+                    )
                 except Exception:
                     pass  # keep the tool-call text as final
                 else:
@@ -546,12 +566,7 @@ class ChatRunner:
         # The buffered chunks are the raw stream of the last model call; when
         # that call carried a tool_call block (and no final call replaced
         # it), they differ from the clean text, so the clean text is sent.
-        if on_token is not None:
-            if buffered_chunks is not None and "".join(buffered_chunks).strip() == clean_text.strip():
-                for chunk in buffered_chunks:
-                    on_token(chunk)
-            else:
-                on_token(clean_text)
+        sink.release(clean_text, buffered_chunks, exact=True)
 
         # Save to working memory (no loop summary — nothing to summarize)
         if self._working_memory is not None:
@@ -665,6 +680,7 @@ class ChatRunner:
         loop_start = time.monotonic()
         loop_timeout = context.loop_timeout
         rounds = 0  # model rounds actually executed (LLM calls in the loop)
+        sink = TokenSink(on_token, self._token_streaming)
 
         for iteration in range(max_iters):
             # Check loop timeout before each iteration
@@ -678,7 +694,7 @@ class ChatRunner:
 
             try:
                 response, buffered_chunks = yield _Blocking(
-                    self._call_llm_with_retry, messages, kwargs, on_token
+                    self._call_llm_with_retry, messages, kwargs, on_token, sink
                 )
             except Exception as exc:
                 # Totals are normally filled after the loop; fill them here
@@ -725,16 +741,13 @@ class ChatRunner:
             if self._on_stream is not None and clean_text:
                 self._on_stream(clean_text, iteration + 1)
 
-            # Release tokens to the caller after validation.
-            # When tool calls are present, suppress intermediate narration
-            # (e.g. "Vou verificar...") — only the final response should
-            # reach the user for a natural conversation experience.
-            if on_token is not None and not tool_calls:
-                if buffered_chunks is not None:
-                    for chunk in buffered_chunks:
-                        on_token(chunk)
-                else:
-                    on_token(clean_text)
+            # Release tokens to the caller after validation. In "final" mode
+            # the narration of a tool-call round (e.g. "Vou verificar...")
+            # never reaches the user; in "live" mode it already streamed.
+            if tool_calls:
+                sink.end_round()
+            else:
+                sink.release(clean_text, buffered_chunks)
 
             if not tool_calls or self._tool_gateway is None:
                 if self._on_progress is not None:
@@ -861,10 +874,11 @@ class ChatRunner:
                     inj_kwargs.pop("tools", None)
                     try:
                         inj_response, inj_chunks = yield _Blocking(
-                            self._call_llm_sync, messages, inj_kwargs, on_token
+                            self._call_llm_sync, messages, inj_kwargs, on_token,
+                            live=sink.begin_round(),
                         )
                     except Exception:
-                        pass  # keep the last final_text
+                        sink.end_round()  # keep the last final_text
                     else:
                         inj_text, inj_calls = self._parse_response(inj_response)
                         self._validate_protocol_response(
@@ -875,12 +889,10 @@ class ChatRunner:
                         # A reply that still asks for tools ignored the stop
                         # instruction; its text is narration, not an answer.
                         final_text = inj_text if not inj_calls else ""
-                        if on_token is not None:
-                            if inj_chunks is not None:
-                                for chunk in inj_chunks:
-                                    on_token(chunk)
-                            else:
-                                on_token(inj_text)
+                        if inj_calls:
+                            sink.end_round()
+                        else:
+                            sink.release(inj_text, inj_chunks)
                 break
 
             # Feed results back for the next iteration
@@ -911,7 +923,7 @@ class ChatRunner:
             final_text,
             trace.stop_reason,
             bool(all_tool_results) and context.tool_loop,
-            on_token,
+            sink.write_new if on_token is not None else None,
         )
 
         # Save final response (with loop summary) to working memory
@@ -1270,6 +1282,8 @@ class ChatRunner:
     def _call_llm_sync(
         self, messages: list[dict], kwargs: dict,
         on_token: Callable[[str], None] | None,
+        *,
+        live: Callable[[str], None] | None = None,
     ) -> tuple[str | LLMResponse, list[str] | None]:
         """Call the LLM synchronously, with optional streaming.
 
@@ -1277,7 +1291,8 @@ class ChatRunner:
         *buffered_chunks* holds the raw token sequence collected during
         streaming (``None`` when not streaming).  Tokens are **never**
         forwarded to *on_token* here — the caller must do so after the
-        response has been validated.
+        response has been validated. ``live`` (the live-mode filter of a
+        ``TokenSink``) receives each chunk as it arrives.
         """
         check_turn()  # no model call starts once the turn has to stop
         if on_token is not None and hasattr(self._llm, "stream"):
@@ -1288,6 +1303,8 @@ class ChatRunner:
                     response = item
                 else:
                     chunks.append(item)
+                    if live is not None:
+                        live(item)
             if not isinstance(response, LLMResponse):
                 response = "".join(chunks)
             return response, chunks
@@ -1311,13 +1328,22 @@ class ChatRunner:
         messages: list[dict],
         kwargs: dict,
         on_token: Callable[[str], None] | None,
+        sink: TokenSink | None = None,
     ) -> tuple[str | LLMResponse, list[str] | None]:
-        """Wrap ``_call_llm_sync`` with exponential-backoff retry logic."""
+        """Wrap ``_call_llm_sync`` with exponential-backoff retry logic.
+
+        With a live ``sink`` each attempt is a round of its own: text a
+        failed attempt already streamed stays, and the retry starts a new
+        paragraph.
+        """
         last_exc: Exception | None = None
         for attempt in range(1, _MAX_LLM_RETRIES + 1):
+            live = sink.begin_round() if sink is not None else None
             try:
-                return self._call_llm_sync(messages, kwargs, on_token)
+                return self._call_llm_sync(messages, kwargs, on_token, live=live)
             except Exception as exc:
+                if sink is not None:
+                    sink.end_round()
                 if not self._is_retryable_error(exc) or attempt == _MAX_LLM_RETRIES:
                     raise
                 last_exc = exc

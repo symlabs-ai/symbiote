@@ -28,6 +28,7 @@ import asyncio
 import json
 import logging
 import time
+from collections import Counter
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -42,6 +43,7 @@ from symbiote.runners.base import (
     LoopTrace,
     RunResult,
 )
+from symbiote.runners.token_stream import TOKEN_STREAMING_MODES
 
 logger = logging.getLogger(__name__)
 
@@ -138,10 +140,19 @@ class LongRunRunner:
         self._on_block_complete = on_block_complete
         self._on_plan = on_plan
         self._on_before_tool_call = on_before_tool_call
+        self._token_streaming = "final"
 
     def set_native_tools(self, enabled: bool) -> None:
         """Use the provider's structured tool calls instead of text parsing."""
         self._native_tools = enabled
+
+    def set_token_streaming(self, mode: str) -> None:
+        """How block text reaches ``on_token`` (see ``ChatRunner``)."""
+        if mode not in TOKEN_STREAMING_MODES:
+            raise ValueError(
+                f"token_streaming must be one of {TOKEN_STREAMING_MODES}, got {mode!r}"
+            )
+        self._token_streaming = mode
 
     def set_approval_callback(
         self, callback: Callable[[str, dict, str], bool] | None
@@ -307,10 +318,17 @@ class LongRunRunner:
                     retry_prompt = self._build_retry_prompt(
                         block_prompt, eval_result, block_result
                     )
+                    rejected = block_result
                     block_result = self._execute_block(
                         context, retry_prompt, block_idx, block_name, on_token,
                     )
                     block_result.elapsed_ms += int((time.monotonic() - block_start) * 1000)
+                    # The rejected attempt's calls took effect too: the block's
+                    # evidence is both attempts, or a retry that only fixes the
+                    # report would be judged as having done nothing.
+                    block_result.tool_steps = rejected.tool_steps + block_result.tool_steps
+                    block_result.tool_calls += rejected.tool_calls
+                    block_result.iterations += rejected.iterations
 
                     # Re-evaluate after retry
                     eval_result = self._evaluate_block(
@@ -509,6 +527,7 @@ class LongRunRunner:
             # High-risk tools inside a block go through the same human gate
             # as a plain chat turn.
             on_before_tool_call=self._on_before_tool_call,
+            token_streaming=self._token_streaming,
         )
 
         # Build a brief context for the block
@@ -627,6 +646,7 @@ class LongRunRunner:
                 f"{_steps_digest(previous.tool_steps)}\n"
                 "Do not repeat them: their effects are in place. Check the current "
                 "state with read-only tools if needed and only add what is missing.\n"
+                "Your final summary reports the whole block, these calls included.\n"
             )
 
         return (
@@ -704,10 +724,11 @@ class LongRunRunner:
             response = self._evaluator_llm.complete(
                 eval_messages, config=self._config_for(context)
             )
-            return self._parse_eval_json(_response_text(response))
+            result = self._parse_eval_json(_response_text(response))
         except Exception as exc:
             logger.warning("[long-run] evaluator failed: %s", exc)
             return {"passed": True, "overall_score": 0.5, "feedback": f"Evaluator error: {exc}"}
+        return _enforce_counts(result, block_result.tool_steps)
 
     @staticmethod
     def _parse_eval_json(raw: str) -> dict:
@@ -807,6 +828,87 @@ def _evidence_section(block_result: BlockResult) -> str:
         "Check every number the generator states about its own actions "
         "(items created, sent, deleted, updated) against the totals above. "
         "A count that does not match is a correctness error: lower that score "
-        "and give the real number in the feedback.\n\n"
+        "and give the real number in the feedback.\n"
+        f"{_COUNT_CLAIMS_REQUEST}\n\n"
     )
+
+
+# The evaluator reads the counts out of free text; the runtime checks them.
+_COUNT_CLAIMS_REQUEST = (
+    'Also add to your JSON a "count_claims" list, one entry per number the '
+    "output states about actions of this block where each item is one tool "
+    'call: {"tool": "<tool name exactly as in the totals, or null if no call '
+    'above did that action>", "claimed": <the number stated>}. Skip numbers '
+    "that include work from before this block and items a single call "
+    "handled in bulk. Use [] when the output states no such number."
+)
+# Score ceiling of a block whose report contradicts the recorded calls.
+_COUNT_MISMATCH_MAX_SCORE = 0.5
+
+
+def _count_mismatches(claims: object, steps: list[LoopStep]) -> list[str]:
+    """Counts the evaluator read from the output that the trace contradicts.
+
+    Each claim is checked against the successful calls of its tool. A claim
+    naming a tool that never ran is not checked (the evaluator may have
+    misspelled it); ``null`` means no call did the action, so any count
+    above zero is wrong.
+    """
+    if not isinstance(claims, list):
+        return []
+    called = {step.tool_id for step in steps}
+    ok = Counter(step.tool_id for step in steps if step.success)
+    issues = []
+    for claim in claims:
+        if not isinstance(claim, dict):
+            continue
+        claimed, tool = claim.get("claimed"), claim.get("tool")
+        if isinstance(claimed, bool) or not isinstance(claimed, int | float):
+            continue
+        if claimed != int(claimed) or claimed < 0:
+            continue
+        if tool is None:
+            if claimed > 0:
+                issues.append(
+                    f"The output reports {int(claimed)} of an action no tool call "
+                    "recorded in this block did. Report only what the calls did."
+                )
+            continue
+        if not isinstance(tool, str) or tool not in called:
+            continue
+        if int(claimed) != ok[tool]:
+            issues.append(
+                f"The output reports {int(claimed)} for {tool}, but the runtime "
+                f"recorded {ok[tool]} successful {tool} calls in this block. Fix the "
+                "number in the summary; the calls already took effect, do not repeat "
+                "or undo them to match the text."
+            )
+    return issues
+
+
+def _enforce_counts(result: dict, steps: list[LoopStep]) -> dict:
+    """Fail a block whose report contradicts the calls the runtime recorded.
+
+    In a real run the evaluator wrote "claims 24 tasks, the calls show 28"
+    in its feedback and still passed the block with 0.95.
+    """
+    if not isinstance(result, dict):
+        return result
+    mismatches = _count_mismatches(result.get("count_claims"), steps)
+    if not mismatches:
+        return result
+    score = result.get("overall_score")
+    blocking = result.get("blocking_issues")
+    return {
+        **result,
+        "passed": False,
+        "overall_score": (
+            min(score, _COUNT_MISMATCH_MAX_SCORE)
+            if isinstance(score, int | float) and not isinstance(score, bool)
+            else _COUNT_MISMATCH_MAX_SCORE
+        ),
+        "blocking_issues": [*(blocking if isinstance(blocking, list) else []), *mismatches],
+        "feedback": " ".join(filter(None, [str(result.get("feedback") or ""), *mismatches])),
+        "count_mismatches": mismatches,
+    }
 

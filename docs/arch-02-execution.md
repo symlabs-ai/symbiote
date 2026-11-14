@@ -127,6 +127,8 @@ stateDiagram-v2
 
 No modo `long_run`, a execucao e dividida em **blocos planejados**. Um Planner LLM gera o plano, cada bloco roda como uma mini-sessao `brief`, e um Evaluator LLM avalia a qualidade de cada bloco. O `context_strategy` controla como o contexto e gerenciado entre blocos.
 
+O Evaluator recebe as tool calls que o bloco executou de fato (totais por tool e um resumo) e devolve, alem das notas, a lista `count_claims` com cada contagem que o texto do bloco afirma ("criei 24 tarefas"). O runtime confere cada uma com as chamadas bem-sucedidas daquela tool: se nao bate, o bloco falha (nota limitada a 0.5) qualquer que seja a nota do Evaluator, e o retry recebe a ordem de corrigir o relato sem repetir nem desfazer chamadas. No retry, a evidencia avaliada inclui as chamadas das duas tentativas.
+
 ```mermaid
 flowchart TB
     subgraph Planning
@@ -192,6 +194,6 @@ flowchart LR
 
 ## Notas
 
-- O modo `auto` e resolvido pelo `ContextAssembler._resolve_auto_mode()` baseado em heuristicas do input do usuario (ex: "pesquise" → long_run, "abra" → instant).
+- O modo `auto` e resolvido pelo `ContextAssembler._resolve_auto_mode()` a cada turno, nesta ordem: `long_run` se o symbiote tem `planner_prompt` configurado; `instant` se nenhuma tool esta autorizada para ele; `brief` nos demais casos. O texto do usuario nao entra na decisao: nao ha heuristica por palavra-chave ("pesquise", "abra"). Um host que queira escolher o modo pelo pedido define `tool_mode` explicitamente antes do turno.
 - O `on_after_tool_result` hook (adicionado nesta versao) permite ao caller interceptar o resultado das tools e decidir se o loop deve parar — essencial para o SymTalk evitar a chamada LLM extra em fire-and-forget.
 - O `MemoryConsolidator` roda em background thread apos cada resposta do ChatRunner, garantindo que sessoes longas nao estourem o contexto.

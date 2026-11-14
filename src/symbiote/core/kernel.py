@@ -605,6 +605,33 @@ class SymbioteKernel:
         if isinstance(long_run, LongRunRunner):
             long_run.set_native_tools(enabled)
 
+    def set_token_streaming(self, mode: str) -> None:
+        """How the text of a turn reaches ``on_token``: ``"final"`` or ``"live"``.
+
+        ``"final"`` (default) releases only the validated answer, once its
+        model call has ended. ``"live"`` streams the text as the model writes
+        it, in every round of the tool loop, with tool-call markup held back;
+        the narration before a tool call is shown, rounds are separated by a
+        blank line, and the turn's return value stays the authoritative
+        answer. Token by token needs an adapter with ``stream()``; with
+        native tools, ``ForgeLLMAdapter(stream_tool_calls=True)``. See
+        ``symbiote.runners.token_stream``.
+
+        Raises:
+            ValueError: for an unknown mode.
+            RuntimeError: if no chat runner is registered.
+        """
+        runner = self._runner_registry.select("chat")
+        if not isinstance(runner, ChatRunner):
+            raise RuntimeError(
+                "No chat runner available to set token_streaming "
+                "(kernel was constructed without an LLM)."
+            )
+        runner.set_token_streaming(mode)
+        long_run = self._runner_registry.get("long_run")
+        if isinstance(long_run, LongRunRunner):
+            long_run.set_token_streaming(mode)
+
     def set_agent_protocol(
         self,
         protocol: str | AgentProtocol | None,

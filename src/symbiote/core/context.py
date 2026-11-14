@@ -493,13 +493,14 @@ class ContextAssembler:
         symbiote_id: str,
         user_input: str,
     ) -> str:
-        """Resolve ``auto`` tool_mode to a concrete mode based on heuristics.
+        """Resolve ``auto`` tool_mode to a concrete mode.
 
         Rules (evaluated in order):
         1. If long-run config exists (planner_prompt set) → ``long_run``
         2. If no tools are enabled for the symbiote → ``instant``
-        3. If user input is short (≤80 chars, single line) → ``brief``
-        4. Default → ``brief``
+        3. Otherwise → ``brief``
+
+        ``user_input`` is not inspected: there is no keyword heuristic.
         """
         # Check if long-run planner is configured
         if self._environment is not None:

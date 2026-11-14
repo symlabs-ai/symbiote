@@ -66,7 +66,11 @@ def gateway_adapter(
 def build_adapter(settings: settings_mod.Settings, model: str) -> ForgeLLMAdapter | SymGatewayLLMAdapter:
     if settings.provider == "symgateway":
         return gateway_adapter(settings, model)
-    return ForgeLLMAdapter(provider=settings.provider, model=model or None, api_key=settings.api_key)
+    # stream_tool_calls: the chat types the answer out even with native tools.
+    return ForgeLLMAdapter(
+        provider=settings.provider, model=model or None, api_key=settings.api_key,
+        stream_tool_calls=True,
+    )
 
 
 def build_adapters(settings: settings_mod.Settings) -> tuple[Any, Any]:
@@ -177,6 +181,7 @@ class DemoRuntime:
         kernel.set_evolver_llm(self.aux_llm)
         kernel.set_semantic_llm(self.aux_llm)
         kernel.set_native_tools(self.native_tools)
+        kernel.set_token_streaming("live")  # text reaches the chat as it is written
 
         self.hook = DemoHook(self.bus, kernel, self.shots_dir)
         kernel.hooks.add(self.hook)

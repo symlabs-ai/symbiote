@@ -203,8 +203,9 @@ class ChatBody(BaseModel):
 
 @core.post("/chat/stream")
 async def chat_stream(body: ChatBody, request: Request, kernel: Any = Depends(get_kernel)) -> StreamingResponse:
-    """SSE in the format <symbiote-chat> understands: tool_start / tool_done
-    while the turn runs, then response_done (or error)."""
+    """SSE in the format <symbiote-chat> understands: text_delta (live token
+    streaming) and tool_start / tool_done while the turn runs, then
+    response_done (or error), whose text replaces the deltas."""
     rt = get_runtime(request)
     sid = symbiote_id(rt, body.symbiote)
     bus: EventBus = request.app.state.bus
@@ -232,6 +233,8 @@ async def chat_stream(body: ChatBody, request: Request, kernel: Any = Depends(ge
                 awaiting.add(event["tool_id"])
                 out.put_nowait(("tool_start", {"tool_id": event["tool_id"], "name": f"{event['tool_id']} ⏳ aprovação",
                                                "detail": "aguardando aprovação"}))
+            elif event["type"] == "answer_delta":
+                out.put_nowait(("text_delta", {"text": event["text"]}))
             elif event["type"] == "approval_result" and not event["approved"]:
                 awaiting.discard(event["tool_id"])
                 # A denied call never reaches the gateway, so no tool_end follows.

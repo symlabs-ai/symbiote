@@ -253,6 +253,19 @@ def _resolve_llm() -> LLMPort | None:
     return ForgeLLMAdapter(provider=provider, model=model)
 
 
+def _apply_token_streaming(kernel: SymbioteKernel) -> None:
+    """``SYMBIOTE_TOKEN_STREAMING``: how ``POST /sessions/{id}/chat/stream``
+    sends text, ``live`` (default) or ``final``; see
+    ``SymbioteKernel.set_token_streaming``."""
+    mode = os.environ.get("SYMBIOTE_TOKEN_STREAMING") or "live"
+    try:
+        kernel.set_token_streaming(mode)
+    except ValueError:
+        logging.getLogger(__name__).error(
+            "SYMBIOTE_TOKEN_STREAMING=%r is not 'live' or 'final'; using 'final'", mode
+        )
+
+
 def _env_path_list(name: str) -> list[Path]:
     """Parse an env var holding paths split by os.pathsep or ',' into Paths."""
     raw = os.environ.get(name)
@@ -356,6 +369,8 @@ def get_kernel() -> SymbioteKernel:
                 )
                 llm = None
             kernel = SymbioteKernel(config=config, llm=llm)
+            if llm is not None:
+                _apply_token_streaming(kernel)
             key_manager = APIKeyManager(kernel._storage)
             key_manager.init_schema()
             set_key_manager(key_manager)

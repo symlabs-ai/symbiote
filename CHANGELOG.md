@@ -5,6 +5,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+### Novas funcionalidades
+
+- feat(kernel): streaming token a token (B-73). `kernel.set_token_streaming("live")` faz o `on_token` receber o texto enquanto o modelo escreve, em todas as rodadas do loop de tools, e não mais só a resposta final validada de uma vez. A narração antes de uma tool call aparece; a marcação da chamada (bloco `tool_call`, JSON `{"tool": ...}` solto) é retida e descartada. As rodadas são separadas por uma linha em branco, e o valor devolvido por `message_async` continua sendo a resposta oficial (quando a validação troca uma resposta, a nova vem como parágrafo novo). O padrão continua `"final"`, sem mudança para hosts existentes. `ForgeLLMAdapter(..., stream_tool_calls=True)` transmite também com tools nativas, montando as tool calls a partir do stream (desligado por padrão: o Groq não monta tool calls em stream e o stream não traz o estado de raciocínio que o `poolside_laguna_v1` reenvia). Ver `docs/HOST_INTEGRATION.md`, "Token Streaming".
+- feat(api): `POST /sessions/{id}/chat/stream` responde com Server-Sent Events (B-69): `token` com cada pedaço do texto, `done` com o mesmo corpo do `POST /chat` e `error` com o status que o `POST /chat` daria (409 sessão ocupada ou turno cancelado, 500 sem expor a mensagem interna). Acesso e LLM são checados antes do stream, com erros HTTP normais; se o cliente desconecta no meio, o turno é cancelado. O servidor usa `live` por padrão (`SYMBIOTE_TOKEN_STREAMING=final` para só a resposta validada). O SDK ganhou `SymbioteClient.chat_stream()` e `SymbioteStreamError`.
+- feat(demo): o chat do demo mostra o texto enquanto o modelo escreve (modo `live`, `stream_tool_calls` com OpenAI e Anthropic); a resposta final substitui o texto no fim do turno.
+
+### Melhorias
+
+- fix(long-run): o kernel confere as contagens que o bloco afirma. O avaliador devolve `count_claims` (cada número que o texto do bloco dá sobre as próprias ações, com a tool correspondente) e o runtime compara com as chamadas bem-sucedidas daquela tool: se não bate, o bloco falha com nota no máximo 0.5, qualquer que seja a nota do avaliador, e o retry recebe a ordem de corrigir o relato sem repetir nem desfazer chamadas. Num teste real o avaliador escreveu "afirma 24 tarefas, as chamadas mostram 28" e aprovou com 0.95. Uma contagem para uma tool que não rodou não é conferida (pode ser nome errado do avaliador); `null` (nenhuma chamada fez aquilo) com número maior que zero falha. O pedido vai na mensagem de avaliação, então vale também com `evaluator_prompt` do host. No retry, a evidência avaliada passa a incluir as chamadas da tentativa rejeitada, e o resumo do retry passa a contar o bloco inteiro.
+- refactor(console, cli): o Console admin e a CLI (`symbiote audit reflection`, `audit skill-review`) leem pelo `kernel.inspector` em vez de SQL próprio (B-78), com as mesmas respostas. `KernelInspector.list_scores` aceita `session_id` (e `symbiote_id` ficou opcional); `list_reflections` e `list_skill_reviews` aceitam `session_id` e `since`, e o segundo também `trigger`. Os endpoints do Console que devolvem o JSON cru gravado (`/trace`, `/memory`, `/reflections`, `/activity`) continuam em SQL, porque o dashboard lê esse texto.
+
+### Correções
+
+- docs: `docs/arch-02-execution.md` descrevia uma heurística por palavra-chave para `tool_mode="auto"` ("pesquise" → long_run) que não existe (B-77). O modo é decidido assim: `long_run` se há `planner_prompt`, `instant` se nenhuma tool está autorizada, `brief` nos demais casos; o texto do usuário não entra.
+- fix(chat): quando o modelo ainda pede tools depois de mandado parar (estagnação, circuit breaker), o texto dessa resposta não vai mais para o `on_token`; a resposta padrão que substitui o turno vai.
+
 ## [v0.8.2] - 2026-11-13
 
 O kernel passa a rodar em PostgreSQL com várias réplicas do host: SQL portátil e `PostgresAdapter`, transação por operação composta, trava de sessão injetável com validade e renovação, biblioteca de skills compartilhada e cancelamento de turno. Sem configurar nada disso, o comportamento com SQLite num processo só continua o mesmo.

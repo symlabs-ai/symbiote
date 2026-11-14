@@ -34,7 +34,16 @@ class ForgeLLMAdapter:
         model: str | None = None,
         api_key: str | None = None,
         base_url: str | None = None,
+        *,
+        stream_tool_calls: bool = False,
     ) -> None:
+        """``stream_tool_calls``: stream text token by token also when native
+        tools are offered, collecting the tool calls from the stream. Off by
+        default: not every provider assembles tool calls in a stream (Groq),
+        and the stream carries no reasoning state, which protocols that
+        replay it (e.g. ``poolside_laguna_v1``) need.
+        """
+        self._stream_tool_calls = stream_tool_calls
         if ChatAgent is None:
             raise LLMError(
                 "forge_llm is not installed — run `pip install forge-llm`"
@@ -119,6 +128,9 @@ class ForgeLLMAdapter:
         streaming with tool calls (e.g. Groq), falls back to ``complete()``
         and yields the result as a single item.
         """
+        if tools and self._stream_tool_calls:
+            yield from self._stream_with_tools(messages, config, tools)
+            return
         # When native tools are requested, fall back to complete() because
         # most providers don't stream tool call responses properly.
         if tools:
@@ -147,6 +159,45 @@ class ForgeLLMAdapter:
             raise
         except Exception as exc:
             raise _wrap_error(exc) from exc
+
+    def _stream_with_tools(
+        self,
+        messages: list[dict],
+        config: dict | None,
+        tools: list[dict],
+    ) -> Iterator[str | LLMResponse]:
+        """Text chunks as they arrive, then an ``LLMResponse`` if the model
+        called tools (the provider assembles the calls at the end)."""
+        try:
+            cfg = ChatConfig(**(config or {}))
+            cfg.tools = tools
+            parts: list[str] = []
+            raw_calls: list | None = None
+            finish_reason: str | None = None
+            usage: Any = None
+            for chunk in self._agent.stream_chat(
+                messages=[_to_chat_message(m) for m in messages],
+                config=cfg,
+                auto_execute_tools=False,
+            ):
+                text = _value(chunk, "content")
+                if isinstance(text, str) and text:
+                    parts.append(text)
+                    yield text
+                raw_calls = _value(chunk, "tool_calls") or raw_calls
+                finish_reason = _value(chunk, "finish_reason") or finish_reason
+                usage = _value(chunk, "usage") or usage
+        except LLMError:
+            raise
+        except Exception as exc:
+            raise _wrap_error(exc) from exc
+        if raw_calls:
+            yield LLMResponse(
+                content="".join(parts),
+                tool_calls=_extract_tool_calls({"tool_calls": raw_calls}),
+                finish_reason=finish_reason,
+                usage=_extract_usage({"usage": usage}),
+            )
 
 
 def _wrap_error(exc: Exception) -> LLMError:

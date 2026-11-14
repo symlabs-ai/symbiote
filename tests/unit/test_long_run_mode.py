@@ -16,7 +16,7 @@ from symbiote.runners.base import (
     LoopTrace,
     RunResult,
 )
-from symbiote.runners.long_run import LongRunRunner
+from symbiote.runners.long_run import LongRunRunner, _enforce_counts
 
 # ── Models ───────────────────────────────────────────────────────────────────
 
@@ -319,6 +319,89 @@ class TestEvaluator:
         assert "Totals: list_tasks: 1 calls, 1 ok; create_task: 74 calls, 73 ok" in sent
         assert "- … and 15 more" in sent  # the digest is capped, the totals are not
         assert "A count that does not match is a correctness error" in sent
+
+    def test_a_count_the_trace_contradicts_fails_the_block(self):
+        """The evaluator reads the counts, the runtime checks them: in a real
+        run it wrote "claims 24, the calls show 28" and still passed (0.95)."""
+        llm = MagicMock()
+        llm.complete.return_value = json.dumps({
+            "passed": True, "overall_score": 0.95, "feedback": "Bom trabalho.",
+            "count_claims": [{"tool": "create_task", "claimed": 24}],
+        })
+        runner = LongRunRunner(llm=llm, evaluator_llm=llm)
+        ctx = AssembledContext(
+            symbiote_id="s1", session_id="sess", user_input="test",
+            tool_mode="long_run", evaluator_prompt="Evaluate",
+        )
+        plan = LongRunPlan(blocks=[{"name": "A"}], total_blocks=1)
+        steps = [
+            LoopStep(iteration=1, tool_id="create_task", params={"title": f"T{i}"}, success=True)
+            for i in range(28)
+        ] + [LoopStep(iteration=2, tool_id="create_task", success=False, error="HTTP 500")]
+        block_result = BlockResult(block_index=0, success=True, output="Criei 24 tarefas", tool_steps=steps)
+
+        result = runner._evaluate_block(ctx, plan, plan.blocks[0], block_result)
+
+        assert '"count_claims"' in llm.complete.call_args.args[0][1]["content"]
+        assert result["passed"] is False
+        assert result["overall_score"] == 0.5
+        assert "reports 24 for create_task" in result["blocking_issues"][0]
+        assert "recorded 28 successful create_task calls" in result["blocking_issues"][0]
+        assert result["feedback"].startswith("Bom trabalho. The output reports 24")
+
+    def test_count_claims_that_match_or_cannot_be_checked_pass(self):
+        steps = [LoopStep(iteration=1, tool_id="create_task", success=True)] * 3
+        evaluation = {"passed": True, "overall_score": 0.9, "count_claims": [
+            {"tool": "create_task", "claimed": 3},       # matches
+            {"tool": "create_tasks", "claimed": 7},      # tool never ran: misspelled, not checked
+            {"tool": "create_task", "claimed": "três"},  # not a number
+            {"tool": None, "claimed": 0},
+            "garbage",
+        ]}
+        assert _enforce_counts(evaluation, steps) is evaluation
+
+    def test_a_count_of_an_action_no_call_did_fails(self):
+        result = _enforce_counts(
+            {"passed": True, "overall_score": 0.9, "count_claims": [{"tool": None, "claimed": 2}]},
+            [LoopStep(iteration=1, tool_id="list_tasks", success=True)],
+        )
+        assert result["passed"] is False
+        assert "no tool call recorded" in result["count_mismatches"][0]
+
+    def test_retry_is_judged_on_both_attempts(self):
+        """A retry that only fixes the report makes no calls; the evaluator
+        must still see the calls of the rejected attempt."""
+        llm = MagicMock()
+        del llm.stream
+        evaluations = iter([
+            {"passed": True, "overall_score": 0.95,
+             "count_claims": [{"tool": "create_task", "claimed": 1}]},
+            {"passed": True, "overall_score": 0.95,
+             "count_claims": [{"tool": "create_task", "claimed": 2}]},
+        ])
+        runner = LongRunRunner(llm=llm, evaluator_llm=llm)
+        runner._evaluate_block = MagicMock(side_effect=lambda c, p, b, r: _enforce_counts(
+            dict(next(evaluations)), r.tool_steps,
+        ))
+        first = BlockResult(block_index=0, block_name="A", success=True, output="Criei 1", tool_calls=2,
+                            iterations=1, tool_steps=[LoopStep(iteration=1, tool_id="create_task", success=True)] * 2)
+        retry = BlockResult(block_index=0, block_name="A", success=True, output="Criei 2", tool_calls=0,
+                            iterations=1, tool_steps=[])
+        runner._execute_block = MagicMock(side_effect=[first, retry])
+        runner._run_planner = MagicMock(return_value=LongRunPlan(blocks=[{"name": "A"}], total_blocks=1))
+        ctx = AssembledContext(
+            symbiote_id="s1", session_id="sess", user_input="test",
+            tool_mode="long_run", evaluator_prompt="Evaluate",
+        )
+
+        result = runner.run(ctx)
+
+        block = result.block_results[0]
+        assert block.success is True
+        assert len(block.tool_steps) == 2 and block.tool_calls == 2
+        retry_prompt = runner._execute_block.call_args_list[1].args[1]
+        assert "reports 1 for create_task" in retry_prompt
+        assert "Your final summary reports the whole block" in retry_prompt
 
     def test_evaluator_is_told_when_no_tool_ran(self):
         llm = MagicMock()

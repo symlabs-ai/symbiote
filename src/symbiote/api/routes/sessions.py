@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+import asyncio
+import json
+import logging
+from collections.abc import AsyncIterator
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from pydantic import ValidationError as PydanticValidationError
 
 from symbiote.api.auth import APIKey
 from symbiote.api.http import (
@@ -28,7 +34,14 @@ from symbiote.api.schemas import (
     SessionResponse,
 )
 from symbiote.core.exceptions import (
+    DuplicateEntityError,
     EntityNotFoundError,
+    SessionBusyError,
+    SessionLockLostError,
+    StorageIntegrityError,
+    SymbioteError,
+    TurnCancelledError,
+    ValidationError,
 )
 from symbiote.core.kernel import SymbioteKernel
 from symbiote.core.ports import StoragePort
@@ -207,14 +220,7 @@ def chat(
     and returns the response. Tenant isolation is enforced via session ownership.
     """
     _require_session_access(kernel._storage, session_id, auth)
-    if kernel._llm is None:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "No LLM configured: set SYMBIOTE_LLM_PROVIDER (and "
-                "SYMBIOTE_LLM_MODEL) and restart the server."
-            ),
-        )
+    _require_llm(kernel)
 
     response = kernel.message(
         session_id=session_id,
@@ -224,3 +230,123 @@ def chat(
         llm_config=body.generation_settings,
     )
     return ChatResponse(response=response, session_id=session_id)
+
+
+def _require_llm(kernel: SymbioteKernel) -> None:
+    if kernel._llm is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No LLM configured: set SYMBIOTE_LLM_PROVIDER (and "
+                "SYMBIOTE_LLM_MODEL) and restart the server."
+            ),
+        )
+
+
+@router.post(
+    "/sessions/{session_id}/chat/stream",
+    response_class=StreamingResponse,
+    responses={200: {"content": {"text/event-stream": {}}}},
+)
+async def chat_stream(
+    session_id: str,
+    body: ChatRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
+) -> StreamingResponse:
+    """``chat`` as Server-Sent Events: the text as it is produced.
+
+    Events (``data`` is JSON):
+
+    - ``token`` ``{"text": ...}``: a piece of the answer. How much arrives
+      before the turn ends depends on ``SYMBIOTE_TOKEN_STREAMING``: ``live``
+      (the server default) streams every model round as it is written,
+      including the narration before a tool call; ``final`` sends only the
+      validated answer, at the end.
+    - ``done`` ``{"response": ..., "session_id": ...}``: the same body as
+      ``POST /chat``. ``response`` is the authoritative answer; clients that
+      rendered the tokens should replace them with it.
+    - ``error`` ``{"status": ..., "detail": ...}``: the turn failed; ``status``
+      is what ``POST /chat`` would have answered (409 session busy, ...).
+
+    Access and LLM checks answer with plain HTTP errors before the stream
+    starts. If the client disconnects, the turn is cancelled.
+    """
+    _require_session_access(kernel._storage, session_id, auth)
+    _require_llm(kernel)
+    return StreamingResponse(
+        _chat_events(kernel, session_id, body),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+_STREAM_DONE = object()
+
+
+async def _chat_events(
+    kernel: SymbioteKernel, session_id: str, body: ChatRequest
+) -> AsyncIterator[str]:
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+
+    async def turn() -> Any:
+        try:
+            return await kernel.message_async(
+                session_id=session_id,
+                content=body.content,
+                extra_context=body.extra_context,
+                on_token=queue.put_nowait,  # called on this event loop
+                llm_config=body.generation_settings,
+            )
+        finally:
+            queue.put_nowait(_STREAM_DONE)
+
+    task = asyncio.create_task(turn())
+    finished = False
+    try:
+        while (item := await queue.get()) is not _STREAM_DONE:
+            yield _sse("token", {"text": item})
+        try:
+            response = await task
+        except Exception as exc:
+            status, detail = _error_status(exc)
+            yield _sse("error", {"status": status, "detail": detail})
+        else:
+            yield _sse("done", {"response": response, "session_id": session_id})
+        finished = True
+    finally:
+        if not finished:  # the client went away mid-turn
+            kernel.cancel_turn(session_id)
+            task.add_done_callback(_ignore_result)
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+
+
+def _ignore_result(task: asyncio.Task) -> None:
+    if not task.cancelled():
+        task.exception()  # retrieved: no "exception was never retrieved"
+
+
+# Same statuses as the app's exception handlers for POST /chat.
+_ERROR_STATUS: tuple[tuple[type[Exception], int], ...] = (
+    (EntityNotFoundError, 404),
+    (ValidationError, 422),
+    (DuplicateEntityError, 409),
+    (SessionBusyError, 409),
+    (SessionLockLostError, 409),
+    (TurnCancelledError, 409),
+    (StorageIntegrityError, 409),
+    (SymbioteError, 400),
+    (PydanticValidationError, 422),
+)
+
+
+def _error_status(exc: Exception) -> tuple[int, str]:
+    for kind, status in _ERROR_STATUS:
+        if isinstance(exc, kind):
+            detail = "Conflict with existing data" if kind is StorageIntegrityError else str(exc)
+            return status, detail
+    logging.getLogger(__name__).exception("chat stream failed", exc_info=exc)
+    return 500, "Internal Server Error"

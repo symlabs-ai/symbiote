@@ -15,13 +15,33 @@ Usage::
     # Chat
     response = client.chat(session_id=session["id"], content="Hello!")
     print(response["response"])
+
+    # Chat, with the text as it is produced
+    for event in client.chat_stream(session_id=session["id"], content="Hello!"):
+        if event["event"] == "token":
+            print(event["text"], end="", flush=True)
 """
 
 from __future__ import annotations
 
+import json
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
+
+
+class SymbioteStreamError(Exception):
+    """A streamed turn failed after the stream started.
+
+    ``status`` is what ``POST /sessions/{id}/chat`` would have answered
+    (409 session busy or turn cancelled, 404, 500, ...).
+    """
+
+    def __init__(self, status: int, detail: str) -> None:
+        super().__init__(f"{status}: {detail}")
+        self.status = status
+        self.detail = detail
 
 
 class SymbioteClient:
@@ -115,6 +135,49 @@ class SymbioteClient:
         if generation_settings is not None:
             body["generation_settings"] = generation_settings
         return self._post(f"/sessions/{session_id}/chat", body)
+
+    def chat_stream(
+        self,
+        session_id: str,
+        content: str,
+        extra_context: dict | None = None,
+        generation_settings: dict | None = None,
+    ) -> Iterator[dict]:
+        """``chat`` over Server-Sent Events.
+
+        Yields ``{"event": "token", "text": ...}`` while the answer is
+        produced, then ``{"event": "done", "response": ..., "session_id": ...}``
+        (the body ``chat`` returns). ``response`` is the authoritative
+        answer: with live streaming the tokens also carry the narration of
+        tool rounds. A turn that fails raises ``SymbioteStreamError``; a
+        request refused before the stream starts raises
+        ``httpx.HTTPStatusError``, like ``chat``.
+        """
+        body: dict[str, Any] = {"content": content}
+        if extra_context is not None:
+            body["extra_context"] = extra_context
+        if generation_settings is not None:
+            body["generation_settings"] = generation_settings
+        with self._client.stream(
+            "POST", f"/sessions/{session_id}/chat/stream", json=body
+        ) as resp:
+            if resp.is_error:
+                resp.read()
+                resp.raise_for_status()
+            event, data = "", []
+            for line in resp.iter_lines():
+                if line.startswith("event:"):
+                    event = line[len("event:"):].strip()
+                elif line.startswith("data:"):
+                    data.append(line[len("data:"):].strip())
+                elif not line and event:
+                    payload = json.loads("\n".join(data)) if data else {}
+                    if event == "error":
+                        raise SymbioteStreamError(
+                            int(payload.get("status", 500)), str(payload.get("detail", ""))
+                        )
+                    yield {"event": event, **payload}
+                    event, data = "", []
 
     # ── Memory ────────────────────────────────────────────────────────────
 

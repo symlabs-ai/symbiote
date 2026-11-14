@@ -218,6 +218,8 @@ def test_a_turn_with_a_tool_streams_badges_and_publishes_the_timeline(demo: Demo
     kinds = [e for e, _ in events]
     assert kinds[0] == "tool_start" and "tool_done" in kinds and kinds[-1] == "response_done"
     assert events[-1][1]["text"] == "feito"
+    # Live token streaming: the answer reaches the chat before response_done.
+    assert [d["text"] for e, d in events if e == "text_delta"] == ["feito"]
 
     turn_id = events[-1][1]["turn_id"]
     timeline = [e["type"] for e in demo.events() if e.get("turn_id") == turn_id]
