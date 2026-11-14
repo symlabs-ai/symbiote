@@ -32,6 +32,11 @@ from collections import Counter
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from symbiote.agent_protocols import (
+    AgentProtocol,
+    AgentProtocolRegistry,
+    create_default_protocol_registry,
+)
 from symbiote.core.context import AssembledContext
 from symbiote.core.models import Message
 from symbiote.core.ports import LLMPort
@@ -132,9 +137,24 @@ class LongRunRunner:
         # Handed to the ChatRunner of each block (see ChatRunner).
         tool_result_max_chars: int | None = None,
         runtime_context: str = "full",
+        agent_protocol: str | AgentProtocol | None = None,
+        protocol_registry: AgentProtocolRegistry | None = None,
+        background_review: object | None = None,
+        skill_nudge_interval: int = 10,
     ) -> None:
         self._tool_result_max_chars = tool_result_max_chars
         self._runtime_context = runtime_context
+        # Blocks run in the kernel's protocol and nudge its skill review
+        # like a plain chat turn does (B-74).
+        self._protocol_registry = (
+            protocol_registry or create_default_protocol_registry()
+        )
+        self._agent_protocol = self._protocol_registry.resolve(agent_protocol)
+        self._background_review = background_review
+        self._skill_nudge_interval = skill_nudge_interval
+        # Tool iterations since the last skill review, carried across blocks
+        # (each block gets a fresh ChatRunner).
+        self._iters_since_skill_review = 0
         self._llm = llm
         self._working_memory = working_memory
         self._tool_gateway = tool_gateway
@@ -151,6 +171,15 @@ class LongRunRunner:
     def set_native_tools(self, enabled: bool) -> None:
         """Use the provider's structured tool calls instead of text parsing."""
         self._native_tools = enabled
+
+    @property
+    def agent_protocol_id(self) -> str:
+        """The protocol the blocks run in."""
+        return self._agent_protocol.protocol_id
+
+    def set_agent_protocol(self, protocol: str | AgentProtocol | None) -> None:
+        """Protocol of the block runners; ``None`` restores the legacy default."""
+        self._agent_protocol = self._protocol_registry.resolve(protocol)
 
     def set_token_streaming(self, mode: str) -> None:
         """How block text reaches ``on_token`` (see ``ChatRunner``)."""
@@ -539,7 +568,12 @@ class LongRunRunner:
             # as a plain chat turn.
             on_before_tool_call=self._on_before_tool_call,
             token_streaming=self._token_streaming,
+            agent_protocol=self._agent_protocol,
+            protocol_registry=self._protocol_registry,
+            background_review=self._background_review,
+            skill_nudge_interval=self._skill_nudge_interval,
         )
+        runner._iters_since_skill_review = self._iters_since_skill_review
 
         # Build a brief context for the block
         block_context = AssembledContext(
@@ -565,9 +599,14 @@ class LongRunRunner:
             generation_settings=context.generation_settings,
         )
 
-        result = runner.run(
-            block_context, on_token=on_token, llm_config=getattr(self, "_llm_config", None)
-        )
+        try:
+            result = runner.run(
+                block_context,
+                on_token=on_token,
+                llm_config=getattr(self, "_llm_config", None),
+            )
+        finally:
+            self._iters_since_skill_review = runner._iters_since_skill_review
 
         tool_calls = 0
         iterations = 0

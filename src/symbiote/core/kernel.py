@@ -260,6 +260,9 @@ class SymbioteKernel:
                     context_budget=config.loop_context_budget,
                     tool_result_max_chars=config.tool_result_max_chars,
                     runtime_context=config.runtime_context,
+                    agent_protocol=resolved_agent_protocol,
+                    protocol_registry=active_protocol_registry,
+                    background_review=self._background_review_for,
                 )
             )
 
@@ -639,7 +642,7 @@ class SymbioteKernel:
         self,
         protocol: str | AgentProtocol | None,
     ) -> None:
-        """Select the exact model-facing protocol on the chat runner.
+        """Select the exact model-facing protocol on the chat and long-run runners.
 
         ``None`` restores the registry's backward-compatible legacy default.
         Model names are never inspected or guessed.
@@ -657,6 +660,9 @@ class SymbioteKernel:
                 "(kernel was constructed without an LLM)."
             )
         runner.set_agent_protocol(protocol)
+        long_run = self._runner_registry.get("long_run")
+        if isinstance(long_run, LongRunRunner):
+            long_run.set_agent_protocol(protocol)
 
     @property
     def environment(self) -> EnvironmentManager:
