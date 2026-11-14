@@ -256,6 +256,34 @@ def test_search_memories_tool_callable(
     assert result.output[0]["content"] == "Python is a programming language"
 
 
+def test_search_memories_tool_matches_keywords_not_only_substrings(
+    tool_gateway, environment, memory, knowledge, symbiote
+):
+    """Models search with keywords; none of them is a substring query."""
+    tool_gateway.register_memory_tools(memory, knowledge)
+    environment.configure(symbiote_id=symbiote.id, tools=["search_memories"])
+    for content in (
+        "Reserva de emergência é a prioridade financeira deste ano.",
+        "Prefere respostas em tópicos curtos.",
+    ):
+        memory.store(MemoryEntry(
+            symbiote_id=symbiote.id, type="decision", scope="global",
+            content=content, importance=0.8, source="reflection",
+        ))
+
+    result = tool_gateway.execute(
+        symbiote_id=symbiote.id,
+        session_id=None,
+        tool_id="search_memories",
+        params={"query": "prioridade financeira ano meta objetivo dinheiro"},
+    )
+
+    assert result.success
+    assert [m["content"] for m in result.output] == [
+        "Reserva de emergência é a prioridade financeira deste ano."
+    ]
+
+
 def test_search_knowledge_tool_callable(
     tool_gateway, environment, memory, knowledge, symbiote, storage
 ):

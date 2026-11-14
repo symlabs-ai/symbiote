@@ -162,6 +162,23 @@ def test_http_errors_become_llm_errors() -> None:
     assert "bad key" in str(info.value)
 
 
+def test_relayed_provider_error_type_is_kept() -> None:
+    def gateway(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/_api/work-sessions":
+            return httpx.Response(201, json={"uid": "ws-1"})
+        return httpx.Response(502, json={"error": {
+            "code": "provider_error", "message": "model: anthropic/x",
+            "details": {"provider_error": {"type": "error",
+                                           "error": {"type": "not_found_error", "message": "model: anthropic/x"}}},
+        }})
+
+    llm = SymGatewayLLMAdapter("k", "anthropic/x", client=httpx.Client(transport=httpx.MockTransport(gateway)))
+    with pytest.raises(LLMError) as info:
+        llm.complete([{"role": "user", "content": "oi"}])
+    assert info.value.status_code == 502
+    assert "not_found_error" in str(info.value)
+
+
 def test_requires_key_and_model() -> None:
     with pytest.raises(LLMError):
         SymGatewayLLMAdapter("", "m")

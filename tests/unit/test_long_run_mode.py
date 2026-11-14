@@ -232,6 +232,20 @@ class TestGenerator:
         assert "Previous attempt was rejected" in prompt
         assert "No try/catch in API" in prompt
 
+    def test_retry_prompt_lists_side_effects_already_done(self):
+        """A rejected attempt's tool calls already ran: the retry must not
+        repeat them (it duplicated 30 tasks in the demo)."""
+        runner = self._make_runner()
+        rejected = BlockResult(block_index=0, success=True, output="created", tool_steps=[
+            LoopStep(iteration=1, tool_id="create_task", params={"title": "Mudança"}, success=True),
+        ])
+        prompt = runner._build_retry_prompt(
+            "Original prompt", {"passed": False, "feedback": "no evidence"}, rejected
+        )
+        assert "already took effect" in prompt
+        assert '[ok] create_task {"title":"Mudança"}' in prompt
+        assert "Do not repeat them" in prompt
+
 
 # ── Evaluator ────────────────────────────────────────────────────────────────
 
@@ -260,6 +274,43 @@ class TestEvaluator:
         result = runner._evaluate_block(ctx, plan, plan.blocks[0], block_result)
         assert result["passed"] is True
         assert result["overall_score"] == 0.9
+
+    def test_evaluator_sees_the_tool_calls_the_block_executed(self):
+        llm = MagicMock()
+        llm.complete.return_value = '{"passed": true, "overall_score": 1.0}'
+        runner = LongRunRunner(llm=llm, evaluator_llm=llm)
+        ctx = AssembledContext(
+            symbiote_id="s1", session_id="sess", user_input="test",
+            tool_mode="long_run", evaluator_prompt="Evaluate",
+        )
+        plan = LongRunPlan(blocks=[{"name": "A"}], total_blocks=1)
+        block_result = BlockResult(block_index=0, success=True, output="Criei 2 tarefas", tool_steps=[
+            LoopStep(iteration=1, tool_id="create_task", params={"title": "A"}, success=True),
+            LoopStep(iteration=1, tool_id="create_task", params={"title": "B"}, success=False, error="HTTP 500"),
+        ])
+
+        runner._evaluate_block(ctx, plan, plan.blocks[0], block_result)
+
+        sent = llm.complete.call_args.args[0][1]["content"]
+        assert "recorded by the runtime" in sent
+        assert '[ok] create_task {"title":"A"}' in sent
+        assert '[FAILED: HTTP 500] create_task {"title":"B"}' in sent
+
+    def test_evaluator_is_told_when_no_tool_ran(self):
+        llm = MagicMock()
+        llm.complete.return_value = '{"passed": false, "overall_score": 0.1}'
+        runner = LongRunRunner(llm=llm, evaluator_llm=llm)
+        ctx = AssembledContext(
+            symbiote_id="s1", session_id="sess", user_input="test",
+            tool_mode="long_run", evaluator_prompt="Evaluate",
+        )
+        plan = LongRunPlan(blocks=[{"name": "A"}], total_blocks=1)
+        block_result = BlockResult(block_index=0, success=True, output="Criei 35 tarefas")
+
+        runner._evaluate_block(ctx, plan, plan.blocks[0], block_result)
+
+        sent = llm.complete.call_args.args[0][1]["content"]
+        assert "Any claim of actions taken through tools is unsupported" in sent
 
     def test_evaluator_handles_garbage(self):
         llm = MagicMock()

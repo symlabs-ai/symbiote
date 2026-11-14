@@ -100,6 +100,18 @@ class _StaticLLM:
         return self.response
 
 
+class _RecordingLLM(_StaticLLM):
+    """Static response; keeps every prompt it received."""
+
+    def __init__(self, response: str):
+        super().__init__(response)
+        self.prompts: list[str] = []
+
+    def complete(self, messages, config=None, tools=None):
+        self.prompts.append(messages[-1]["content"])
+        return super().complete(messages, config, tools)
+
+
 # ── create + provenance ───────────────────────────────────────────────────
 
 
@@ -292,6 +304,52 @@ class TestFailureModes:
         assert result["ok"] is True
         assert result["applied"] == 0
         assert result["skipped"] == 0
+
+    def test_reviewer_sees_the_sessions_tool_calls(
+        self, adapter, symbiote_id, session_id, store, loader
+    ):
+        """The procedure lives in the tool calls, not in the final answer."""
+        _insert_messages(adapter, session_id, [
+            ("user", "Monte o resumo financeiro do mês"),
+            ("assistant", "Pronto! Salvei o resumo."),
+        ])
+        steps = [
+            {"iteration": 1, "tool_id": "fs_read", "params": {"path": "financas/orcamento.csv"}, "success": True},
+            {"iteration": 2, "tool_id": "calcular", "params": {"expressao": "1200 - 1011.15"}, "success": True},
+            {"iteration": 3, "tool_id": "fs_write", "params": {"path": "x.md", "content": "y" * 500}, "success": False},
+        ]
+        adapter.execute(
+            "INSERT INTO execution_traces (id, session_id, symbiote_id, total_iterations, "
+            "total_tool_calls, total_elapsed_ms, stop_reason, steps_json, tool_mode, created_at) "
+            "VALUES (?, ?, ?, 3, 3, 10, 'end_turn', ?, 'brief', datetime('now'))",
+            (str(uuid4()), session_id, symbiote_id, json.dumps(steps)),
+        )
+        llm = _RecordingLLM("[]")
+        engine = BackgroundReviewEngine(
+            llm=llm, messages=MessageRepository(adapter), store=store,
+            loader=loader, storage=adapter,
+        )
+
+        engine.run_sync(session_id, symbiote_id)
+
+        prompt = llm.prompts[0]
+        assert "Tool calls executed in this session" in prompt
+        assert '[ok] fs_read {"path":"financas/orcamento.csv"}' in prompt
+        assert '[ok] calcular {"expressao":"1200 - 1011.15"}' in prompt
+        assert "[FAILED] fs_write" in prompt
+        assert "y" * 200 not in prompt  # long params are cut
+
+    def test_reviewer_without_storage_or_traces_sees_only_messages(
+        self, adapter, symbiote_id, session_id, store, loader
+    ):
+        _insert_messages(adapter, session_id, [("user", "oi")])
+        llm = _RecordingLLM("[]")
+        engine = BackgroundReviewEngine(
+            llm=llm, messages=MessageRepository(adapter), store=store,
+            loader=loader, storage=adapter,
+        )
+        engine.run_sync(session_id, symbiote_id)
+        assert "Tool calls executed" not in llm.prompts[0]
 
     def test_delete_action_refused(
         self, adapter, symbiote_id, session_id, store, loader

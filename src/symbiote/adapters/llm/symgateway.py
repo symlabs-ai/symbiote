@@ -245,6 +245,14 @@ def _error_text(response: httpx.Response) -> str:
     if isinstance(body, dict):
         err = body.get("error") or body.get("detail") or body.get("message") or body
         if isinstance(err, dict):
-            err = err.get("message") or err
+            text = str(err.get("message") or err)
+            # The upstream provider's own error, when the gateway relays one:
+            # {"details": {"provider_error": {"error": {"type": "not_found_error", ...}}}}
+            upstream = ((err.get("details") or {}).get("provider_error") or {})
+            upstream = upstream.get("error", upstream) if isinstance(upstream, dict) else {}
+            kind = upstream.get("type") if isinstance(upstream, dict) else None
+            if kind:
+                text = f"{text} (provider: {kind})"
+            return text[:300]
         return str(err)[:300]
     return str(body)[:300]

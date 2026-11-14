@@ -265,6 +265,25 @@ class TestHandoffInjectedOnResume:
         assert extra["previous_handoff"]["user_input"] == "Previous project"
         assert extra["previous_handoff"]["blocks_completed"] == 2
 
+    def test_finished_project_is_not_injected(self, kernel, symbiote_id, session_id):
+        """Nothing pending: repeating the request must plan from scratch, not
+        be told to plan only the (zero) pending blocks."""
+        from symbiote.core.scoring import _utcnow, _uuid
+        payload = {
+            "user_input": "Previous project",
+            "block_results": [{"name": "A", "success": True}],
+            "pending_blocks": [],
+        }
+        kernel._memory.store(MemoryEntry(
+            id=_uuid(), symbiote_id=symbiote_id, session_id=session_id,
+            type="session_summary", category="handoff", scope="global",
+            source="system", content=json.dumps(payload), importance=1.0,
+            created_at=_utcnow(),
+        ))
+
+        new_sess = kernel.start_session(symbiote_id=symbiote_id)
+        assert kernel._inject_handoff_if_resuming(new_sess.id, symbiote_id, None) is None
+
     def test_no_inject_on_non_first_message(self, kernel, symbiote_id, session_id):
         self._store_handoff(kernel, symbiote_id, session_id)
 
@@ -312,12 +331,13 @@ class TestHandoffInjectedOnResume:
             )
             kernel._memory.store(entry)
 
+        # Both still have work pending (a finished project is not injected).
         _store({"user_input": "First project", "blocks_completed": 1,
-                "blocks_total": 1, "plan_blocks": [], "block_results": [],
-                "pending_blocks": [], "output_summary": ""}, "2026-01-01T00:00:00")
-        _store({"user_input": "Second project", "blocks_completed": 2,
                 "blocks_total": 2, "plan_blocks": [], "block_results": [],
-                "pending_blocks": [], "output_summary": ""}, "2026-01-02T00:00:00")
+                "pending_blocks": [{"name": "B"}], "output_summary": ""}, "2026-01-01T00:00:00")
+        _store({"user_input": "Second project", "blocks_completed": 2,
+                "blocks_total": 3, "plan_blocks": [], "block_results": [],
+                "pending_blocks": [{"name": "C"}], "output_summary": ""}, "2026-01-02T00:00:00")
 
         new_sess = kernel.start_session(symbiote_id=symbiote_id)
         extra = kernel._inject_handoff_if_resuming(new_sess.id, symbiote_id, None)
@@ -326,3 +346,29 @@ class TestHandoffInjectedOnResume:
         assert extra["previous_handoff"]["user_input"] in (
             "First project", "Second project"
         )
+
+
+def test_planner_ignores_a_handoff_with_nothing_pending():
+    from unittest.mock import MagicMock
+
+    from symbiote.core.context import AssembledContext
+    from symbiote.runners.long_run import LongRunRunner
+
+    llm = MagicMock()
+    llm.complete.return_value = '[{"name": "A", "description": "d", "success_criteria": "c"}]'
+    runner = LongRunRunner(llm=llm)
+    ctx = AssembledContext(
+        symbiote_id="s1", session_id="sess", user_input="Organize a mudança",
+        tool_mode="long_run",
+        extra_context={"previous_handoff": {
+            "user_input": "Organize a mudança",
+            "block_results": [{"name": "A", "success": True}],
+            "pending_blocks": [],
+        }},
+    )
+
+    plan = runner._run_planner(ctx)
+
+    system = llm.complete.call_args.args[0][0]["content"]
+    assert "Previous Session Handoff" not in system
+    assert plan.total_blocks == 1

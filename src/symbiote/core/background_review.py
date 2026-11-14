@@ -73,6 +73,11 @@ _log = logging.getLogger(__name__)
 # Reflection budget — large enough for typical sessions, small enough that
 # we don't blow up the Haiku prompt or pay surprise tokens.
 _DEFAULT_MAX_CHARS = 16_000
+# Tool calls of the session shown to the reviewer: the procedure a skill is
+# made of lives in them, not in the final answer ("Pronto! Salvei o resumo").
+_TOOL_DIGEST_MAX_CHARS = 4_000
+_TOOL_DIGEST_MAX_TURNS = 20
+_TOOL_PARAMS_MAX_CHARS = 120
 
 # Cap on how many skills we list in ``existing_skills`` for the LLM. Without
 # this the prompt grew O(N) and a library of 50+ skills would dominate the
@@ -226,9 +231,13 @@ class BackgroundReviewEngine:
                 return result
 
             template = self._resolve_review_template(symbiote_id)
+            conversation = self._format_messages(messages)
+            tool_digest = self._format_tool_calls(session_id)
+            if tool_digest:
+                conversation = f"{conversation}\n\n{tool_digest}"
             prompt = render_prompt(
                 template,
-                messages=self._format_messages(messages),
+                messages=conversation,
                 existing_skills=self._format_existing_skills(),
             )
             response = self._llm.complete([{"role": "user", "content": prompt}])
@@ -309,6 +318,56 @@ class BackgroundReviewEngine:
             total += len(line)
         lines.reverse()
         return "\n".join(lines)
+
+    def _format_tool_calls(self, session_id: str) -> str:
+        """The session's tool calls, per turn, from the persisted traces.
+
+        Messages hold only the final answers; without the calls the reviewer
+        cannot see a technique worth turning into a skill. Empty when there
+        is no storage or the session ran no tools.
+        """
+        if self._storage is None:
+            return ""
+        try:
+            rows = self._storage.fetch_all(
+                "SELECT steps_json, stop_reason FROM execution_traces "
+                "WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                (session_id, _TOOL_DIGEST_MAX_TURNS),
+            )
+        except Exception:  # traces are an optional enrichment
+            _log.debug("background review: could not read traces", exc_info=True)
+            return ""
+        blocks: list[str] = []
+        total = 0
+        for turn_number, row in enumerate(rows, start=1):  # newest first
+            try:
+                steps = json.loads(row["steps_json"] or "[]")
+            except (TypeError, ValueError):
+                continue
+            if not steps:
+                continue
+            lines = [f"Turn -{turn_number} (stop: {row['stop_reason'] or '?'}):"]
+            for step in steps:
+                params = json.dumps(
+                    step.get("params") or {}, ensure_ascii=False, default=str,
+                    separators=(",", ":"),
+                )
+                if len(params) > _TOOL_PARAMS_MAX_CHARS:
+                    params = params[: _TOOL_PARAMS_MAX_CHARS - 1] + "…"
+                status = "ok" if step.get("success") else "FAILED"
+                lines.append(f"  - [{status}] {step.get('tool_id', '?')} {params}")
+            block = "\n".join(lines)
+            if total + len(block) > _TOOL_DIGEST_MAX_CHARS:
+                break
+            blocks.append(block)
+            total += len(block)
+        if not blocks:
+            return ""
+        blocks.reverse()  # oldest first, like the conversation
+        return (
+            "Tool calls executed in this session (recorded by the runtime; "
+            "Turn -1 is the most recent turn that used tools):\n" + "\n".join(blocks)
+        )
 
     def _resolve_review_template(self, symbiote_id: str) -> str:
         """Pick the review prompt template, applying per-symbiote criteria (S5).

@@ -282,7 +282,7 @@ class LongRunRunner:
                     )
                     # Retry once with evaluator feedback
                     retry_prompt = self._build_retry_prompt(
-                        block_prompt, eval_result
+                        block_prompt, eval_result, block_result
                     )
                     block_result = self._execute_block(
                         context, retry_prompt, block_idx, block_name, on_token,
@@ -389,8 +389,10 @@ class LongRunRunner:
         planner_prompt = context.planner_prompt or _DEFAULT_PLANNER_PROMPT
 
         # B2: If resuming from a previous session, orient the planner with handoff data
-        if context.extra_context and "previous_handoff" in context.extra_context:
-            ph = context.extra_context["previous_handoff"]
+        ph = (context.extra_context or {}).get("previous_handoff")
+        # Only a handoff with work left orients the plan; with nothing pending
+        # "plan ONLY the pending blocks" yields an empty plan.
+        if isinstance(ph, dict) and ph.get("pending_blocks"):
             done = [b.get("name") for b in ph.get("block_results", []) if b.get("success")]
             pending = [b.get("name") for b in ph.get("pending_blocks", [])]
             planner_prompt = (
@@ -515,9 +517,11 @@ class LongRunRunner:
 
         tool_calls = 0
         iterations = 0
+        steps: list[LoopStep] = []
         if result.loop_trace is not None:
             tool_calls = result.loop_trace.total_tool_calls
             iterations = result.loop_trace.total_iterations
+            steps = list(result.loop_trace.steps)
 
         # Extract text output
         if isinstance(result.output, dict):
@@ -533,6 +537,7 @@ class LongRunRunner:
             error=result.error,
             iterations=iterations,
             tool_calls=tool_calls,
+            tool_steps=steps,
         )
 
     def _build_block_prompt(
@@ -577,17 +582,34 @@ class LongRunRunner:
         return "\n".join(parts)
 
     def _build_retry_prompt(
-        self, original_prompt: str, eval_result: dict
+        self,
+        original_prompt: str,
+        eval_result: dict,
+        previous: BlockResult | None = None,
     ) -> str:
-        """Build a retry prompt incorporating evaluator feedback."""
+        """Build a retry prompt incorporating evaluator feedback.
+
+        The tool calls of the rejected attempt already ran (tasks created,
+        files written, messages sent), so they are listed for the retry to
+        build on instead of repeating them.
+        """
         feedback = eval_result.get("feedback", "Quality below threshold")
         blocking = eval_result.get("blocking_issues", [])
         issues = "\n".join(f"- {issue}" for issue in blocking) if blocking else feedback
+        done = ""
+        if previous is not None and previous.tool_steps:
+            done = (
+                "\n## Tool calls from the rejected attempt (they already took effect)\n"
+                f"{_steps_digest(previous.tool_steps)}\n"
+                "Do not repeat them: their effects are in place. Check the current "
+                "state with read-only tools if needed and only add what is missing.\n"
+            )
 
         return (
             f"{original_prompt}\n\n"
             f"## IMPORTANT: Previous attempt was rejected by QA\n"
-            f"Issues to fix:\n{issues}\n\n"
+            f"Issues to fix:\n{issues}\n"
+            f"{done}\n"
             f"Address ALL issues above before completing this block."
         )
 
@@ -648,6 +670,7 @@ class LongRunRunner:
                 f"Success criteria: {block_def.get('success_criteria', '')}\n"
                 f"{criteria_text}\n"
                 f"## Generator Output\n{block_result.output}\n\n"
+                f"{_evidence_section(block_result)}"
                 f"Evaluate this work against the criteria above."
             )},
         ]
@@ -699,3 +722,45 @@ class LongRunRunner:
                 lines.append(f"    Feedback: {b.evaluator_feedback}")
 
         return "\n".join(lines)
+
+
+# ── Evidence of executed tool calls ──────────────────────────────────────────
+
+_DIGEST_MAX_STEPS = 60
+_DIGEST_MAX_PARAMS = 160
+
+
+def _steps_digest(steps: list[LoopStep]) -> str:
+    """One line per executed tool call: status, tool, compact params."""
+    lines = []
+    for step in steps[:_DIGEST_MAX_STEPS]:
+        params = json.dumps(step.params, ensure_ascii=False, default=str, separators=(",", ":"))
+        if len(params) > _DIGEST_MAX_PARAMS:
+            params = params[: _DIGEST_MAX_PARAMS - 1] + "…"
+        status = "ok" if step.success else f"FAILED: {(step.error or '')[:120]}"
+        lines.append(f"- [{status}] {step.tool_id} {params}")
+    if len(steps) > _DIGEST_MAX_STEPS:
+        lines.append(f"- … and {len(steps) - _DIGEST_MAX_STEPS} more")
+    return "\n".join(lines)
+
+
+def _evidence_section(block_result: BlockResult) -> str:
+    """Tool calls recorded by the runtime, for the evaluator to verify claims.
+
+    Without it the evaluator sees only the generator's text, cannot verify
+    work done through tools, and rejects it — and the retry repeats the
+    side effects.
+    """
+    if not block_result.tool_steps:
+        return (
+            "## Tool calls executed in this block (recorded by the runtime)\n"
+            "None. Any claim of actions taken through tools is unsupported.\n\n"
+        )
+    return (
+        "## Tool calls executed in this block (recorded by the runtime, "
+        "not claimed by the generator)\n"
+        f"{_steps_digest(block_result.tool_steps)}\n"
+        "These calls really ran; [ok] means the tool reported success. "
+        "Use them as evidence when checking the criteria.\n\n"
+    )
+

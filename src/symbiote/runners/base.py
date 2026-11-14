@@ -56,6 +56,9 @@ class BlockResult(BaseModel):
     iterations: int = 0
     tool_calls: int = 0
     elapsed_ms: int = 0
+    # Tool calls the runtime executed in this block. Shown to the evaluator
+    # as evidence and to a retry as work that already happened.
+    tool_steps: list[LoopStep] = []
 
 
 class LongRunPlan(BaseModel):

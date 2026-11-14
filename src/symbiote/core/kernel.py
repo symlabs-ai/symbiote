@@ -1323,9 +1323,14 @@ class SymbioteKernel:
         import json
         try:
             hd = json.loads(handoff_entries[0].content)
-            return {**(extra_context or {}), "previous_handoff": hd}
         except Exception:
             return extra_context
+        # A finished project leaves nothing to resume. Injecting it told the
+        # planner to "plan only the pending blocks" — none — so repeating a
+        # completed request produced an empty plan and the turn failed.
+        if not isinstance(hd, dict) or not hd.get("pending_blocks"):
+            return extra_context
+        return {**(extra_context or {}), "previous_handoff": hd}
 
     def _persist_handoff_memory(self, session_id: str, symbiote_id: str) -> None:
         """S-02: Persist long-run handoff_data as a MemoryEntry(category='handoff')."""

@@ -993,9 +993,24 @@ def _make_memory_search_handler(memory_store: Any) -> Callable[[dict], Any]:
         query = params.get("query", "")
         scope = params.get("scope")
         limit = params.get("limit", 5)
+        symbiote_id = _calling_symbiote()
+        # Substring matches first, then memories sharing terms with the query:
+        # models search with keywords ("prioridade financeira ano"), which are
+        # rarely a literal substring of any memory.
         results = memory_store.search(
-            query, scope=scope, limit=limit, symbiote_id=_calling_symbiote()
+            query, scope=scope, limit=limit, symbiote_id=symbiote_id
         )
+        if len(results) < limit and query.strip():
+            seen = {m.id for m in results}
+            for entry in memory_store.get_relevant(
+                query, limit=limit * 2, symbiote_id=symbiote_id
+            ):
+                if entry.id in seen or (scope is not None and entry.scope != scope):
+                    continue
+                results.append(entry)
+                seen.add(entry.id)
+                if len(results) >= limit:
+                    break
         record = current_turn_record()
         if record is not None:
             record.add_memories([m.id for m in results], "on_demand")
