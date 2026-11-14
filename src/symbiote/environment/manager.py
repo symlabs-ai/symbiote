@@ -37,6 +37,7 @@ class EnvironmentManager:
         policies: dict | None = None,
         resources: dict | None = None,
         tool_tags: list[str] | None = None,
+        tool_visibility: str | None = None,
         tool_loading: str | None = None,
         tool_mode: str | None = None,
         tool_loop: bool | None = None,
@@ -265,6 +266,15 @@ class EnvironmentManager:
             return []
         return cfg.tool_tags
 
+    def get_tool_visibility(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> str:
+        """Return tool_visibility from config, or 'tagged' if no config."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return "tagged"
+        return cfg.tool_visibility
+
     def get_tool_loading(
         self, symbiote_id: str, workspace_id: str | None = None
     ) -> str:
@@ -490,6 +500,7 @@ class EnvironmentManager:
             policies=json.loads(row["policies_json"]),
             resources=json.loads(row["resources_json"]),
             tool_tags=json.loads(row.get("tool_tags_json") or "[]"),
+            tool_visibility=row.get("tool_visibility") or "tagged",
             tool_loading=row.get("tool_loading") or "full",
             tool_mode=row.get("tool_mode") or "brief",
             tool_loop=bool(row.get("tool_loop", 1)),

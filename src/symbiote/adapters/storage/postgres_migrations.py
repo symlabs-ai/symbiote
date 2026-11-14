@@ -403,11 +403,16 @@ _V4_CANCEL_RELAY = """
 ALTER TABLE session_locks ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0;
 """
 
+_V5_TOOL_VISIBILITY = """
+ALTER TABLE environment_configs ADD COLUMN tool_visibility TEXT COLLATE "C" DEFAULT 'tagged';
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "baseline", _V1_BASELINE),
     (2, "session_locks", _V2_SESSION_LOCKS),
     (3, "skill_library", _V3_SKILL_LIBRARY),
     (4, "cancel_relay", _V4_CANCEL_RELAY),
+    (5, "tool_visibility", _V5_TOOL_VISIBILITY),
 )
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

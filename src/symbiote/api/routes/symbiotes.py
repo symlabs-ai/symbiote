@@ -166,7 +166,8 @@ def set_config(
     # Build kwargs from non-None fields
     kwargs: dict[str, Any] = {}
     for field_name in (
-        "tools", "tool_mode", "tool_loading", "tool_tags", "max_tool_iterations",
+        "tools", "tool_mode", "tool_loading", "tool_tags", "tool_visibility",
+        "max_tool_iterations",
         "tool_call_timeout", "loop_timeout", "memory_share", "knowledge_share",
         "context_mode", "prompt_caching",
     ):
@@ -216,6 +217,7 @@ def _build_config_response(env: EnvironmentManager, symbiote_id: str) -> ConfigR
         tool_mode=cfg.tool_mode,
         tool_loading=cfg.tool_loading,
         tool_tags=cfg.tool_tags,
+        tool_visibility=cfg.tool_visibility,
         tool_loop=cfg.tool_loop,
         max_tool_iterations=cfg.max_tool_iterations,
         tool_call_timeout=cfg.tool_call_timeout,

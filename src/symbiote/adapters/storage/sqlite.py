@@ -183,6 +183,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "_migrate_session_locks",
     "_migrate_skill_library",
     "_migrate_cancel_relay",
+    "_migrate_tool_visibility",
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -594,6 +595,15 @@ class SQLiteAdapter:
         with contextlib.suppress(sqlite3.OperationalError):  # column already exists
             self._conn.execute(
                 "ALTER TABLE session_locks ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0"
+            )
+        self._conn.commit()
+
+    def _migrate_tool_visibility(self) -> None:
+        """11: which tools the prompt lists (``EnvironmentConfig.tool_visibility``)."""
+        with contextlib.suppress(sqlite3.OperationalError):  # column already exists
+            self._conn.execute(
+                "ALTER TABLE environment_configs "
+                "ADD COLUMN tool_visibility TEXT DEFAULT 'tagged'"
             )
         self._conn.commit()
 

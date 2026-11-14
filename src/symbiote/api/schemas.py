@@ -141,6 +141,7 @@ class ConfigRequest(BaseModel):
     tool_mode: str | None = None  # "instant" | "brief" | "long_run" | "continuous"
     tool_loading: str | None = None  # "full" | "index" | "semantic"
     tool_tags: list[str] | None = None
+    tool_visibility: str | None = None  # "tagged" | "authorized"
     max_tool_iterations: int | None = None
     tool_call_timeout: float | None = None
     loop_timeout: float | None = None
@@ -163,6 +164,7 @@ class ConfigResponse(BaseModel):
     tool_mode: str = "brief"
     tool_loading: str = "full"
     tool_tags: list[str] = []
+    tool_visibility: str = "tagged"
     tool_loop: bool = True
     max_tool_iterations: int = 10
     tool_call_timeout: float = 30.0

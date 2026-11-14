@@ -87,6 +87,18 @@ class TestConfigEndpoints:
         resp = c.get(f"/symbiotes/{sid}/config", headers={"Authorization": f"Bearer {key}"})
         assert resp.json()["tool_mode"] == "instant"
 
+    def test_set_tool_visibility(self, setup):
+        c, key, sid = setup["client"], setup["api_key"], setup["symbiote_id"]
+        h = {"Authorization": f"Bearer {key}"}
+        assert c.get(f"/symbiotes/{sid}/config", headers=h).json()["tool_visibility"] == "tagged"
+
+        resp = c.put(f"/symbiotes/{sid}/config", json={"tool_visibility": "authorized"}, headers=h)
+        assert resp.status_code == 200
+        assert resp.json()["tool_visibility"] == "authorized"
+
+        resp = c.put(f"/symbiotes/{sid}/config", json={"tool_visibility": "all"}, headers=h)
+        assert resp.status_code == 422
+
     def test_set_long_run_config(self, setup):
         c, key, sid = setup["client"], setup["api_key"], setup["symbiote_id"]
         resp = c.put(

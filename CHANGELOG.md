@@ -5,6 +5,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+### Novas funcionalidades
+
+- feat(config): `EnvironmentConfig.tool_visibility` decide quais tools o prompt lista (B-76). `"tagged"` (padrão, comportamento anterior) lista toda tool cujas tags batem com `tool_tags`, autorizada ou não. `"authorized"` lista só as que a política deixa o symbiote executar; `tool_tags` continua restringindo as tools com tag, e uma tool autorizada sem tag (`fs_*`, `search_*`, `spawn`) continua listada mesmo com `tool_tags` definido. O `get_tool_schema` segue a mesma regra. Disponível em `environment.configure(...)` e no `PUT /symbiotes/{id}/config`; nova coluna `tool_visibility` em `environment_configs` (migração 11 no SQLite, 5 no PostgreSQL).
+
+### Correções
+
+- fix(long-run): os blocos de `tool_mode="long_run"` rodavam sempre no protocolo legado e sem o review de skills em background (B-74). O `LongRunRunner` passa a receber do kernel o `agent_protocol` (com tools nativas obrigatórias no `poolside_laguna_v1`) e o resolvedor do `background_review`, e os repassa ao runner de cada bloco; `kernel.set_agent_protocol()` passa a valer também para o long-run. A contagem de iterações até o próximo review continua de um bloco para o outro, então um intervalo maior que um bloco ainda dispara.
+
 ## [v0.8.3] - 2026-11-14
 
 Streaming token a token e endpoint SSE de chat, conferência de contagens no long-run e o retorno do SymGateway sobre a 0.8.2: histórico estruturado, resposta final sem tools aceita por qualquer provedor e limites de resultado visíveis ao host.

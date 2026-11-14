@@ -869,6 +869,33 @@ class ToolGateway:
             if tag_set & set(d.tags)
         ]
 
+    def visible_descriptors(
+        self, symbiote_id: str, tags: list[str] | None = None
+    ) -> list[ToolDescriptor]:
+        """Descriptors the prompt lists for *symbiote_id*, narrowed by *tags*.
+
+        With ``tool_visibility="tagged"`` (default) this is
+        ``get_descriptors(tags)``. With ``"authorized"`` only the tools the
+        PolicyGate allows are kept, and *tags* narrow the tagged ones only: an
+        authorized tool without tags (``fs_read``, ``spawn``) stays listed.
+        """
+        if not self._authorized_only(symbiote_id):
+            return self.get_descriptors(tags=tags)
+        return [
+            d for d in self._descriptors.values()
+            if self._gate.check(symbiote_id, d.tool_id).allowed
+            and self._tags_admit(tags, d)
+        ]
+
+    def _authorized_only(self, symbiote_id: str) -> bool:
+        get = getattr(self._gate._env, "get_tool_visibility", None)
+        return get is not None and get(symbiote_id) == "authorized"
+
+    @staticmethod
+    def _tags_admit(tags: list[str] | None, desc: ToolDescriptor) -> bool:
+        """Tag rule of the ``authorized`` visibility (untagged tools pass)."""
+        return not tags or not desc.tags or bool(set(tags) & set(desc.tags))
+
     def get_available_tags(self) -> list[str]:
         """Return distinct tags across all registered descriptors."""
         tags: set[str] = set()
@@ -928,6 +955,8 @@ class ToolGateway:
         if not self._gate.check(symbiote_id, desc.tool_id).allowed:
             return False
         tags = self._gate._env.get_tool_tags(symbiote_id)
+        if self._authorized_only(symbiote_id):
+            return self._tags_admit(tags, desc)
         return not tags or bool(set(tags) & set(desc.tags))
 
     def get_risk_level(self, tool_id: str) -> str:

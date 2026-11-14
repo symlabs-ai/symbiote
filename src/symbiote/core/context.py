@@ -561,7 +561,9 @@ class ContextAssembler:
                 user_input, effective_tags
             )
 
-        descriptors = self._tool_gateway.get_descriptors(tags=resolved_tags)
+        descriptors = self._tool_gateway.visible_descriptors(
+            symbiote_id, tags=resolved_tags
+        )
 
         if loading_mode == "index":
             # Register meta-tool so the LLM can fetch full schemas on demand

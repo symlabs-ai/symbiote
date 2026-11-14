@@ -160,6 +160,12 @@ class EnvironmentConfig(BaseModel):
     policies: dict = Field(default_factory=dict)
     resources: dict = Field(default_factory=dict)
     tool_tags: list[str] = Field(default_factory=list)
+    # Which registered tools the prompt lists. "tagged": every tool whose tags
+    # match tool_tags (all of them without tags), authorized or not; the policy
+    # blocks the call. "authorized": only tools the PolicyGate allows; tool_tags
+    # still narrow the tagged ones, and authorized untagged tools (builtins such
+    # as fs_*, spawn) stay listed.
+    tool_visibility: Literal["tagged", "authorized"] = "tagged"
     tool_loading: Literal["full", "index", "semantic"] = "full"
     tool_mode: Literal["auto", "instant", "brief", "long_run", "continuous"] = "brief"
     tool_loop: bool = True  # deprecated — derived from tool_mode

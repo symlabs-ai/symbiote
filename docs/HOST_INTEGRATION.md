@@ -339,7 +339,7 @@ them explicitly:
 |---|---|---|
 | **Conversation memory not auto-injected** | Bot is amnesic across turns even though messages pile up in the DB | Inject `extra_context["conversation_history"]` every turn — see [Conversation Memory](#conversation-memory-multi-turn--read-this-before-building-a-chat-bot). Integration error #1. |
 | **Approval gate off by default** | High-risk tools execute without ever calling your callback | `kernel.set_approval_callback(cb)` — passing `on_before_tool_call` to a standalone `ChatRunner` does **not** affect `kernel.message()`. See [Human-in-the-Loop](#human-in-the-loop). |
-| **Tool visibility is by TAG, not by the authorized list** | LLM sees *all* registered descriptors (incl. builtins like `bash`/`fs_*`/`search_*`) even though you only authorized a few in `configure(tools=[...])` | `tools=` is **authorization** (what can run); to scope what the LLM **sees**, set `tool_tags=[...]` in `configure` and tag your tools accordingly. `get_descriptors(tags=None)` returns everything. |
+| **Tool visibility is by TAG, not by the authorized list** | LLM sees *all* registered descriptors (incl. builtins like `bash`/`fs_*`/`search_*`) even though you only authorized a few in `configure(tools=[...])` | `tools=` is **authorization** (what can run); to scope what the LLM **sees**, set `tool_visibility="authorized"` (only what may run) and/or `tool_tags=[...]` in `configure`. See [Which tools the model sees](#which-tools-the-model-sees). |
 | **Native function-calling off by default** | LLM adapter supports structured tool_calls but the runner uses text-based parsing | `kernel.set_native_tools(True)` (since this release) — no more poking `runner._native_tools`. |
 
 > All four are non-obvious because the "happy path" looks correct: sessions
@@ -518,6 +518,32 @@ The same precedence applies to live-URL discovery (`discover(url=...)`) and
 file-based OpenAPI specs. An unknown `x-risk-level` value is ignored and the
 heuristic is used. `risk_level` is also exposed on the discovered-tools REST/HTTP
 responses.
+
+### Which tools the model sees
+
+Authorization (`configure(tools=[...])`, what may run) and visibility (what the
+prompt lists) are separate. `tool_visibility` in the `EnvironmentConfig`
+decides how the prompt list is built:
+
+| Value | The prompt lists |
+|---|---|
+| `"tagged"` (default) | every registered tool whose tags match `tool_tags` (all of them when `tool_tags` is empty), authorized or not. A call to an unauthorized one is blocked by the policy. Untagged tools (`fs_*`, `search_*`, `spawn`) disappear as soon as `tool_tags` is set. |
+| `"authorized"` | only the tools the policy allows for the symbiote. `tool_tags` still narrows the tagged ones; an authorized tool without tags stays listed. |
+
+```python
+kernel.environment.configure(
+    symbiote_id=sym.id,
+    tools=["tasks_list", "tasks_create", "fs_read"],
+    tool_tags=["tasks"],
+    tool_visibility="authorized",   # tasks_list, tasks_create and fs_read
+)
+```
+
+Mode meta-tools (`get_tool_schema` with `tool_loading="index"`,
+`search_memories`/`search_knowledge` with `context_mode="on_demand"`) are
+authorized by their mode and stay listed. `get_tool_schema` follows the same
+rule, so it never returns the schema of a tool the prompt would not list. The
+REST API takes the field in `PUT /symbiotes/{id}/config`.
 
 ---
 
