@@ -5,6 +5,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.4] - 2026-11-14
+
+Os blocos do long-run passam a rodar no protocolo do kernel e com o review de skills, e o host pode listar no prompt só as tools que o symbiote pode executar.
+
 ### Novas funcionalidades
 
 - feat(config): `EnvironmentConfig.tool_visibility` decide quais tools o prompt lista (B-76). `"tagged"` (padrão, comportamento anterior) lista toda tool cujas tags batem com `tool_tags`, autorizada ou não. `"authorized"` lista só as que a política deixa o symbiote executar; `tool_tags` continua restringindo as tools com tag, e uma tool autorizada sem tag (`fs_*`, `search_*`, `spawn`) continua listada mesmo com `tool_tags` definido. O `get_tool_schema` segue a mesma regra. Disponível em `environment.configure(...)` e no `PUT /symbiotes/{id}/config`; nova coluna `tool_visibility` em `environment_configs` (migração 11 no SQLite, 5 no PostgreSQL).
