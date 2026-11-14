@@ -29,6 +29,7 @@ from symbiote.core.exceptions import (
     EntityNotFoundError,
     SessionBusyError,
     SessionLockLostError,
+    TurnCancelledError,
 )
 from symbiote.core.hooks import CompositeHook
 from symbiote.core.identity import IdentityManager
@@ -51,6 +52,7 @@ from symbiote.core.session_lock import (
     renew_interval,
 )
 from symbiote.core.turn_control import (
+    CANCELLED,
     TurnControl,
     TurnStop,
     bind_turn_control,
@@ -279,6 +281,9 @@ class SymbioteKernel:
         self._session_lock: SessionLockPort = (
             session_lock if session_lock is not None else InProcessSessionLock()
         )
+        # The turn running on each session of this process (cancel_turn).
+        self._turns: dict[str, TurnControl] = {}
+        self._turns_lock = threading.Lock()
 
         # Export
         self._export = ExportService(self._storage)
@@ -786,11 +791,10 @@ class SymbioteKernel:
                 return self._message_inner(
                     session_id, content, extra_context, llm_config=llm_config
                 )
-            except TurnStop:
-                raise SessionLockLostError(session_id) from None
+            except TurnStop as stop:
+                raise self._stop_error(session_id, stop) from None
             finally:
-                reset_turn_control(control_token)
-                lease.stop()
+                self._end_turn(session_id, lease, control_token)
                 try:
                     self._session_lock.release(session_id, token)
                 except Exception:
@@ -819,10 +823,53 @@ class SymbioteKernel:
             ttl=ttl,
             interval=renew_interval(ttl, self._config.session_lock_renew_interval),
             on_lost=control.lose_lock,
+            on_cancel=control.cancel,
+            cancel_poll=self._config.turn_cancel_poll_interval,
         )
         control_token = bind_turn_control(control)
+        with self._turns_lock:
+            self._turns[session_id] = control
         lease.start()
         return lease, control_token
+
+    def _end_turn(
+        self, session_id: str, lease: SessionLease, control_token: contextvars.Token
+    ) -> None:
+        with self._turns_lock:
+            self._turns.pop(session_id, None)
+        reset_turn_control(control_token)
+        lease.stop()
+
+    @staticmethod
+    def _stop_error(session_id: str, stop: TurnStop) -> Exception:
+        """The exception the host gets for a turn that was stopped."""
+        if stop.reason == CANCELLED:
+            return TurnCancelledError(session_id)
+        return SessionLockLostError(session_id)
+
+    def cancel_turn(self, session_id: str) -> bool:
+        """Ask the turn running on ``session_id`` to stop.
+
+        From this moment the turn starts no new model call and no new tool
+        call; the call that is running finishes. ``message()`` /
+        ``message_async()`` then raise ``TurnCancelledError``. The user
+        message stays in the session and the trace of what the turn did is
+        stored with ``stop_reason="cancelled"``; no assistant message is
+        stored.
+
+        Returns True when the request reached a running turn. A turn of
+        another replica is reached through the session lock when it relays
+        cancellations (``StorageSessionLock`` does, within
+        ``KernelConfig.turn_cancel_poll_interval``); otherwise call this on
+        the replica that runs the turn. False: no turn is running there.
+        """
+        with self._turns_lock:
+            control = self._turns.get(session_id)
+        if control is not None:
+            control.cancel()
+            return True
+        relay = getattr(self._session_lock, "request_cancel", None)
+        return bool(relay(session_id)) if relay is not None else False
 
     def _message_inner(
         self,
@@ -865,7 +912,12 @@ class SymbioteKernel:
                     llm_config=llm_config,
                 )
                 response = self._finish_turn(session_id, symbiote_id, result)
-            except BaseException:
+            except BaseException as exc:
+                if isinstance(exc, TurnStop) and exc.reason == CANCELLED:
+                    # Cancelled by the host: the user message stays and the
+                    # trace of what was done is stored.
+                    self._record_cancelled_turn(session_id, symbiote_id, exc)
+                    raise
                 # No answer was stored: drop the user message too, so a
                 # retried turn does not leave duplicates without replies.
                 self._sessions.delete_message(user_message.id)
@@ -916,11 +968,10 @@ class SymbioteKernel:
                 return await self._message_async_inner(
                     session_id, content, extra_context, on_token, llm_config=llm_config
                 )
-            except TurnStop:
-                raise SessionLockLostError(session_id) from None
+            except TurnStop as stop:
+                raise self._stop_error(session_id, stop) from None
             finally:
-                reset_turn_control(control_token)
-                lease.stop()
+                self._end_turn(session_id, lease, control_token)
                 try:
                     release_async = getattr(lock, "release_async", None)
                     if release_async is not None:
@@ -973,7 +1024,10 @@ class SymbioteKernel:
                     llm_config=llm_config,
                 )
                 response = self._finish_turn(session_id, symbiote_id, result)
-            except BaseException:
+            except BaseException as exc:
+                if isinstance(exc, TurnStop) and exc.reason == CANCELLED:
+                    self._record_cancelled_turn(session_id, symbiote_id, exc)
+                    raise
                 self._sessions.delete_message(user_message.id)
                 raise
             await self._hooks.after_turn(turn_messages, _response_text(response))
@@ -982,6 +1036,21 @@ class SymbioteKernel:
             close_turn_record(record_token)
             self._persist_turn_context(record)
             _reset_active_symbiote(_scope_token)
+
+    def _record_cancelled_turn(
+        self, session_id: str, symbiote_id: str, stop: TurnStop
+    ) -> None:
+        """Store the trace of a cancelled turn (an empty one when it stopped
+        before doing anything), so its final state is on record. Never
+        raises: it runs while the turn unwinds."""
+        trace = stop.trace if isinstance(stop.trace, LoopTrace) else LoopTrace()
+        trace.stop_reason = CANCELLED
+        try:
+            self._persist_trace(session_id, symbiote_id, trace)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "could not record the cancelled turn of session %s", session_id
+            )
 
     def _sync_skills(self, symbiote_id: str) -> None:
         """Bring the local skill directory of this turn's scope up to date
@@ -2220,8 +2289,8 @@ class SymbioteKernel:
 
         from symbiote.core.models import MemoryEntry
 
-        if trace is None or trace.stop_reason in ("end_turn", None):
-            return
+        if trace is None or trace.stop_reason in ("end_turn", CANCELLED, None):
+            return  # nothing went wrong (a cancelled turn is the user's choice)
 
         if trace.stop_reason == "circuit_breaker":
             # Find the tool that triggered the breaker

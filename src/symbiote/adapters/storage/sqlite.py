@@ -182,6 +182,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "_migrate_host_tables",
     "_migrate_session_locks",
     "_migrate_skill_library",
+    "_migrate_cancel_relay",
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -586,6 +587,14 @@ class SQLiteAdapter:
             )""",
         ):
             self._conn.execute(stmt)
+        self._conn.commit()
+
+    def _migrate_cancel_relay(self) -> None:
+        """10: ``StorageSessionLock`` relays ``cancel_turn`` between replicas."""
+        with contextlib.suppress(sqlite3.OperationalError):  # column already exists
+            self._conn.execute(
+                "ALTER TABLE session_locks ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0"
+            )
         self._conn.commit()
 
     def execute(self, sql: str, params: tuple | None = None) -> sqlite3.Cursor:

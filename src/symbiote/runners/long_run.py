@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING
 from symbiote.core.context import AssembledContext
 from symbiote.core.models import Message
 from symbiote.core.ports import LLMPort
-from symbiote.core.turn_control import check_turn
+from symbiote.core.turn_control import TurnStop, check_turn
 from symbiote.runners.base import (
     BlockResult,
     LongRunPlan,
@@ -194,9 +194,31 @@ class LongRunRunner:
         ``llm_config`` (per-call overrides, e.g. effort) is merged over
         ``context.generation_settings`` for the planner and evaluator calls
         and forwarded to every block.
+
+        A turn that has to stop (``TurnStop``: cancelled, or its session
+        lock was lost) leaves with the trace of the blocks done so far.
         """
-        loop_start = time.monotonic()
         trace = LoopTrace(tool_mode="long_run")
+        started = time.monotonic()
+        try:
+            return self._run_project(context, on_token, llm_config, trace)
+        except TurnStop as stop:
+            trace.total_iterations = len({step.iteration for step in trace.steps})
+            trace.total_tool_calls = len(trace.steps)
+            trace.total_elapsed_ms = int((time.monotonic() - started) * 1000)
+            trace.stop_reason = stop.reason
+            stop.trace = trace
+            raise
+
+    def _run_project(
+        self,
+        context: AssembledContext,
+        on_token: Callable[[str], None] | None,
+        llm_config: dict | None,
+        trace: LoopTrace,
+    ) -> RunResult:
+        """The project itself; see ``run``."""
+        loop_start = time.monotonic()
         self._llm_config = llm_config
         self._call_config = {**(context.generation_settings or {}), **(llm_config or {})} or None
 

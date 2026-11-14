@@ -88,6 +88,10 @@ class KernelConfig(BaseModel):
     # every N seconds; a turn whose lock cannot be renewed stops before its
     # next step. None renews at a third of the ttl (no renewal without ttl).
     session_lock_renew_interval: float | None = Field(default=None, gt=0)
+    # How often a running turn asks its session lock whether another replica
+    # requested its cancellation (``kernel.cancel_turn`` there). Only locks
+    # that relay cancellations are asked (``StorageSessionLock``).
+    turn_cancel_poll_interval: float = Field(default=1.0, gt=0)
     # Root directory for the builtin filesystem tools (fs_read / fs_write /
     # fs_list) and the default working directory of ``bash``. When set, every
     # path must resolve (symlinks included) inside it and an ``allowed_root``

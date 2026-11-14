@@ -147,6 +147,38 @@ kernel = SymbioteKernel(
   judges expiry by each replica's clock: keep the ttl well above the clock
   skew between replicas.
 
+### Cancelling a turn
+
+```python
+kernel.cancel_turn(session_id)     # True when it reached a running turn
+```
+
+From that moment the turn starts **no new model call and no new tool call**;
+the call that is running finishes (a Python thread cannot be interrupted).
+`kernel.message()` / `message_async()` then raise `TurnCancelledError`, and:
+
+- the **user message stays** in the session (a turn that *fails* still has
+  its user message removed, so a retry leaves no duplicate);
+- the **trace of what the turn did** is stored in `execution_traces` with
+  `stop_reason="cancelled"`, even when it stopped before any tool ran, so a
+  cancelled turn is told apart from a completed one (`"end_turn"`) in
+  `kernel.inspector.list_traces(session_id=...)`;
+- no assistant message is stored, `after_turn` hooks do not run, and
+  `close_session` does not record a failure memory for it.
+
+`cancel_turn` is safe to call from any thread (a request handler, a signal).
+A request made when no turn is running returns `False` and does not affect
+the next turn. It works in every tool mode; in `long_run` the block in
+progress finishes its current step and no further block starts.
+
+**Several replicas.** The request has to reach the replica that runs the
+turn. With `StorageSessionLock` it does, from any replica: the request is
+written on the session's lock row and the running turn reads it within
+`KernelConfig.turn_cancel_poll_interval` (1 s by default). With another lock,
+either give it `request_cancel(session_id) -> bool` and
+`cancel_requested(session_id, token) -> bool`, or call `cancel_turn` on every
+replica (it returns `False` where the turn is not running).
+
 ### Skills shared between replicas
 
 By default the writable skill library is a directory (`skills_root`). With
@@ -236,7 +268,7 @@ What is **not** one transaction:
 - A turn as a whole. The user message is stored first; the turn's context
   record (`turn_contexts`), the audit rows of each tool call and the memories
   written by tools are committed as they happen. A turn that fails removes
-  its user message and keeps its trace.
+  its user message and keeps its trace; a cancelled turn keeps both.
 - `close_session` as a whole: score, failure memory, reflection, handoff and
   the status change are separate steps, each one atomic; a step that fails is
   logged and the others still run.

@@ -37,6 +37,7 @@ from symbiote.core.exceptions import (
     SessionLockLostError,
     StorageIntegrityError,
     SymbioteError,
+    TurnCancelledError,
     ValidationError,
 )
 from symbiote.core.identity import IdentityManager
@@ -172,6 +173,11 @@ async def session_busy_handler(request: Request, exc: SessionBusyError) -> JSONR
 
 @app.exception_handler(SessionLockLostError)
 async def session_lock_lost_handler(request: Request, exc: SessionLockLostError) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(TurnCancelledError)
+async def turn_cancelled_handler(request: Request, exc: TurnCancelledError) -> JSONResponse:
     return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 

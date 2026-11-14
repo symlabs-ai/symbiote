@@ -192,7 +192,7 @@ class StorageSessionLock:
         result = self._storage.execute(
             "INSERT INTO session_locks (session_id, owner, expires_at) VALUES (?, ?, ?) "
             "ON CONFLICT(session_id) DO UPDATE SET "
-            "owner = excluded.owner, expires_at = excluded.expires_at "
+            "owner = excluded.owner, expires_at = excluded.expires_at, cancel_requested = 0 "
             "WHERE session_locks.expires_at <= ?",
             (session_id, token, now + self._ttl(ttl), now),
         )
@@ -246,13 +246,38 @@ class StorageSessionLock:
     async def release_async(self, session_id: str, token: str) -> None:
         await asyncio.to_thread(self.release, session_id, token)
 
+    # Relay of ``kernel.cancel_turn`` to the replica that runs the turn.
+
+    def request_cancel(self, session_id: str) -> bool:
+        """Mark the turn holding the lock of ``session_id`` to be cancelled;
+        False when no turn holds it."""
+        result = self._storage.execute(
+            "UPDATE session_locks SET cancel_requested = 1 "
+            "WHERE session_id = ? AND expires_at > ?",
+            (session_id, self._clock()),
+        )
+        return result.rowcount == 1
+
+    def cancel_requested(self, session_id: str, token: str) -> bool:
+        """Whether another replica asked for the turn holding ``token`` to stop."""
+        row = self._storage.fetch_one(
+            "SELECT cancel_requested FROM session_locks WHERE session_id = ? AND owner = ?",
+            (session_id, token),
+        )
+        return bool(row and row["cancel_requested"])
+
 
 class SessionLease:
-    """A held session lock, renewed in the background while a turn runs.
+    """A held session lock, watched in the background while a turn runs.
 
-    ``on_lost`` is called (once, from the renewal thread) when the lock is
-    no longer ours: ``renew`` said so, or it kept failing until the ttl of
-    the last successful renewal ran out.
+    * It is renewed every ``interval`` seconds. ``on_lost`` is called when
+      the lock is no longer ours: ``renew`` said so, or it kept failing
+      until the ttl of the last successful renewal ran out.
+    * When the lock relays cancellations (it has ``cancel_requested``), it
+      is asked every ``cancel_poll`` seconds; ``on_cancel`` is called when
+      another replica requested the turn to stop.
+
+    Both callbacks run once, on the watcher thread.
     """
 
     def __init__(
@@ -264,6 +289,8 @@ class SessionLease:
         ttl: float | None,
         interval: float | None,
         on_lost: Callable[[], None],
+        on_cancel: Callable[[], None] | None = None,
+        cancel_poll: float | None = None,
     ) -> None:
         self._port = port
         self._session_id = session_id
@@ -271,12 +298,15 @@ class SessionLease:
         self._ttl = ttl
         self._interval = interval
         self._on_lost = on_lost
+        self._on_cancel = on_cancel
+        relays = on_cancel is not None and hasattr(port, "cancel_requested")
+        self._cancel_poll = cancel_poll if relays else None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
-        if self._interval is None:
-            return  # a lock that does not expire needs no renewal
+        if self._interval is None and self._cancel_poll is None:
+            return  # nothing to renew and nothing to ask
         self._thread = threading.Thread(
             target=self._run, name="symbiote-session-lease", daemon=True
         )
@@ -286,41 +316,68 @@ class SessionLease:
         self._stop.set()
 
     def _run(self) -> None:
-        assert self._interval is not None
-        interval = self._interval
-        valid_until = None if self._ttl is None else time.monotonic() + self._ttl
-        delay = interval
-        while not self._stop.wait(delay):
-            try:
-                renewed = self._port.renew(self._session_id, self._token, ttl=self._ttl)
-            except Exception:
+        now = time.monotonic()
+        next_renew = None if self._interval is None else now + self._interval
+        next_poll = None if self._cancel_poll is None else now + self._cancel_poll
+        valid_until = None if self._ttl is None else now + self._ttl
+        while next_renew is not None or next_poll is not None:
+            due = min(t for t in (next_renew, next_poll) if t is not None)
+            if self._stop.wait(max(0.0, due - time.monotonic())):
+                return
+            now = time.monotonic()
+            if next_poll is not None and now >= next_poll:
+                assert self._cancel_poll is not None and self._on_cancel is not None
+                next_poll = now + self._cancel_poll
+                if self._asked_to_cancel() and not self._stop.is_set():
+                    self._on_cancel()
+                    next_poll = None  # told once
+            if next_renew is not None and now >= next_renew:
+                assert self._interval is not None
+                try:
+                    renewed = self._port.renew(self._session_id, self._token, ttl=self._ttl)
+                except Exception:
+                    if self._stop.is_set():
+                        return
+                    expired = valid_until is None or time.monotonic() >= valid_until
+                    logger.warning(
+                        "could not renew the lock of session %s%s",
+                        self._session_id,
+                        "; giving the turn up" if expired else "; retrying",
+                        exc_info=True,
+                    )
+                    if expired:
+                        self._on_lost()
+                        return
+                    next_renew = time.monotonic() + min(
+                        self._interval, max(0.05, self._interval / 4)
+                    )
+                    continue
                 if self._stop.is_set():
                     return
-                expired = valid_until is None or time.monotonic() >= valid_until
-                logger.warning(
-                    "could not renew the lock of session %s%s",
-                    self._session_id,
-                    "; giving the turn up" if expired else "; retrying",
-                    exc_info=True,
+                if not renewed:
+                    logger.warning(
+                        "the lock of session %s is no longer held; stopping the turn",
+                        self._session_id,
+                    )
+                    self._on_lost()
+                    return
+                now = time.monotonic()
+                if self._ttl is not None:
+                    valid_until = now + self._ttl
+                next_renew = now + self._interval
+
+    def _asked_to_cancel(self) -> bool:
+        try:
+            return bool(
+                self._port.cancel_requested(  # type: ignore[attr-defined]
+                    self._session_id, self._token
                 )
-                if expired:
-                    break
-                delay = min(interval, max(0.05, interval / 4))
-                continue
-            if self._stop.is_set():
-                return
-            if not renewed:
-                logger.warning(
-                    "the lock of session %s is no longer held; stopping the turn",
-                    self._session_id,
-                )
-                break
-            if self._ttl is not None:
-                valid_until = time.monotonic() + self._ttl
-            delay = interval
-        else:
-            return
-        self._on_lost()
+            )
+        except Exception:
+            logger.debug(
+                "could not ask whether session %s was cancelled", self._session_id, exc_info=True
+            )
+            return False
 
 
 def renew_interval(ttl: float | None, configured: float | None) -> float | None:

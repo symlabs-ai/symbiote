@@ -83,6 +83,18 @@ class SessionLockLostError(SymbioteError):
         )
 
 
+class TurnCancelledError(SymbioteError):
+    """Raised by ``kernel.message()`` when the turn was cancelled with
+    ``kernel.cancel_turn``. No model or tool call started after the request;
+    the call that was running finished. The user message is kept and the
+    trace of what the turn did is stored with ``stop_reason="cancelled"``;
+    no assistant message is stored."""
+
+    def __init__(self, session_id: str) -> None:
+        self.session_id = session_id
+        super().__init__(f"the turn of session {session_id!r} was cancelled")
+
+
 class LLMError(SymbioteError):
     """Raised when an LLM operation fails.
 

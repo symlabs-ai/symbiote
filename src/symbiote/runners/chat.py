@@ -28,7 +28,7 @@ from symbiote.core.context import AssembledContext
 from symbiote.core.exceptions import is_transient_llm_error
 from symbiote.core.models import Message
 from symbiote.core.ports import LLMPort
-from symbiote.core.turn_control import check_turn
+from symbiote.core.turn_control import TurnStop, check_turn
 from symbiote.environment.descriptors import LLMResponse, ToolCall, ToolCallResult
 from symbiote.environment.exec_context import tool_exec_context
 from symbiote.environment.parser import parse_tool_calls
@@ -405,6 +405,38 @@ class ChatRunner:
         Keeps: LLM retry, tool execution, approval gate, response
         validation, on_stream, on_token.
         """
+        done: list[tuple[ToolCall, ToolCallResult]] = []
+        started = time.monotonic()
+        try:
+            return self._instant(context, on_token, llm_config, done)
+        except TurnStop as stop:
+            stop.trace = LoopTrace(
+                steps=[
+                    LoopStep(
+                        iteration=1,
+                        tool_id=call.tool_id,
+                        params=call.params,
+                        success=result.success,
+                        error=result.error,
+                    )
+                    for call, result in done
+                ],
+                total_iterations=1,
+                total_tool_calls=len(done),
+                total_elapsed_ms=int((time.monotonic() - started) * 1000),
+                stop_reason=stop.reason,
+                tool_mode="instant",
+            )
+            raise
+
+    def _instant(
+        self,
+        context: AssembledContext,
+        on_token: Callable[[str], None] | None,
+        llm_config: dict | None,
+        done: list[tuple[ToolCall, ToolCallResult]],
+    ) -> RunResult:
+        """The instant path itself; ``done`` receives the tool calls executed."""
         prepared = self._prepare_protocol_turn(context, llm_config)
         protocol_state = prepared.state
         messages = self._build_messages(
@@ -474,6 +506,7 @@ class ChatRunner:
                 gateway_results,
             )
             all_tool_results.extend(results)
+            done.extend(zip(tool_calls, results, strict=False))
 
             # Hook: let the caller decide whether tool results end the loop.
             hook_text: str | None = None
@@ -588,7 +621,29 @@ class ChatRunner:
         the event loop, so ``run()`` and ``run_async()`` share this one body
         and cannot drift apart. Everything else (callbacks, ``on_token``,
         bookkeeping) runs on the thread that drives the generator.
+
+        When the turn has to stop (``TurnStop``: cancelled, or its session
+        lock was lost), the trace of what was done so far goes up with it.
         """
+        trace = LoopTrace(tool_mode=context.tool_mode)
+        started = time.monotonic()
+        try:
+            return (yield from self._loop_body(context, on_token, llm_config, trace))
+        except TurnStop as stop:
+            trace.total_tool_calls = len(trace.steps)
+            trace.total_elapsed_ms = int((time.monotonic() - started) * 1000)
+            trace.stop_reason = stop.reason
+            stop.trace = trace
+            raise
+
+    def _loop_body(
+        self,
+        context: AssembledContext,
+        on_token: Callable[[str], None] | None,
+        llm_config: dict | None,
+        trace: LoopTrace,
+    ) -> Generator[_LoopRequest, Any, RunResult]:
+        """The loop itself; see ``_loop_steps``."""
         prepared = self._prepare_protocol_turn(context, llm_config)
         protocol_state = prepared.state
         messages = self._build_messages(
@@ -606,7 +661,6 @@ class ChatRunner:
 
         all_tool_results: list[ToolCallResult] = []
         schema_cache: dict[str, dict] = {}  # loop-local cache for index mode
-        trace = LoopTrace(tool_mode=context.tool_mode)
         final_text = ""
         loop_start = time.monotonic()
         loop_timeout = context.loop_timeout
@@ -643,6 +697,7 @@ class ChatRunner:
                     prepared,
                 )
             rounds += 1
+            trace.total_iterations = rounds  # kept current for a stopped turn
 
             clean_text, tool_calls = self._parse_response(response)
             self._validate_protocol_response(
