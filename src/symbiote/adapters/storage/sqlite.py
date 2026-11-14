@@ -181,6 +181,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "_migrate_governance",
     "_migrate_host_tables",
     "_migrate_session_locks",
+    "_migrate_skill_library",
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -565,6 +566,26 @@ class SQLiteAdapter:
                 expires_at REAL NOT NULL
             )"""
         )
+        self._conn.commit()
+
+    def _migrate_skill_library(self) -> None:
+        """9: the skill library shared between replicas (``StorageSkillsLibrary``)."""
+        for stmt in (
+            """CREATE TABLE IF NOT EXISTS skill_files (
+                scope      TEXT NOT NULL,
+                path       TEXT NOT NULL,
+                content    TEXT NOT NULL,
+                digest     TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (scope, path)
+            )""",
+            """CREATE TABLE IF NOT EXISTS skill_scopes (
+                scope      TEXT PRIMARY KEY,
+                version    INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            )""",
+        ):
+            self._conn.execute(stmt)
         self._conn.commit()
 
     def execute(self, sql: str, params: tuple | None = None) -> sqlite3.Cursor:

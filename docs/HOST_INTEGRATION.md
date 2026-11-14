@@ -90,9 +90,8 @@ storage.close()
   (`symbiote.core.exceptions`) on every adapter. `SQLiteAdapter` raises a
   subclass that is also a `sqlite3.IntegrityError`, so older `except` clauses
   keep working.
-- **What still lives outside the database** with several replicas: the skill
-  library (files; see `skill_writes`), and the per-session turn lock unless
-  you inject one (next section).
+- **What lives outside the database unless you inject it**: the per-session
+  turn lock and the skill library (the next two sections).
 
 To run the suite on PostgreSQL: `scripts/test-postgres.sh` starts a throwaway
 `postgres:15-alpine` container and runs pytest against it (or export
@@ -147,6 +146,68 @@ kernel = SymbioteKernel(
 - **`StorageSessionLock`** polls while waiting (`poll_interval`, 0.1 s) and
   judges expiry by each replica's clock: keep the ttl well above the clock
   skew between replicas.
+
+### Skills shared between replicas
+
+By default the writable skill library is a directory (`skills_root`). With
+several replicas that do not share a disk, inject a shared library:
+
+```python
+from symbiote.skills.shared import StorageSkillsLibrary
+
+storage = PostgresAdapter(dsn, schema="symbiote")
+kernel = SymbioteKernel(
+    KernelConfig(skill_scope="per_symbiote", skills_root=Path("/var/cache/symbiote/skills")),
+    llm=llm,
+    storage=storage,
+    skills_storage=StorageSkillsLibrary(storage),   # tables skill_files / skill_scopes
+)
+```
+
+The shared library becomes the source of truth and `skills_root` a **local
+copy** of it on each replica (it must be writable; it may be ephemeral):
+
+- Every change made through the kernel (`skill_manage`, the background
+  review, dream, promotion or archiving, deletion) is pushed to the library
+  when it happens.
+- Every turn starts by reading the library's version for its scope (one
+  small query) and, if it changed, updating the local copy. So **a skill
+  written on one replica is seen by the next turn of any other**, and a turn
+  whose context was already assembled keeps the library it started with.
+- The rest works on the local copy, unchanged: validation, protected roots,
+  quarantine and promotion, per-symbiote isolation (the scope is the
+  symbiote id, or `"global"` in the global skill scope).
+
+What to know:
+
+- **Only the agent write root is shared.** `skills_protected_roots` and
+  `skills_extra_roots` are read from each replica's own disk (ship them with
+  the image).
+- **First sync.** A scope the library never saw is seeded from the disk of
+  the first replica that uses it (this is how an existing directory
+  migrates). After that the library wins: local files that are not in it are
+  removed on a replica's first sync, with a warning.
+- **Two replicas changing the same file** at the same moment: the last push
+  wins. Changes to different files or different skills are both kept.
+- **Usage counters** (`use_count`, `last_used_at`) are pushed with the next
+  change of the scope, after 30 s of activity or at `kernel.shutdown()`,
+  not on every skill load; concurrent increments on two replicas may be
+  undercounted. Status changes (promotion, archiving) are pushed at once.
+- **Text files only** (UTF-8). A binary file placed by hand in the local
+  copy is not shared.
+- **Redaction** is applied again when a file is pushed, with what the
+  redactor knows at that moment.
+- **Library unreachable**: the turn runs with the local copy and an error is
+  logged; local changes are pushed on a later turn.
+- **`skill_writes=False`** replicas read the library and never write to it.
+- **Erasure.** `purge_symbiote` deletes the symbiote's scope from the library
+  and the local copy of the replica that ran it. Other replicas drop their
+  local copy in `kernel.sweep_skill_cache()`, which runs when a kernel starts;
+  call it after purges in long-lived replicas.
+
+Your own library (object storage, another database): implement
+`SkillsStoragePort` (`symbiote.core.ports`): `version`, `list_files`,
+`read_files`, `write_files`, `delete_scope`.
 
 ### Transactions
 
@@ -949,8 +1010,9 @@ Everything that learns can be turned off, per symbiote
 | Skill writes | `KernelConfig(skill_writes=False)` (whole kernel) | the library is read-only: `skill_manage` and `SkillsStore` refuse every change, the review does not run, dream leaves skills alone, loading a skill does not touch its usage counter, and no directory is created |
 | Cross-symbiote learning | `KernelConfig(cross_symbiote_learning=False)` | `cross_learning_candidates()` returns nothing |
 
-Skills live on local disk. Until they can be stored elsewhere, a host with
-several replicas that do not share a disk should run with `skill_writes=False`.
+Skills live in a local directory by default. A host with several replicas
+that do not share a disk either injects a shared library (see "Skills shared
+between replicas") or runs with `skill_writes=False`.
 
 ### Retention
 
@@ -974,11 +1036,14 @@ counts = kernel.purge_symbiote(sym.id)            # dry_run=True only counts
 
 Deletes the symbiote and everything the kernel stored about it: sessions,
 messages, memories, knowledge, traces and turn contexts, scores, audit rows,
-harness versions, configuration, the HTTP tools it registered and, with
-`skill_scope="per_symbiote"`, its skill directory. Other symbiotes are not
-touched. It cannot be undone (`IdentityManager.delete` only sets
-`status='deleted'`). Stop sending turns to the symbiote first. The deletes are
-not one transaction: if the call fails midway, call it again.
+harness versions, configuration, the HTTP tools it registered, its session
+locks and, with `skill_scope="per_symbiote"`, its skill directory and its
+scope of the shared skill library. Other symbiotes are not touched. It cannot
+be undone (`IdentityManager.delete` only sets `status='deleted'`). Stop
+sending turns to the symbiote first. The database deletes are one transaction
+(all or nothing); the skill directory is removed after it commits. With a
+shared skill library, other replicas remove their local copy in
+`kernel.sweep_skill_cache()`.
 
 ### Which memories entered a turn
 

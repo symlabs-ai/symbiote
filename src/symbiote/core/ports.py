@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -113,6 +114,42 @@ class SessionLockPort(Protocol):
     def renew(self, session_id: str, token: str, *, ttl: float | None = None) -> bool: ...
 
     def release(self, session_id: str, token: str) -> None: ...
+
+
+class SkillsStoragePort(Protocol):
+    """Shared home of the writable skill library, for replicas that do not
+    share a disk. Inject with ``SymbioteKernel(config, skills_storage=...)``;
+    without one the library is the local directory only.
+
+    The library is a set of text files per ``scope`` (``"global"``, or a
+    symbiote id in the per-symbiote skill scope), addressed by a relative
+    POSIX path (``<skill>/SKILL.md``, ``<skill>/references/x.md``,
+    ``<skill>/.skill_meta.json``).
+
+    * ``version(scope)`` changes whenever ``write_files`` changes the scope
+      (0 for a scope never written). The kernel reads it at the start of
+      every turn, so it must be cheap.
+    * ``list_files(scope)`` maps each path to the SHA-256 hex digest of its
+      UTF-8 content.
+    * ``read_files(scope, paths)`` returns the content of the paths that
+      exist.
+    * ``write_files(scope, files)`` stores the given contents (``None``
+      deletes the path) as one unit and returns the new version.
+    * ``delete_scope(scope)`` removes every file and the version of the
+      scope (``kernel.purge_symbiote``); returns how many files it removed.
+
+    ``StorageSkillsLibrary`` implements it on the kernel's database.
+    """
+
+    def version(self, scope: str) -> int: ...
+
+    def list_files(self, scope: str) -> dict[str, str]: ...
+
+    def read_files(self, scope: str, paths: Sequence[str]) -> dict[str, str]: ...
+
+    def write_files(self, scope: str, files: Mapping[str, str | None]) -> int: ...
+
+    def delete_scope(self, scope: str) -> int: ...
 
 
 @runtime_checkable

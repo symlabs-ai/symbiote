@@ -25,11 +25,13 @@ without requiring migration — only skills the agent creates write a sidecar.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import tempfile
 import threading
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -147,10 +149,34 @@ def read_meta(skill_dir: Path) -> dict[str, Any] | None:
     return data
 
 
-def write_meta(skill_dir: Path, meta: dict[str, Any]) -> None:
+# ``fn(skill_dir, urgent)`` called after a sidecar is written or removed. The
+# kernel's skills sync registers one to send the change to the shared
+# library; ``urgent`` is False for plain usage counters (``mark_used``).
+_write_listeners: list[Callable[[Path, bool], None]] = []
+
+
+def add_write_listener(listener: Callable[[Path, bool], None]) -> None:
+    _write_listeners.append(listener)
+
+
+def remove_write_listener(listener: Callable[[Path, bool], None]) -> None:
+    with contextlib.suppress(ValueError):
+        _write_listeners.remove(listener)
+
+
+def _written(skill_dir: Path, urgent: bool) -> None:
+    for listener in list(_write_listeners):
+        try:
+            listener(skill_dir, urgent)
+        except Exception:  # noqa: BLE001 - a listener must not undo the write
+            _log.warning("skill sidecar listener failed", exc_info=True)
+
+
+def write_meta(skill_dir: Path, meta: dict[str, Any], *, urgent: bool = True) -> None:
     """Persist the sidecar atomically."""
     sidecar = skill_dir / SIDECAR_NAME
     _atomic_write(sidecar, json.dumps(meta, ensure_ascii=False, indent=2))
+    _written(skill_dir, urgent)
 
 
 def get_effective_status(skill_dir: Path) -> str:
@@ -224,7 +250,9 @@ def mark_used(skill_dir: Path, *, auto_promote_threshold: int = 0) -> bool:
             meta["status"] = STATUS_ACTIVE
             promoted = True
 
-        write_meta(skill_dir, meta)
+        # A plain counter bump is not worth a write to a shared library on
+        # its own; a promotion is.
+        write_meta(skill_dir, meta, urgent=promoted)
         return promoted
 
 
@@ -260,10 +288,13 @@ def forget(skill_dir: Path) -> None:
         sidecar.unlink(missing_ok=True)
     except OSError as exc:
         _log.warning("Could not remove %s: %s", sidecar, exc)
+    _written(skill_dir, True)
 
 
 __all__ = [
     "ALL_STATUSES",
+    "add_write_listener",
+    "remove_write_listener",
     "SIDECAR_NAME",
     "STATUS_ACTIVE",
     "STATUS_ARCHIVED",

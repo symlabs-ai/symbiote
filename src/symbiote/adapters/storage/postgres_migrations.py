@@ -380,9 +380,29 @@ CREATE TABLE session_locks (
 );
 """
 
+_V3_SKILL_LIBRARY = """
+CREATE TABLE skill_files (
+    rowid BIGINT GENERATED ALWAYS AS IDENTITY,
+    scope      TEXT COLLATE "C" NOT NULL,
+    path       TEXT COLLATE "C" NOT NULL,
+    content    TEXT COLLATE "C" NOT NULL,
+    digest     TEXT COLLATE "C" NOT NULL,
+    updated_at TEXT COLLATE "C" NOT NULL,
+    PRIMARY KEY (scope, path)
+);
+
+CREATE TABLE skill_scopes (
+    rowid BIGINT GENERATED ALWAYS AS IDENTITY,
+    scope      TEXT COLLATE "C" PRIMARY KEY,
+    version    INTEGER NOT NULL,
+    updated_at TEXT COLLATE "C" NOT NULL
+);
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "baseline", _V1_BASELINE),
     (2, "session_locks", _V2_SESSION_LOCKS),
+    (3, "skill_library", _V3_SKILL_LIBRARY),
 )
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

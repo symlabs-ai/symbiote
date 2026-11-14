@@ -31,6 +31,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from symbiote.skills.loader import SkillsLoader
+from symbiote.skills.shared import SkillsSync
 from symbiote.skills.store import SkillsStore
 
 # The symbiote whose turn is currently executing. ``None`` outside a turn (or
@@ -84,9 +85,12 @@ class SkillScopeManager:
         max_cached: int = _DEFAULT_MAX_CACHED,
         read_only: bool = False,
         redact: Callable[[str], str] | None = None,
+        sync: SkillsSync | None = None,
     ) -> None:
         self._read_only = read_only
         self._redact = redact
+        # Shared library the per-symbiote directories are copies of, if any.
+        self._sync = sync
         self._base_root = Path(base_root)
         self._protected_roots = list(protected_roots or [])
         self._extra_roots = list(extra_roots or [])
@@ -124,6 +128,8 @@ class SkillScopeManager:
             raise ValueError(f"not a symbiote id: {symbiote_id!r}")
         with self._lock:
             self._cache.pop(symbiote_id, None)
+        if self._sync is not None:
+            self._sync.forget(symbiote_id)
         base = self._base_root.resolve()
         target = (base / symbiote_id).resolve()
         if target.parent != base or not target.is_dir():
@@ -171,9 +177,33 @@ class SkillScopeManager:
             auto_promote_threshold=self._auto_promote_threshold,
             read_only=self._read_only,
         )
-        store.on_change = loader.refresh
         store.redact = self._redact
+        sync = self._sync
+        if sync is None:
+            store.on_change = loader.refresh
+        else:
+            sync.attach(symbiote_id, agent_root)
+
+            def changed() -> None:
+                sync.push(symbiote_id, agent_root)
+                loader.refresh()
+
+            store.on_change = changed
         return loader, store
+
+    def stale_directories(self, existing_ids: set[str]) -> list[Path]:
+        """Per-symbiote directories whose symbiote is not in ``existing_ids``
+        (left behind by a purge that ran on another replica)."""
+        if not self._base_root.is_dir():
+            return []
+        stale: list[Path] = []
+        for entry in self._base_root.iterdir():
+            if not entry.is_dir() or entry.is_symlink() or entry.name in existing_ids:
+                continue
+            children = [child.name for child in entry.iterdir()]
+            if children in ([], ["skills"]):  # shaped like a symbiote's directory
+                stale.append(entry)
+        return stale
 
 
 __all__ = [

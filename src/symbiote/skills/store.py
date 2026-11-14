@@ -170,9 +170,9 @@ def _validate_file_path(file_path: str) -> None:
 def _atomic_write_text(
     path: Path, content: str, redact: Callable[[str], str] | None = None
 ) -> None:
+    """Write text atomically in the same directory as ``path``."""
     if redact is not None:
         content = redact(content)
-    """Write text atomically in the same directory as ``path``."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         mode="w",

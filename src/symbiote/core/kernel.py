@@ -34,7 +34,13 @@ from symbiote.core.hooks import CompositeHook
 from symbiote.core.identity import IdentityManager
 from symbiote.core.inspector import KernelInspector
 from symbiote.core.models import Session, Symbiote
-from symbiote.core.ports import LLMPort, SessionLockPort, SessionRecallPort, StoragePort
+from symbiote.core.ports import (
+    LLMPort,
+    SessionLockPort,
+    SessionRecallPort,
+    SkillsStoragePort,
+    StoragePort,
+)
 from symbiote.core.redaction import RedactingStorage, Redactor
 from symbiote.core.reflection import ReflectionEngine
 from symbiote.core.scoring import compute_auto_score, compute_final_score
@@ -81,6 +87,7 @@ from symbiote.runners.long_run import LongRunRunner
 from symbiote.runners.process import ProcessRunner
 from symbiote.runners.subagent import SubagentManager
 from symbiote.skills import tool as skill_tool_module
+from symbiote.skills import usage as skill_usage
 from symbiote.skills.loader import SkillsLoader
 from symbiote.skills.scope import (
     SkillScopeManager,
@@ -91,6 +98,8 @@ from symbiote.skills.scope import (
 from symbiote.skills.scope import (
     set_active_symbiote as _set_active_symbiote,
 )
+from symbiote.skills.shared import GLOBAL_SCOPE as GLOBAL_SKILL_SCOPE
+from symbiote.skills.shared import SkillsSync
 from symbiote.skills.store import SkillsStore
 from symbiote.workspace.manager import WorkspaceManager
 
@@ -124,6 +133,7 @@ class SymbioteKernel:
         *,
         storage: StoragePort | None = None,
         session_lock: SessionLockPort | None = None,
+        skills_storage: SkillsStoragePort | None = None,
         agent_protocol: str | AgentProtocol | None = None,
         protocol_registry: AgentProtocolRegistry | None = None,
     ) -> None:
@@ -139,6 +149,13 @@ class SymbioteKernel:
         a session (``SessionLockPort``). The default serializes the turns of
         this process only; with several replicas pass
         ``StorageSessionLock(storage)`` or the host's own lock.
+
+        ``skills_storage`` makes the writable skill library shared
+        (``SkillsStoragePort``): every change is pushed to it and each turn
+        starts by bringing the local skill directory up to date, so replicas
+        without a common disk see each other's skills. Without it the
+        library is the local directory. ``StorageSkillsLibrary(storage)``
+        keeps it in the kernel's database.
         """
         active_protocol_registry = (
             protocol_registry or create_default_protocol_registry()
@@ -318,7 +335,24 @@ class SymbioteKernel:
         # symbiote — without the lock, both threads see None and build
         # two engines, leaking one. Acquired only on the cold path.
         self._background_review_lock = threading.Lock()
+        # Shared skill library (None: the local directory is the library).
+        self._skills_storage = skills_storage
+        self._skills_sync: SkillsSync | None = None
+        if skills_storage is not None:
+            self._skills_sync = SkillsSync(
+                skills_storage,
+                redact=self._redactor.redact_text,
+                writable=config.skill_writes,
+            )
+            skill_usage.add_write_listener(self._skills_sync.on_sidecar_written)
         self._setup_skills_wiring()
+        if self._skills_sync is not None:
+            try:
+                self.sweep_skill_cache()
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "could not sweep the local skill cache", exc_info=True
+                )
 
         # Capability surface
         self._capabilities = CapabilitySurface(
@@ -810,6 +844,8 @@ class SymbioteKernel:
         _scope_token = _set_active_symbiote(symbiote_id)
         record, record_token = open_turn_record(symbiote_id, session_id)
         try:
+            # Skills written by other replicas since this one's last turn.
+            self._sync_skills(symbiote_id)
             # S-01: Inject previous handoff on session start (first message only)
             extra_context = self._inject_handoff_if_resuming(
                 session_id, symbiote_id, extra_context
@@ -916,6 +952,8 @@ class SymbioteKernel:
         _scope_token = _set_active_symbiote(symbiote_id)
         record, record_token = open_turn_record(symbiote_id, session_id)
         try:
+            if self._skills_sync is not None:  # disk and database I/O: off the loop
+                await asyncio.to_thread(self._sync_skills, symbiote_id)
             # S-01: Inject previous handoff on session start (first message only)
             extra_context = self._inject_handoff_if_resuming(
                 session_id, symbiote_id, extra_context
@@ -944,6 +982,55 @@ class SymbioteKernel:
             close_turn_record(record_token)
             self._persist_turn_context(record)
             _reset_active_symbiote(_scope_token)
+
+    def _sync_skills(self, symbiote_id: str) -> None:
+        """Bring the local skill directory of this turn's scope up to date
+        with the shared library. Never raises: a turn that cannot reach the
+        library runs with the local copy."""
+        sync = self._skills_sync
+        if sync is None:
+            return
+        try:
+            if self._skill_scope_mgr is not None:
+                scope = symbiote_id
+                store = self._skill_scope_mgr.store_for(symbiote_id)
+                loader = self._skill_scope_mgr.loader_for(symbiote_id)
+            elif self._skills_store is not None and self._skills_loader is not None:
+                scope = GLOBAL_SKILL_SCOPE
+                store, loader = self._skills_store, self._skills_loader
+            else:
+                return
+            if sync.pull(scope, store.agent_root):
+                loader.refresh()
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "could not sync the skills of symbiote %s with the shared library",
+                symbiote_id,
+            )
+
+    def sweep_skill_cache(self) -> int:
+        """Remove the local skill directories of symbiotes that no longer
+        exist; returns how many were removed.
+
+        Only meaningful with ``skills_storage`` and the per-symbiote skill
+        scope: ``purge_symbiote`` erases the shared library and the directory
+        of the replica that ran it, and the other replicas drop their local
+        copy here. Runs once when the kernel starts; call it again after
+        purges (or on a schedule) in long-lived replicas.
+        """
+        mgr = self._skill_scope_mgr
+        if mgr is None or self._skills_sync is None:
+            return 0
+        existing = {row["id"] for row in self._storage.fetch_all("SELECT id FROM symbiotes")}
+        removed = 0
+        for directory in mgr.stale_directories(existing):
+            try:
+                removed += int(mgr.purge(directory.name))
+            except (OSError, ValueError):
+                logging.getLogger(__name__).warning(
+                    "could not remove the stale skill directory %s", directory, exc_info=True
+                )
+        return removed
 
     def _finish_turn(self, session_id: str, symbiote_id: str, result: RunResult):  # noqa: ANN202
         """Persist what this turn produced; return its output or raise.
@@ -1191,7 +1278,17 @@ class SymbioteKernel:
             *loader_roots, read_only=not cfg.skill_writes
         )
         if self._skills_store is not None:
-            self._skills_store.on_change = self._skills_loader.refresh
+            sync, store, loader = self._skills_sync, self._skills_store, self._skills_loader
+            if sync is None:
+                store.on_change = loader.refresh
+            else:
+                sync.attach(GLOBAL_SKILL_SCOPE, store.agent_root)
+
+                def changed() -> None:
+                    sync.push(GLOBAL_SKILL_SCOPE, store.agent_root)
+                    loader.refresh()
+
+                store.on_change = changed
 
         # Wire the loader into the ContextAssembler so active skills can be
         # injected into the system prompt — but ONLY for symbiotes that opt in
@@ -1232,6 +1329,7 @@ class SymbioteKernel:
                 max_cached=cfg.symbiote_cache_size,
                 read_only=not cfg.skill_writes,
                 redact=self._redactor.redact_text,
+                sync=self._skills_sync,
             )
         except Exception as exc:
             if cfg.skills_root is not None:
@@ -1766,6 +1864,10 @@ class SymbioteKernel:
             (table, "symbiote_id = ?", (symbiote_id,))
             for table in self._PURGE_BY_SYMBIOTE
         ]
+        # Its scope of the shared skill library (per-symbiote skill scope).
+        targets += [
+            (table, "scope = ?", (symbiote_id,)) for table in ("skill_files", "skill_scopes")
+        ]
         targets.append(("symbiotes", "id = ?", (symbiote_id,)))
 
         if not dry_run:
@@ -1799,6 +1901,9 @@ class SymbioteKernel:
                 counts["skills"] = int(self._skill_scope_mgr.has_directory(symbiote_id))
             else:
                 counts["skills"] = int(self._skill_scope_mgr.purge(symbiote_id))
+                if self._skills_storage is not None:
+                    # A library kept outside the kernel's database.
+                    self._skills_storage.delete_scope(symbiote_id)
         if not dry_run:
             with self._handoffs_lock:
                 for sid in session_ids:
@@ -2178,6 +2283,9 @@ class SymbioteKernel:
                 timeout,
                 ", ".join(still_running),
             )
+        if self._skills_sync is not None:
+            skill_usage.remove_write_listener(self._skills_sync.on_sidecar_written)
+            self._skills_sync.flush()  # usage counters not pushed yet
         self._tool_gateway.close()
         if self._owns_storage:
             self._storage.close()
