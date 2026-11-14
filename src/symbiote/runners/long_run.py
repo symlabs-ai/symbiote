@@ -744,6 +744,22 @@ def _steps_digest(steps: list[LoopStep]) -> str:
     return "\n".join(lines)
 
 
+def _steps_totals(steps: list[LoopStep]) -> str:
+    """Calls per tool, over every step (the digest is capped).
+
+    A model reading a long list does not count it: an evaluator handed 74
+    ``create_task`` lines approved a block whose output claimed 87.
+    """
+    totals: dict[str, list[int]] = {}
+    for step in steps:
+        calls_ok = totals.setdefault(step.tool_id, [0, 0])
+        calls_ok[0] += 1
+        calls_ok[1] += 1 if step.success else 0
+    return "; ".join(
+        f"{tool}: {calls} calls, {ok} ok" for tool, (calls, ok) in totals.items()
+    )
+
+
 def _evidence_section(block_result: BlockResult) -> str:
     """Tool calls recorded by the runtime, for the evaluator to verify claims.
 
@@ -759,8 +775,13 @@ def _evidence_section(block_result: BlockResult) -> str:
     return (
         "## Tool calls executed in this block (recorded by the runtime, "
         "not claimed by the generator)\n"
+        f"Totals: {_steps_totals(block_result.tool_steps)}\n"
         f"{_steps_digest(block_result.tool_steps)}\n"
         "These calls really ran; [ok] means the tool reported success. "
-        "Use them as evidence when checking the criteria.\n\n"
+        "Use them as evidence when checking the criteria.\n"
+        "Check every number the generator states about its own actions "
+        "(items created, sent, deleted, updated) against the totals above. "
+        "A count that does not match is a correctness error: lower that score "
+        "and give the real number in the feedback.\n\n"
     )
 

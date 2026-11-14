@@ -296,6 +296,30 @@ class TestEvaluator:
         assert '[ok] create_task {"title":"A"}' in sent
         assert '[FAILED: HTTP 500] create_task {"title":"B"}' in sent
 
+    def test_evaluator_gets_totals_per_tool_beyond_the_digest_cap(self):
+        llm = MagicMock()
+        llm.complete.return_value = '{"passed": true, "overall_score": 1.0}'
+        runner = LongRunRunner(llm=llm, evaluator_llm=llm)
+        ctx = AssembledContext(
+            symbiote_id="s1", session_id="sess", user_input="test",
+            tool_mode="long_run", evaluator_prompt="Evaluate",
+        )
+        plan = LongRunPlan(blocks=[{"name": "A"}], total_blocks=1)
+        steps = [LoopStep(iteration=1, tool_id="list_tasks", success=True)] + [
+            LoopStep(iteration=2, tool_id="create_task", params={"title": f"T{i}"}, success=i != 0)
+            for i in range(74)
+        ]
+        block_result = BlockResult(
+            block_index=0, success=True, output="Criei 87 tarefas", tool_steps=steps,
+        )
+
+        runner._evaluate_block(ctx, plan, plan.blocks[0], block_result)
+
+        sent = llm.complete.call_args.args[0][1]["content"]
+        assert "Totals: list_tasks: 1 calls, 1 ok; create_task: 74 calls, 73 ok" in sent
+        assert "- … and 15 more" in sent  # the digest is capped, the totals are not
+        assert "A count that does not match is a correctness error" in sent
+
     def test_evaluator_is_told_when_no_tool_ran(self):
         llm = MagicMock()
         llm.complete.return_value = '{"passed": false, "overall_score": 0.1}'
