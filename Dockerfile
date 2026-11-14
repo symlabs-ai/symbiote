@@ -36,6 +36,9 @@ RUN python -m pip install --no-cache-dir --no-build-isolation -r requirements/ci
     && python -m pip check
 COPY ruff.toml ./
 COPY tests/ tests/
+# Guides whose code blocks the tests check (tests/unit/test_docs_references.py).
+COPY QUICKSTART.md ./
+COPY docs/HOST_INTEGRATION.md docs/
 # Coverage gate: fails the build below 85% (pyproject [tool.coverage.report]).
 RUN python -m pytest -q --cov=src/symbiote --cov-fail-under=85 \
     && ruff check src tests \

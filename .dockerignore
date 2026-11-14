@@ -2,6 +2,9 @@
 !pyproject.toml
 !ruff.toml
 !README.md
+!QUICKSTART.md
+!docs/
+!docs/HOST_INTEGRATION.md
 !requirements/
 !requirements/**
 !src/
