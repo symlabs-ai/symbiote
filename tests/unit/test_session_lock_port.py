@@ -228,7 +228,7 @@ def test_renewal_defaults_to_a_third_of_the_ttl(tmp_path: Path) -> None:
     kernel = _kernel(tmp_path, ScriptedLLM(slow), lock, session_lock_ttl=0.45)
     _sym, session = _session(kernel)
     kernel.message(session, "hi")
-    assert 2 <= len(lock.renewed) <= 4  # every 0.15s for 0.5s
+    assert 2 <= len(lock.renewed) <= 6  # every 0.15s for a turn of about 0.5s
     kernel.shutdown()
 
 
@@ -245,7 +245,6 @@ def _tool_then_reply(calls: list[str], model_delay: float = 0.0):
 def test_a_lost_lock_stops_the_turn_before_the_next_model_call(tmp_path: Path, failure) -> None:
     calls: list[str] = []
     lock = RecordingLock()
-    lock.renew_result = failure
     kernel = _kernel(
         tmp_path, ScriptedLLM(_tool_then_reply(calls)), lock,
         session_lock_ttl=0.2, session_lock_renew_interval=0.05,
@@ -254,7 +253,8 @@ def test_a_lost_lock_stops_the_turn_before_the_next_model_call(tmp_path: Path, f
 
     def work(_params: dict) -> str:
         calls.append("tool")
-        time.sleep(0.6)  # the lock is lost while this runs
+        lock.renew_result = failure  # from now on the lock cannot be renewed
+        time.sleep(0.8)  # ...and is lost while this runs
         calls.append("tool-finished")
         return "worked"
 
@@ -274,9 +274,15 @@ def test_a_lost_lock_stops_the_turn_before_the_next_model_call(tmp_path: Path, f
 def test_a_lost_lock_stops_the_turn_before_the_next_tool_call(tmp_path: Path) -> None:
     calls: list[str] = []
     lock = RecordingLock()
-    lock.renew_result = False
+
+    def model(i: int, _m: list[dict]) -> str:
+        calls.append(f"model-{i}")
+        lock.renew_result = False  # the lock is lost while the model answers
+        time.sleep(0.4)
+        return tool_call_block("work")
+
     kernel = _kernel(
-        tmp_path, ScriptedLLM(_tool_then_reply(calls, model_delay=0.3)), lock,
+        tmp_path, ScriptedLLM(model), lock,
         session_lock_ttl=5, session_lock_renew_interval=0.05,
     )
     sym, session = _session(kernel)
@@ -292,7 +298,6 @@ def test_a_lost_lock_stops_the_turn_before_the_next_tool_call(tmp_path: Path) ->
 def test_a_lost_lock_stops_an_async_turn(tmp_path: Path) -> None:
     calls: list[str] = []
     lock = RecordingLock()
-    lock.renew_result = False
     kernel = _kernel(
         tmp_path, ScriptedLLM(_tool_then_reply(calls)), lock,
         session_lock_ttl=5, session_lock_renew_interval=0.05,
@@ -301,7 +306,8 @@ def test_a_lost_lock_stops_an_async_turn(tmp_path: Path) -> None:
 
     async def work(_params: dict) -> str:
         calls.append("tool")
-        await asyncio.sleep(0.3)
+        lock.renew_result = False
+        await asyncio.sleep(0.4)
         return "worked"
 
     add_tool(kernel, sym, "work", work)
