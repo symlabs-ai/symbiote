@@ -245,6 +245,9 @@ def test_approval_gate_waits_for_the_page(demo: Demo) -> None:
         for _ in range(200):
             pending = demo.runtime.broker.pending()
             if pending:
+                # A page loaded now counts down from the request's own time.
+                shown = demo.get("/api/status")["pending_approvals"][0]
+                assert shown["timeout_s"] == 180 and time.time() - 5 < shown["ts"] <= time.time()
                 r = demo.post(f"/api/approvals/{pending[0]['id']}", {"approved": False})
                 decided.append(r.status_code)
                 return

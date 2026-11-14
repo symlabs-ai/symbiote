@@ -9,6 +9,7 @@ timeout expires, which counts as a denial.
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from typing import Any
 
@@ -34,6 +35,9 @@ class ApprovalBroker:
             "session_id": turn.session_id if turn else None,
             "event": done,
             "approved": False,
+            # A page that reloads mid-request counts down from here, not from 180 again.
+            "ts": time.time(),
+            "timeout_s": self._timeout,
         }
         with self._lock:
             self._pending[request_id] = entry

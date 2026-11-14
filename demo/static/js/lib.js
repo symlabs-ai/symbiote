@@ -111,7 +111,7 @@ export function score(v) {
 export function toast(text, kind = '') {
   const el = h(`div.toast${kind ? '.' + kind : ''}`, text);
   document.getElementById('toasts').append(el);
-  setTimeout(() => el.remove(), kind === 'err' ? 7000 : 4000);
+  setTimeout(() => el.remove(), kind === 'err' || kind === 'warn' ? 7000 : 4000);
 }
 
 // Run an async action from a button: disables it, shows errors as toasts.

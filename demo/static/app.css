@@ -233,6 +233,8 @@ details > summary:hover { color: var(--text); }
   box-shadow: 0 20px 60px rgba(0,0,0,.5);
 }
 .dialog.approval { border-color: var(--amber); }
+.countdown { font-family: var(--mono); color: var(--amber); }
+.countdown.urgent { color: var(--red); }
 .dialog.setup { width: min(480px, 100%); }
 
 .drawer {

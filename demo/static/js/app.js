@@ -287,8 +287,10 @@ function handleEvent(ev) {
   state.lastSeq = ev.seq;
   if (ev.type === 'plan') state.longrun = { plan: ev.blocks, blocks: [] };
   if (ev.type === 'block') state.longrun.blocks.push(ev);
-  if (ev.type === 'approval_request' && ev.ts > PAGE_LOADED - 2) queueApproval(ev);
-  if (ev.type === 'approval_result') resolveApproval(ev.id);
+  // A request replayed after a reload still shows if it has not expired; its
+  // approval_result, when it already came, follows in the replay and closes it.
+  if (ev.type === 'approval_request' && ev.ts + (ev.timeout_s || 180) > Date.now() / 1000) queueApproval(ev);
+  if (ev.type === 'approval_result') resolveApproval(ev.id, ev);
   if (ev.type === 'session' || ev.type === 'turn_end' || ev.type === 'learned') reloadStatus();
   // Only a reset that happens after this page loaded: the event stays in the
   // replay buffer, and reacting to the old one would reload forever.
@@ -314,19 +316,44 @@ function queueApproval(ev) {
   if (approvalQueue.length === 1) showApproval();
 }
 
-function resolveApproval(id) {
+const PAGE_TITLE = document.title;
+let approvalTimer = null;
+
+function resolveApproval(id, result = null) {
   const idx = approvalQueue.findIndex((a) => a.id === id);
   if (idx === -1) return;
-  approvalQueue.splice(idx, 1);
-  document.getElementById('approval').hidden = true;
-  if (approvalQueue.length) showApproval();
+  const [ev] = approvalQueue.splice(idx, 1);
+  if (result && result.timed_out && result.ts > PAGE_LOADED) {
+    toast(`Ninguém respondeu ao pedido de “${ev.tool_id}” em ${Math.round(ev.timeout_s || 180)}s: contou como negado.`, 'warn');
+  }
+  if (idx === 0) {
+    clearInterval(approvalTimer);
+    document.getElementById('approval').hidden = true;
+    document.title = PAGE_TITLE;
+    if (approvalQueue.length) showApproval();
+  }
+}
+
+// Seconds left, from the server's timestamp (same machine, same clock).
+function approvalLeft(ev) {
+  return Math.max(0, Math.ceil(ev.ts + (ev.timeout_s || 180) - Date.now() / 1000));
 }
 
 function showApproval() {
   const ev = approvalQueue[0];
   document.getElementById('approval-title').textContent = `Executar “${ev.tool_id}”?`;
   document.getElementById('approval-params').textContent = JSON.stringify(ev.params, null, 2);
-  document.getElementById('approval-timeout').textContent = Math.round(ev.timeout_s || 180);
+  const counter = document.getElementById('approval-timeout');
+  const tick = () => {
+    const left = approvalLeft(ev);
+    counter.textContent = left;
+    counter.classList.toggle('urgent', left <= 30);
+    // Visible from another tab or window, where the modal is not.
+    document.title = `(${left}s) ✋ Aprovação pendente · ${PAGE_TITLE}`;
+  };
+  clearInterval(approvalTimer);
+  tick();
+  approvalTimer = setInterval(tick, 1000);
   const decide = async (approved) => {
     try {
       await api.post(`/api/approvals/${ev.id}`, { approved });
@@ -355,7 +382,7 @@ async function boot() {
     return;
   }
   for (const p of state.status.pending_approvals || []) {
-    queueApproval({ ...p, ts: PAGE_LOADED, timeout_s: 180 });
+    queueApproval(p);
   }
   document.querySelectorAll('#symbiote-switch button').forEach((b) =>
     b.addEventListener('click', () => switchSymbiote(b.dataset.symbiote)));
