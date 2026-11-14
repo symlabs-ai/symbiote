@@ -58,6 +58,8 @@ def aux_scripted(i: int, messages: list[dict]) -> Any:
             {"action": "create", "type": "constraint", "content": "Nunca marcar ligações antes das 9h.",
              "importance": 0.8, "tags": ["agenda"], "reasoning": "regra absoluta"},
         ])
+    if "Generalized procedure" in str(_last(messages).get("content", "")):
+        return "Para reservas de viagem: comparar opções, conferir as condições e salvar o comprovante em viagem/."
     return "[]"
 
 
@@ -350,3 +352,19 @@ def test_tabs_endpoints_answer(demo: Demo) -> None:
     assert dream["dry_run"] is True
     cfg = demo.post("/api/config", {"symbiote": "sol", "fields": {"tool_loading": "index", "planner_prompt": None}}).json()
     assert cfg["config"]["tool_loading"] == "index" and cfg["config"]["planner_prompt"] is None
+
+
+def test_seeded_memories_give_every_dream_phase_work(demo: Demo) -> None:
+    assert demo.get("/api/learning?symbiote=sol")["config"]["dream_mode"] == "off"
+    demo.post("/api/learning/config", {"symbiote": "sol", "dream_mode": "full"}).raise_for_status()
+
+    report = demo.post("/api/dream", {"symbiote": "sol"}).json()
+
+    applied = {p["phase"]: p["actions_applied"] for p in report["phases"]}
+    assert applied["prune"] == 2
+    assert applied["reconcile"] == 1
+    assert applied["generalize"] == 1
+    contents = [m["content"] for m in demo.runtime.kernel.inspector.list_memories(demo.runtime.sol_id)]
+    assert not any("Ubatuba" in c for c in contents)
+    assert sum("lembretes de aniversário" in c for c in contents) == 1
+    assert any(c.startswith("Para reservas de viagem") for c in contents)

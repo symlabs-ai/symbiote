@@ -7,8 +7,11 @@ deletes the data directory and gets a fresh seed.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from symbiote.core.models import MemoryEntry
 
 SOL = "Sol"
 RESEARCHER = "Pesquisador"
@@ -66,6 +69,31 @@ KNOWLEDGE = [
     ),
 ]
 
+# Memories for the dream step (tour step 13), so a fresh demo has something
+# for each deterministic phase to act on. Topics stay away from what the
+# other tour steps ask about, so they rarely enter the recall before step 13.
+# (type, content, tags, importance, days since last used)
+DREAM_SEEDS = [
+    # prune: decay = days unused × (1 − importance) > 30
+    ("factual", "O Wi-Fi da casa de praia em Ubatuba se chamava PraiaNet.",
+     ["praia"], 0.2, 160),
+    ("factual", "A assinatura da revista de jardinagem foi cancelada no ano passado.",
+     ["assinaturas"], 0.25, 120),
+    # reconcile: the same preference stated twice (same type, same tags,
+    # ≥ 80% of the words in common); the lower-importance copy goes
+    ("preference", "Prefere que lembretes de aniversário cheguem com uma semana de antecedência.",
+     ["aniversarios", "lembretes"], 0.6, 2),
+    ("preference", "Prefere que os lembretes de aniversário cheguem com uma semana de antecedência.",
+     ["aniversarios", "lembretes"], 0.45, 5),
+    # generalize (mode full): 3 procedures sharing 2 tags become one rule
+    ("procedural", "Para reservar hotel: comparar 3 opções no mapa, conferir cancelamento grátis "
+     "e salvar a confirmação na pasta viagem/.", ["viagem", "reserva", "hotel"], 0.6, 3),
+    ("procedural", "Para comprar passagem aérea: comparar horários em 2 sites, conferir se a bagagem "
+     "está incluída e salvar o e-ticket na pasta viagem/.", ["viagem", "reserva", "voo"], 0.6, 3),
+    ("procedural", "Para alugar carro: comparar 3 locadoras, conferir seguro e franquia "
+     "e salvar o voucher na pasta viagem/.", ["viagem", "reserva", "carro"], 0.55, 3),
+]
+
 SANDBOX_FILES = {
     "notas/lista-de-compras.md": "# Lista de compras\n\n- café\n- leite sem lactose\n- pão integral\n- maçãs\n",
     "viagem/roteiro-lisboa.md": (
@@ -76,6 +104,17 @@ SANDBOX_FILES = {
         "categoria,limite_mensal\nmercado,1200\ntransporte,450\nlazer,400\nsaude,300\ncasa,600\n"
     ),
 }
+
+
+def _seed_dream_memories(kernel: Any, symbiote_id: str) -> None:
+    now = datetime.now(tz=UTC)
+    for mem_type, content, tags, importance, days in DREAM_SEEDS:
+        when = now - timedelta(days=days)
+        kernel.memory.store(MemoryEntry(
+            symbiote_id=symbiote_id, type=mem_type, scope="global", content=content,
+            tags=tags, importance=importance, source="user",
+            created_at=when, last_used_at=when,
+        ))
 
 
 def _ensure_symbiote(kernel: Any, name: str, role: str, persona: dict) -> tuple[str, bool]:
@@ -116,12 +155,15 @@ def seed(
             # A real LLM is always configured: extract facts with it (falls back
             # to keyword extraction if the call fails).
             reflection_mode="llm",
-            dream_mode="light",
+            # Off until the dream step turns it on: an automatic dream after
+            # 3 closed sessions would consume the seeds before the step shows them.
+            dream_mode="off",
             dream_min_sessions=3,
             prompt_caching=prompt_caching,
         )
         for name, entry_type, content in KNOWLEDGE:
             kernel.knowledge.register_source(sol_id, name, content=content, entry_type=entry_type)
+        _seed_dream_memories(kernel, sol_id)
 
     if researcher_new:
         kernel.environment.configure(

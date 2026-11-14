@@ -140,7 +140,7 @@ const STEPS = [
         toast('Dream concluído');
       },
     }],
-    look: 'Aprendizado: relatório por fase (propostas × aplicadas). Num demo recém-criado é normal vir tudo zerado: generalize pede 3+ memórias com 2 tags em comum, reconcile pede quase-duplicatas e prune, memórias paradas há semanas.',
+    look: 'Aprendizado: relatório por fase (propostas × aplicadas). O demo já nasce com memórias para isso: prune desativa 2 paradas há meses (o Wi-Fi de Ubatuba, a revista cancelada), reconcile junta a preferência de lembretes de aniversário que está duplicada, e generalize transforma os 3 procedimentos de reserva de viagem numa regra só. Mine e evaluate usam as falhas e os scores das sessões anteriores (o passo 11). Na aba Memória dá para ver o antes e o depois. O dream vem desligado até aqui; agora em full, ele roda sozinho a cada 3 sessões encerradas.',
     tab: 'learning',
   },
   {
