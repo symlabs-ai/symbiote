@@ -84,17 +84,19 @@ const STEPS = [
   },
   {
     title: 'Long-run: planejador, blocos e avaliador',
-    why: 'Para pedidos grandes: um planejador quebra em blocos, cada bloco roda um loop e um avaliador dá nota e pede retrabalho.',
+    why: 'Para pedidos grandes: um planejador quebra em blocos, cada bloco roda um loop e um avaliador dá nota e pede retrabalho. O avaliador recebe a lista das tools que o bloco executou, e um retrabalho é avisado do que já foi feito.',
     actions: [
       {
         label: '1. Ligar long_run com avaliador',
         run: (ctx) => setConfig(ctx, {
-          tool_mode: 'long_run', max_blocks: 3,
+          // compaction: each block receives the previous blocks' output (the
+          // list from block 1 is what block 2 turns into tasks).
+          tool_mode: 'long_run', max_blocks: 3, context_strategy: 'compaction',
           evaluator_prompt: 'Você é um avaliador (evaluator) rigoroso. Confira se o bloco cumpriu o critério de sucesso. Responda SOMENTE com JSON: {"passed": true ou false, "overall_score": 0.0 a 1.0, "feedback": "o que falta", "blocking_issues": []}',
         }).then(() => toast('long_run ligado')),
       },
       { label: '2. Enviar no chat', prompt: 'Organize a mudança para Curitiba: levante as pendências, crie uma tarefa para cada uma e salve um resumo em notas/mudanca.md.' },
-      { label: '3. Voltar para brief', run: (ctx) => setConfig(ctx, { tool_mode: 'brief', evaluator_prompt: null }).then(() => toast('brief')) },
+      { label: '3. Voltar para brief', run: (ctx) => setConfig(ctx, { tool_mode: 'brief', evaluator_prompt: null, context_strategy: 'hybrid' }).then(() => toast('brief')) },
     ],
     look: 'Execução: plano e blocos com a nota do avaliador. Ao vivo: “planejador” e “avaliador”.',
     tab: 'execution',
@@ -110,7 +112,7 @@ const STEPS = [
     title: 'Falha controlada',
     why: 'A cotação está fora do ar de propósito. O circuit breaker para o loop, o turno ainda responde, e o encerramento grava uma memória de falha e um score baixo.',
     actions: [
-      { label: '1. Enviar no chat', prompt: 'Qual é a cotação do dólar agora? Tente de novo se falhar.' },
+      { label: '1. Enviar no chat', prompt: 'Quanto estão o dólar, o euro e a libra agora? Use só a tool consultar_cotacao, uma moeda por vez, e tente de novo se falhar. Não pesquise na web nem delegue.' },
       { label: '2. Encerrar sessão e aprender', close: true },
     ],
     look: 'Ao vivo: “circuit breaker”. Aprendizado: score baixo e uma memória procedural de falha.',
@@ -138,7 +140,7 @@ const STEPS = [
         toast('Dream concluído');
       },
     }],
-    look: 'Aprendizado: relatório por fase (propostas × aplicadas).',
+    look: 'Aprendizado: relatório por fase (propostas × aplicadas). Num demo recém-criado é normal vir tudo zerado: generalize pede 3+ memórias com 2 tags em comum, reconcile pede quase-duplicatas e prune, memórias paradas há semanas.',
     tab: 'learning',
   },
   {

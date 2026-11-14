@@ -54,18 +54,21 @@
           <code>models.read</code>, <code>work_sessions.create</code> e <code>gateway.llm.invoke</code>.
           Cada sessão do Symbiote abre uma sessão de trabalho no gateway.</p>
         <label>URL do gateway <input name="base_url" placeholder="https://symgateway.symlabs.ai"></label>
-        <label>Projeto (opcional, vai em <code>X-Project-Slug</code>)
+        <label>Projeto (opcional, vai no header X-Project-Slug)
           <input name="project" placeholder="slug do projeto, se a chave for de um projeto"></label>
         <div class="row">
           <button type="button" class="btn" id="setup-models">Listar modelos liberados</button>
           <span class="dim small" id="setup-models-info"></span>
         </div>
       </div>
-      <datalist id="gw-models"></datalist>
       <details id="setup-models-box">
         <summary>Modelos <span id="setup-models-hint">(opcional)</span></summary>
-        <label>Modelo principal <input name="model" placeholder="" list="gw-models"></label>
-        <label>Modelo auxiliar <input name="aux_model" placeholder="" list="gw-models"></label>
+        <label class="std-only">Modelo principal <input name="model" placeholder=""></label>
+        <label class="std-only">Modelo auxiliar <input name="aux_model" placeholder=""></label>
+        <label class="gw-only" hidden>Modelo principal
+          <select name="gw_model"><option value="">liste os modelos primeiro</option></select></label>
+        <label class="gw-only" hidden>Modelo auxiliar
+          <select name="gw_aux_model"><option value="">o mesmo do principal</option></select></label>
         <p class="dim small">O auxiliar roda o trabalho de fundo: reflexão por LLM, evolução do harness,
           seleção semântica de tools, dream e review de skills.</p>
       </details>

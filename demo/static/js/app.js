@@ -70,41 +70,32 @@ function showSetup(cancellable = false) {
   document.getElementById('setup-cancel').hidden = !cancellable;
   document.getElementById('setup-cancel').onclick = () => { box.hidden = true; };
   const provider = form.elements.provider;
-  const gwOnly = form.querySelector('.gw-only');
   const modelsBox = document.getElementById('setup-models-box');
   const modelsInfo = document.getElementById('setup-models-info');
-  const datalist = document.getElementById('gw-models');
+  const gwModel = form.elements.gw_model;
+  const gwAux = form.elements.gw_aux_model;
   const saved = s.settings || {};
-  const syncProvider = () => {
-    const gateway = provider.value === 'symgateway';
-    const [main, aux] = (s.default_models || {})[provider.value] || ['', ''];
-    form.elements.model.placeholder = gateway ? 'escolha um da lista' : main;
-    form.elements.aux_model.placeholder = gateway ? 'vazio = o mesmo do principal' : aux;
-    gwOnly.hidden = !gateway;
-    document.getElementById('setup-models-hint').textContent = gateway ? '(obrigatório)' : '(opcional)';
-    if (gateway) modelsBox.open = true;
-    const hasSaved = saved.provider === provider.value && saved.api_key;
-    form.elements.api_key.placeholder = hasSaved ? `${saved.api_key} (vazio = manter)` : 'sk-…';
+  const hasSavedKey = () => saved.provider === provider.value && !!saved.api_key;
+  // Fill both selects; keep the current choice when it is still allowed.
+  const fillModels = (models) => {
+    const main = gwModel.value || (saved.provider === 'symgateway' ? saved.model : '');
+    const aux = gwAux.value || (saved.provider === 'symgateway' && saved.aux_model !== saved.model ? saved.aux_model : '');
+    gwModel.replaceChildren(...models.map((id) => h('option', { value: id }, id)));
+    gwAux.replaceChildren(h('option', { value: '' }, 'o mesmo do principal'),
+      ...models.map((id) => h('option', { value: id }, id)));
+    gwModel.value = models.includes(main) ? main : models[0] || '';
+    gwAux.value = models.includes(aux) ? aux : '';
   };
-  if (saved.provider) provider.value = saved.provider;
-  if (saved.provider === 'symgateway') {
-    form.elements.model.value = saved.model || '';
-    form.elements.aux_model.value = saved.aux_model || '';
-    form.elements.project.value = saved.gateway_project || '';
-  }
-  provider.onchange = syncProvider;
-  syncProvider();
-  document.getElementById('setup-models').onclick = async (e) => {
-    const btn = e.currentTarget;
+  const loadModels = async () => {
+    const btn = document.getElementById('setup-models');
     btn.disabled = true;
     modelsInfo.textContent = 'consultando /v1/models…';
     try {
       const { models } = await api.post('/api/setup/models', Object.fromEntries(new FormData(form)));
-      datalist.replaceChildren(...models.map((id) => h('option', { value: id })));
+      fillModels(models);
       modelsInfo.textContent = models.length
-        ? `${models.length} modelo(s): clique no campo do modelo para escolher`
+        ? `${models.length} modelo(s) liberado(s) para esta chave`
         : 'nenhum modelo LLM liberado para esta chave';
-      if (models.length && !models.includes(form.elements.model.value)) form.elements.model.value = models[0];
       modelsBox.open = true;
     } catch (ex) {
       modelsInfo.textContent = ex.message;
@@ -112,6 +103,24 @@ function showSetup(cancellable = false) {
       btn.disabled = false;
     }
   };
+  const syncProvider = () => {
+    const gateway = provider.value === 'symgateway';
+    const [main, aux] = (s.default_models || {})[provider.value] || ['', ''];
+    form.elements.model.placeholder = main;
+    form.elements.aux_model.placeholder = aux;
+    form.querySelectorAll('.gw-only').forEach((el) => { el.hidden = !gateway; });
+    form.querySelectorAll('.std-only').forEach((el) => { el.hidden = gateway; });
+    document.getElementById('setup-models-hint').textContent = gateway ? '(obrigatório)' : '(opcional)';
+    if (gateway) modelsBox.open = true;
+    form.elements.api_key.placeholder = hasSavedKey() ? `${saved.api_key} (vazio = manter)` : 'sk-…';
+    if (gateway && hasSavedKey() && gwModel.options.length <= 1 && !gwModel.value) loadModels();
+  };
+  if (saved.provider) provider.value = saved.provider;
+  if (saved.provider === 'symgateway') form.elements.project.value = saved.gateway_project || '';
+  provider.onchange = syncProvider;
+  form.elements.api_key.onchange = () => { if (provider.value === 'symgateway' && form.elements.api_key.value.trim()) loadModels(); };
+  document.getElementById('setup-models').onclick = loadModels;
+  syncProvider();
   box.hidden = false;
   form.elements.api_key.focus();
   form.onsubmit = async (e) => {
@@ -122,7 +131,14 @@ function showSetup(cancellable = false) {
     btn.disabled = true;
     btn.textContent = 'Validando a chave…';
     try {
-      await api.post('/api/setup', Object.fromEntries(new FormData(form)));
+      const body = Object.fromEntries(new FormData(form));
+      if (body.provider === 'symgateway') {
+        body.model = body.gw_model || '';
+        body.aux_model = body.gw_aux_model || '';
+      }
+      delete body.gw_model;
+      delete body.gw_aux_model;
+      await api.post('/api/setup', body);
       location.reload();
     } catch (ex) {
       err.textContent = ex.message;
@@ -274,7 +290,9 @@ function handleEvent(ev) {
   if (ev.type === 'approval_request' && ev.ts > PAGE_LOADED - 2) queueApproval(ev);
   if (ev.type === 'approval_result') resolveApproval(ev.id);
   if (ev.type === 'session' || ev.type === 'turn_end' || ev.type === 'learned') reloadStatus();
-  if (ev.type === 'runtime' && ev.state === 'reset') location.reload();
+  // Only a reset that happens after this page loaded: the event stays in the
+  // replay buffer, and reacting to the old one would reload forever.
+  if (ev.type === 'runtime' && ev.state === 'reset' && ev.ts > PAGE_LOADED) location.reload();
   for (const tab of TABS) {
     if (tab.onEvent) tab.onEvent(ev, ctx, panes[tab.id]);
     if (tab.watch && tab.watch.includes(ev.type) && rendered.has(tab.id)) markDirty(tab);

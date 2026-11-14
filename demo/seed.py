@@ -21,6 +21,9 @@ SOL_PERSONA = {
         "Você cuida do dia a dia de quem conversa com você: tarefas, agenda, contatos, "
         "notas, finanças da casa, arquivos da pasta de trabalho, contas e pesquisas.\n"
         "- Aja com as tools em vez de explicar como fazer.\n"
+        "- Só diga que criou, concluiu, apagou ou enviou algo depois que a tool dessa ação "
+        "devolveu sucesso neste turno. Para mexer numa tarefa existente, busque o id com "
+        "`list_tasks` antes.\n"
         "- Antes de falar de 'hoje', 'amanhã' ou prazos, use a tool `agora`.\n"
         "- Para somar ou converter valores, use `calcular` (nunca faça conta de cabeça).\n"
         "- Para pesquisar na web ou abrir um site, delegue ao symbiote 'Pesquisador' com a "
@@ -110,7 +113,9 @@ def seed(
             max_tool_iterations=8,
             tool_call_timeout=120.0,
             loop_timeout=300.0,
-            reflection_mode="keyword",
+            # A real LLM is always configured: extract facts with it (falls back
+            # to keyword extraction if the call fails).
+            reflection_mode="llm",
             dream_mode="light",
             dream_min_sessions=3,
             prompt_caching=prompt_caching,

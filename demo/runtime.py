@@ -425,8 +425,9 @@ class DemoRuntime:
             r for r in kernel.inspector.list_reflections(symbiote_id, limit=10)
             if r["session_id"] == session_id
         ]
-        self._sessions.pop(symbiote_id, None)
-        new_id = self.current_session(symbiote_id)
+        # Always a fresh session: picking "the newest active one" would resume
+        # an older conversation left open by "Nova sessão".
+        new_id = self.new_session(symbiote_id)
         result = {
             "closed_session": session_id,
             "summary": session.summary,

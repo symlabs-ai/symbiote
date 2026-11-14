@@ -49,6 +49,18 @@ def scripted(i: int, messages: list[dict]) -> Any:
     return "ok, anotado"
 
 
+def aux_scripted(i: int, messages: list[dict]) -> Any:
+    """Auxiliary-model script: the LLM reflection gets two facts, the rest []."""
+    if "JSON array:" in str(_last(messages).get("content", "")):
+        return json.dumps([
+            {"action": "create", "type": "preference", "content": "Prefere respostas curtas.",
+             "importance": 0.7, "tags": ["formato"], "reasoning": "preferência explícita"},
+            {"action": "create", "type": "constraint", "content": "Nunca marcar ligações antes das 9h.",
+             "importance": 0.8, "tags": ["agenda"], "reasoning": "regra absoluta"},
+        ])
+    return "[]"
+
+
 class Demo:
     def __init__(self, base: str, token: str, app: Any) -> None:
         self.base = base
@@ -99,7 +111,7 @@ def _serve(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, configured: bool)
     monkeypatch.setattr(server_mod, "validate_key", lambda s: None)
     monkeypatch.setattr(
         runtime_mod, "build_adapter",
-        lambda s, model: ScriptedLLM(scripted) if model == "m-main" else ScriptedLLM("[]"),
+        lambda s, model: ScriptedLLM(scripted) if model == "m-main" else ScriptedLLM(aux_scripted),
     )
     port = _free_port()
     app = server_mod.create_app(port=port, data_dir=tmp_path / "data")
@@ -289,8 +301,20 @@ def test_mcp_and_custom_tools_are_registered_and_authorized(demo: Demo) -> None:
 # ── learning ───────────────────────────────────────────────────────────
 
 
+def test_closing_opens_a_fresh_session_not_an_older_open_one(demo: Demo) -> None:
+    older = demo.get("/api/status")["symbiotes"]["sol"]["session_id"]
+    demo.chat("oi")
+    newer = demo.post("/api/session/new", {"symbiote": "sol"}).json()["session_id"]
+    demo.chat("tudo bem?")
+
+    result = demo.post("/api/session/close", {"symbiote": "sol"}).json()
+
+    assert result["closed_session"] == newer
+    assert result["new_session"] not in (older, newer)
+
+
 def test_closing_a_session_scores_it_and_learns_preferences(demo: Demo) -> None:
-    # Keyword reflection extracts one fact per user message.
+    # The demo reflects with the auxiliary model (scripted in aux_scripted).
     demo.chat("Eu prefiro respostas curtas.")
     demo.chat("Nunca marque ligações antes das 9h.")
     first = demo.get("/api/status")["symbiotes"]["sol"]["session_id"]
