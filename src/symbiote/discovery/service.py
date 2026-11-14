@@ -90,7 +90,6 @@ class DiscoveryService:
             first = seen.get(tool.tool_id)
             if first is None:
                 seen[tool.tool_id] = tool
-                self._repo.save(tool)
                 result.discovered.append(tool)
             elif (first.method, first.url_template) != (tool.method, tool.url_template):
                 result.errors.append(
@@ -98,6 +97,10 @@ class DiscoveryService:
                     f"{tool.url_template} skipped (already used by {first.method} "
                     f"{first.url_template})"
                 )
+        # One scan is stored whole or not at all.
+        with self._repo.transaction():
+            for tool in result.discovered:
+                self._repo.save(tool)
 
         return result
 

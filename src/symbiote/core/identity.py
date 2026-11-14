@@ -83,25 +83,24 @@ class IdentityManager:
         old_persona = existing.persona_json
         now = _utcnow()
 
-        # Write audit record.
-        self._storage.execute(
-            "INSERT INTO persona_audit "
-            "(id, symbiote_id, old_persona_json, new_persona_json, changed_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (
-                _uuid(),
-                symbiote_id,
-                json.dumps(old_persona),
-                json.dumps(persona),
-                now.isoformat(),
-            ),
-        )
-
-        # Update symbiote row.
-        self._storage.execute(
-            "UPDATE symbiotes SET persona_json = ?, updated_at = ? WHERE id = ?",
-            (json.dumps(persona), now.isoformat(), symbiote_id),
-        )
+        # The audit record and the change itself, as one unit.
+        with self._storage.transaction():
+            self._storage.execute(
+                "INSERT INTO persona_audit "
+                "(id, symbiote_id, old_persona_json, new_persona_json, changed_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    _uuid(),
+                    symbiote_id,
+                    json.dumps(old_persona),
+                    json.dumps(persona),
+                    now.isoformat(),
+                ),
+            )
+            self._storage.execute(
+                "UPDATE symbiotes SET persona_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(persona), now.isoformat(), symbiote_id),
+            )
 
         return self.get(symbiote_id)  # type: ignore[return-value]
 

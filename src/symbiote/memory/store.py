@@ -157,11 +157,12 @@ class MemoryStore:
             [self._row_to_entry(r) for r in rows], intent, session_id, limit
         )
         now = datetime.now(tz=UTC).isoformat()
-        for entry in results:
-            self._storage.execute(
-                "UPDATE memory_entries SET last_used_at = ? WHERE id = ?",
-                (now, entry.id),
-            )
+        with self._storage.transaction():
+            for entry in results:
+                self._storage.execute(
+                    "UPDATE memory_entries SET last_used_at = ? WHERE id = ?",
+                    (now, entry.id),
+                )
         return results
 
     def get_by_type(

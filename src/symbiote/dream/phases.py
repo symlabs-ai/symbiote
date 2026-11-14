@@ -286,15 +286,18 @@ class ReconcilePhase:
                 conflicts.append(detail)
 
                 if not ctx.dry_run:
-                    ctx.memory.deactivate(loser.id)
+                    # Retire the loser and tag the winner as one unit.
+                    with ctx.storage.transaction():
+                        ctx.memory.deactivate(loser.id)
+                        # Tag the winner once (not again on every dream cycle)
+                        if reconciled_tag not in winner.tags:
+                            ctx.storage.execute(
+                                "UPDATE memory_entries SET tags_json = ? WHERE id = ?",
+                                (json.dumps([*winner.tags, reconciled_tag]), winner.id),
+                            )
                     deactivated.add(loser.id)
-                    # Tag the winner once (not again on every dream cycle)
                     if reconciled_tag not in winner.tags:
                         winner.tags.append(reconciled_tag)
-                        ctx.storage.execute(
-                            "UPDATE memory_entries SET tags_json = ? WHERE id = ?",
-                            (json.dumps(winner.tags), winner.id),
-                        )
                     applied += 1
                 else:
                     deactivated.add(loser.id)

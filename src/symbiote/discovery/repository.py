@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import builtins
 import json
+from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -17,6 +18,10 @@ class DiscoveredToolRepository:
 
     def __init__(self, storage: StoragePort) -> None:
         self._storage = storage
+
+    def transaction(self) -> AbstractContextManager[None]:
+        """The storage's transaction, for callers that save several tools."""
+        return self._storage.transaction()
 
     def save(self, tool: DiscoveredTool) -> DiscoveredTool:
         """Insert or replace a discovered tool."""

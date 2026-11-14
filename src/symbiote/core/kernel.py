@@ -226,7 +226,10 @@ class SymbioteKernel:
         # The default engine (keyword, no LLM) is the safe baseline used when
         # callers invoke reflect directly or no per-symbiote config exists.
         self._message_repo = MessageRepository(self._storage)
-        self._reflection = ReflectionEngine(self._memory, self._message_repo)
+        # ``storage`` lets the engine store facts and watermark in one transaction.
+        self._reflection = ReflectionEngine(
+            self._memory, self._message_repo, storage=self._storage
+        )
 
         # Subagent spawning
         self._subagent = SubagentManager(self)
@@ -855,18 +858,23 @@ class SymbioteKernel:
 
         Everything comes from this turn's own RunResult, never from state
         shared with other sessions. The trace is persisted even when the
-        run failed, so a failing turn still shows up in scoring.
+        run failed, so a failing turn still shows up in scoring. The trace
+        and the assistant message are one transaction: a reply is never
+        stored without its trace, nor a successful trace without its reply.
         """
-        if result.loop_trace is not None:
-            self._persist_trace(session_id, symbiote_id, result.loop_trace)
+        response = result.output if result.success else None
+        with self._storage.transaction():
+            if result.loop_trace is not None:
+                self._persist_trace(session_id, symbiote_id, result.loop_trace)
+            if result.success:
+                self._sessions.add_message(
+                    session_id, "assistant", _response_text(response)
+                )
         if result.handoff_data is not None:
             with self._handoffs_lock:
                 self._handoffs[session_id] = result.handoff_data
         if not result.success:
             raise CapabilityError("chat", result.error or "Chat runner failed")
-
-        response = result.output
-        self._sessions.add_message(session_id, "assistant", _response_text(response))
         return response
 
     def _persist_turn_context(self, record: TurnRecord) -> None:
@@ -1452,6 +1460,10 @@ class SymbioteKernel:
         task completion, etc.).  The auto_score is preserved; final_score
         is recomputed as a weighted combination.
         """
+        with self._storage.transaction():
+            self._apply_feedback(session_id, score)
+
+    def _apply_feedback(self, session_id: str, score: float) -> None:
         row = self._storage.fetch_one(
             "SELECT id, auto_score FROM session_scores WHERE session_id = ?",
             (session_id,),
@@ -1536,8 +1548,6 @@ class SymbioteKernel:
         ``memory_retention_days``; ``None`` (the default) leaves those tables
         alone. Not scheduled automatically.
         """
-        from datetime import UTC, datetime, timedelta
-
         trace_window = (
             traces_days if traces_days is not None
             else self._config.trace_retention_days
@@ -1552,6 +1562,23 @@ class SymbioteKernel:
             "SELECT id FROM sessions WHERE status = 'closed' "
             "AND ended_at IS NOT NULL AND ended_at < ?"
         )
+        memory_window = (
+            memories_days if memories_days is not None
+            else self._config.memory_retention_days
+        )
+        # One transaction: a prune that fails midway deletes nothing.
+        with self._storage.transaction():
+            return self._prune(windows, old_sessions, memory_window, dry_run)
+
+    def _prune(
+        self,
+        windows: dict[str, int | None],
+        old_sessions: str,
+        memory_window: int | None,
+        dry_run: bool,
+    ) -> dict[str, int]:
+        from datetime import UTC, datetime, timedelta
+
         counts: dict[str, int] = {}
         for table, days in windows.items():
             if days is None:
@@ -1566,10 +1593,6 @@ class SymbioteKernel:
             if not dry_run and counts[table]:
                 self._storage.execute(f"DELETE FROM {table} WHERE {where}", (cutoff,))  # noqa: S608
 
-        memory_window = (
-            memories_days if memories_days is not None
-            else self._config.memory_retention_days
-        )
         counts["memory_entries"] = 0
         if memory_window is not None:
             cutoff = (datetime.now(tz=UTC) - timedelta(days=memory_window)).isoformat()
@@ -1622,8 +1645,9 @@ class SymbioteKernel:
         Unlike ``IdentityManager.delete`` (a status change), this cannot be
         undone. Stop sending turns to the symbiote first: background work
         still running for it gets a few seconds to finish, and rows written by
-        a turn that is still in flight are not covered. The deletes are not
-        one transaction; if the call fails midway, call it again.
+        a turn that is still in flight are not covered. The database deletes
+        are one transaction (all or nothing); the skill directory is removed
+        after it commits.
 
         Raises ``EntityNotFoundError`` when the symbiote does not exist.
         """
@@ -1656,15 +1680,20 @@ class SymbioteKernel:
             ):
                 self._tool_gateway.unregister_tool(tool["tool_id"])
 
+        # One transaction: the symbiote is erased from the database entirely
+        # or, if a delete fails, not at all.
         counts: dict[str, int] = {}
-        for table, where, params in targets:
-            row = self._storage.fetch_one(
-                f"SELECT COUNT(*) AS c FROM {table} WHERE {where}", params  # noqa: S608
-            )
-            found = int(row["c"]) if row else 0
-            counts[table] = counts.get(table, 0) + found
-            if not dry_run and found:
-                self._storage.execute(f"DELETE FROM {table} WHERE {where}", params)  # noqa: S608
+        with self._storage.transaction():
+            for table, where, params in targets:
+                row = self._storage.fetch_one(
+                    f"SELECT COUNT(*) AS c FROM {table} WHERE {where}", params  # noqa: S608
+                )
+                found = int(row["c"]) if row else 0
+                counts[table] = counts.get(table, 0) + found
+                if not dry_run and found:
+                    self._storage.execute(
+                        f"DELETE FROM {table} WHERE {where}", params  # noqa: S608
+                    )
 
         counts["skills"] = 0
         if self._skill_scope_mgr is not None:
@@ -1931,7 +1960,6 @@ class SymbioteKernel:
     ) -> None:
         """Compute and persist session score."""
         from datetime import UTC, datetime
-        from uuid import uuid4
 
         # Derive tool_mode and has_tools for mode-aware scoring
         tool_mode = trace.tool_mode if trace else "brief"
@@ -1946,6 +1974,14 @@ class SymbioteKernel:
             trace.total_tool_calls if trace else 0,
             datetime.now(tz=UTC).isoformat(),
         )
+        with self._storage.transaction():
+            self._write_score(session_id, symbiote_id, values, final)
+
+    def _write_score(
+        self, session_id: str, symbiote_id: str, values: tuple, final: float
+    ) -> None:
+        from uuid import uuid4
+
         existing = self._storage.fetch_one(
             "SELECT id FROM session_scores WHERE session_id = ?", (session_id,)
         )

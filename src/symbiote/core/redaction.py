@@ -272,13 +272,14 @@ class RedactingStorage:
             forms.add(literal)
             forms.add(json.dumps(literal)[1:-1])
             forms.add(json.dumps(literal, ensure_ascii=False)[1:-1])
-        for table, column in _SESSION_TEXT_COLUMNS:
-            for form in sorted(forms, key=len, reverse=True):
-                self._inner.execute(
-                    f"UPDATE {table} SET {column} = REPLACE({column}, ?, ?) "  # noqa: S608
-                    "WHERE session_id = ?",
-                    (form, replacement, session_id),
-                )
+        with self._inner.transaction():
+            for table, column in _SESSION_TEXT_COLUMNS:
+                for form in sorted(forms, key=len, reverse=True):
+                    self._inner.execute(
+                        f"UPDATE {table} SET {column} = REPLACE({column}, ?, ?) "  # noqa: S608
+                        "WHERE session_id = ?",
+                        (form, replacement, session_id),
+                    )
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)

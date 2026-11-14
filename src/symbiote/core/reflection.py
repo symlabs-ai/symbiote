@@ -24,7 +24,9 @@ import contextlib
 import json
 import logging
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -32,6 +34,8 @@ from pydantic import BaseModel, Field
 from symbiote.core._review_prompts import REFLECTION_PROMPT, render_prompt
 from symbiote.core.models import MemoryEntry, MemoryType
 from symbiote.core.ports import LLMPort, MemoryPort, MessagePort, StoragePort
+
+_T = TypeVar("_T")
 
 _log = logging.getLogger(__name__)
 
@@ -215,21 +219,45 @@ class ReflectionEngine:
         get_mark = getattr(self._messages, "get_reflection_watermark", None)
         since = get_mark(session_id) if get_mark is not None else None
         messages = self._fetch_messages(session_id, limit, since=since)
-        result = self._reflect_messages(messages, session_id, symbiote_id)
+        mark: Callable[[], None] | None = None
         set_mark = getattr(self._messages, "set_reflection_watermark", None)
         if set_mark is not None and messages and messages[-1].get("created_at"):
-            set_mark(session_id, messages[-1]["created_at"])
-        return result
+            last = messages[-1]["created_at"]
+
+            def mark() -> None:
+                set_mark(session_id, last)
+
+        return self._reflect_messages(messages, session_id, symbiote_id, mark)
+
+    def _commit(self, persist: Callable[[], _T], mark: Callable[[], None] | None) -> _T:
+        """Store the facts and move the watermark as one unit: the same
+        messages are never learned twice, nor skipped without being learned."""
+        transaction = (
+            self._storage.transaction()
+            if self._storage is not None
+            else contextlib.nullcontext()
+        )
+        with transaction:
+            out = persist()
+            if mark is not None:
+                mark()
+        return out
 
     def _reflect_messages(
-        self, messages: list[dict], session_id: str, symbiote_id: str
+        self,
+        messages: list[dict],
+        session_id: str,
+        symbiote_id: str,
+        mark: Callable[[], None] | None = None,
     ) -> ReflectionResult:
         discarded_count = sum(1 for m in messages if self._is_noise(m["content"]))
         summary = self._generate_summary(messages)
 
         if self._mode == "keyword":
             facts = self._extract_keyword(messages)
-            persisted = self._persist_facts(facts, symbiote_id, session_id)
+            persisted = self._commit(
+                lambda: self._persist_facts(facts, symbiote_id, session_id), mark
+            )
             return ReflectionResult(
                 session_id=session_id,
                 summary=summary,
@@ -243,7 +271,9 @@ class ReflectionEngine:
             keyword_facts = self._extract_keyword(messages)
             llm_facts, llm_error = self._extract_llm_safe(messages, symbiote_id)
             # Persist keyword only (safer migration); log diff for audit.
-            persisted = self._persist_facts(keyword_facts, symbiote_id, session_id)
+            persisted = self._commit(
+                lambda: self._persist_facts(keyword_facts, symbiote_id, session_id), mark
+            )
             self._audit_log(
                 session_id, symbiote_id, "hybrid",
                 keyword_facts, llm_facts, llm_error,
@@ -268,7 +298,9 @@ class ReflectionEngine:
                 llm_error, session_id,
             )
             keyword_facts = self._extract_keyword(messages)
-            persisted = self._persist_facts(keyword_facts, symbiote_id, session_id)
+            persisted = self._commit(
+                lambda: self._persist_facts(keyword_facts, symbiote_id, session_id), mark
+            )
             self._audit_log(
                 session_id, symbiote_id, self._mode,
                 keyword_facts, [], llm_error,
@@ -283,7 +315,9 @@ class ReflectionEngine:
                 llm_error=llm_error,
             )
 
-        persisted, skipped = self._apply_llm_facts(llm_facts, symbiote_id, session_id)
+        persisted, skipped = self._commit(
+            lambda: self._apply_llm_facts(llm_facts, symbiote_id, session_id), mark
+        )
         skipped_note = (
             f"skipped {skipped} invalid fact(s) from the LLM" if skipped else None
         )

@@ -99,6 +99,49 @@ To run the suite on PostgreSQL: `scripts/test-postgres.sh` starts a throwaway
 `SYMBIOTE_TEST_POSTGRES_DSN` to use a server you already have). Tests of
 SQLite-only behaviour carry the `sqlite_only` marker and are skipped there.
 
+### Transactions
+
+The kernel does not hold a transaction for a whole turn (a turn waits on the
+model and on tools; a transaction that long would pin a connection and block
+other writers). It wraps each **composite operation** in
+`storage.transaction()`: its writes are committed together or not at all.
+
+| Operation | What is committed together |
+|-----------|----------------------------|
+| End of a turn (`message` / `message_async`) | the execution trace and the assistant message |
+| `update_symbiote(persona=...)` | the persona and its `persona_audit` row |
+| `environment.configure` / `add_tools` / `remove_tools` | the read of the current config and the write of the merged one |
+| `harness_versions.create_version` / `rollback` | deactivating one version and activating the other |
+| Session score (`close_session`, `report_feedback`) | the `session_scores` row and the per-version score counters |
+| Reflection (`close_session`) | the learned memories and the session's reflection watermark |
+| Memory recall (`get_relevant`, semantic recall) | the `last_used_at` of every returned memory |
+| Dream reconcile | retiring the duplicate and tagging the memory that stays |
+| `discover_tools` | all the tools found by one scan |
+| Secret scrub of a session (redaction) | every table the secret is removed from |
+| `prune` | all the retention deletes of one call |
+| `purge_symbiote` | every row of the symbiote, in every table |
+
+What is **not** one transaction:
+
+- A turn as a whole. The user message is stored first; the turn's context
+  record (`turn_contexts`), the audit rows of each tool call and the memories
+  written by tools are committed as they happen. A turn that fails removes
+  its user message and keeps its trace.
+- `close_session` as a whole: score, failure memory, reflection, handoff and
+  the status change are separate steps, each one atomic; a step that fails is
+  logged and the others still run.
+- Registering an HTTP tool (`register_http_tool`): the stored tool and its
+  authorization are two writes; repeating the call completes it.
+- Anything outside the database: skill files, the in-process tool registry.
+
+Between replicas, a transaction makes a composite operation atomic but does
+not serialize two replicas that read and then write the same row at the same
+moment (`environment.configure` of one symbiote from two replicas: the last
+writer wins). Turns of one session are serialized by the session lock.
+
+`tests/unit/test_composite_transactions.py` interrupts each operation in the
+middle and checks that nothing of it is left, on both databases.
+
 A third-party adapter has to satisfy `StoragePort`: `init_schema`, `execute`
 (returns an object with `rowcount`), `fetch_one`, `fetch_all`,
 `transaction()` and `close`, plus the portable-SQL rules of its docstring.

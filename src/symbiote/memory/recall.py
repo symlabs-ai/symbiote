@@ -191,11 +191,12 @@ class SemanticRecallProvider:
         # Update last_used_at for returned entries
         result = [entry for _, entry in scored[:limit]]
         now_iso = now.isoformat()
-        for entry in result:
-            self._storage.execute(
-                "UPDATE memory_entries SET last_used_at = ? WHERE id = ?",
-                (now_iso, entry.id),
-            )
+        with self._storage.transaction():
+            for entry in result:
+                self._storage.execute(
+                    "UPDATE memory_entries SET last_used_at = ? WHERE id = ?",
+                    (now_iso, entry.id),
+                )
 
         return result
 

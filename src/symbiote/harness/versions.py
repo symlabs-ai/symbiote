@@ -86,46 +86,48 @@ class HarnessVersionRepository:
         defaults to the version active right now (or the default text when
         none is); ``None`` means "derived from the default text".
         """
-        if parent_version is _UNSET:
-            active = self.get_active_version(symbiote_id, component)
-            parent_version = active["version"] if active else None
-        if parent_version is None:
-            parent_version = self.BASELINE_VERSION
-        # Determine next version number
-        row = self._storage.fetch_one(
-            "SELECT MAX(version) as max_v FROM harness_versions "
-            "WHERE symbiote_id = ? AND component = ?",
-            (symbiote_id, component),
-        )
-        next_version = (row["max_v"] or 0) + 1 if row else 1
+        # Number, deactivate and insert as one unit.
+        with self._storage.transaction():
+            if parent_version is _UNSET:
+                active = self.get_active_version(symbiote_id, component)
+                parent_version = active["version"] if active else None
+            if parent_version is None:
+                parent_version = self.BASELINE_VERSION
+            # Determine next version number
+            row = self._storage.fetch_one(
+                "SELECT MAX(version) as max_v FROM harness_versions "
+                "WHERE symbiote_id = ? AND component = ?",
+                (symbiote_id, component),
+            )
+            next_version = (row["max_v"] or 0) + 1 if row else 1
 
-        # Deactivate previous versions
-        self._storage.execute(
-            "UPDATE harness_versions SET is_active = 0 "
-            "WHERE symbiote_id = ? AND component = ? AND is_active = 1",
-            (symbiote_id, component),
-        )
+            # Deactivate previous versions
+            self._storage.execute(
+                "UPDATE harness_versions SET is_active = 0 "
+                "WHERE symbiote_id = ? AND component = ? AND is_active = 1",
+                (symbiote_id, component),
+            )
 
-        # Insert new version
-        self._storage.execute(
-            "INSERT INTO harness_versions "
-            "(id, symbiote_id, component, version, content, "
-            "avg_score, session_count, is_active, created_at, parent_version) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                str(uuid4()),
-                symbiote_id,
-                component,
-                next_version,
-                content,
-                0.0,
-                0,
-                1,
-                datetime.now(tz=UTC).isoformat(),
-                parent_version,
-            ),
-        )
-        return next_version
+            # Insert new version
+            self._storage.execute(
+                "INSERT INTO harness_versions "
+                "(id, symbiote_id, component, version, content, "
+                "avg_score, session_count, is_active, created_at, parent_version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(uuid4()),
+                    symbiote_id,
+                    component,
+                    next_version,
+                    content,
+                    0.0,
+                    0,
+                    1,
+                    datetime.now(tz=UTC).isoformat(),
+                    parent_version,
+                ),
+            )
+            return next_version
 
     def update_score(
         self, symbiote_id: str, component: str, score: float
@@ -162,29 +164,30 @@ class HarnessVersionRepository:
 
         Returns True if a version was rolled back, False if none is active.
         """
-        current = self.get_active_version(symbiote_id, component)
-        if current is None:
-            return False
+        with self._storage.transaction():
+            current = self.get_active_version(symbiote_id, component)
+            if current is None:
+                return False
 
-        parent = current.get("parent_version") or self.BASELINE_VERSION
-        parent_row = None
-        if parent != self.BASELINE_VERSION:
-            parent_row = self._storage.fetch_one(
-                "SELECT id FROM harness_versions "
-                "WHERE symbiote_id = ? AND component = ? AND version = ?",
-                (symbiote_id, component, parent),
-            )
+            parent = current.get("parent_version") or self.BASELINE_VERSION
+            parent_row = None
+            if parent != self.BASELINE_VERSION:
+                parent_row = self._storage.fetch_one(
+                    "SELECT id FROM harness_versions "
+                    "WHERE symbiote_id = ? AND component = ? AND version = ?",
+                    (symbiote_id, component, parent),
+                )
 
-        self._storage.execute(
-            "UPDATE harness_versions SET is_active = 0 WHERE id = ?",
-            (current["id"],),
-        )
-        if parent_row is not None:
             self._storage.execute(
-                "UPDATE harness_versions SET is_active = 1 WHERE id = ?",
-                (parent_row["id"],),
+                "UPDATE harness_versions SET is_active = 0 WHERE id = ?",
+                (current["id"],),
             )
-        return True
+            if parent_row is not None:
+                self._storage.execute(
+                    "UPDATE harness_versions SET is_active = 1 WHERE id = ?",
+                    (parent_row["id"],),
+                )
+            return True
 
     def get_baseline(self, symbiote_id: str, component: str) -> dict | None:
         """Score row of the built-in default text (version 0), if any."""

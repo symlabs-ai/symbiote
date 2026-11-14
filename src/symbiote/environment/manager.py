@@ -152,25 +152,28 @@ class EnvironmentManager:
 
         for attempt in range(2):
             with _CONFIG_LOCK:
-                existing = self._fetch_exact(symbiote_id, workspace_id)
-                # A workspace config starts from the symbiote's own config, so
-                # setting one field there does not reset the others (tools!).
-                base = existing
-                if base is None and workspace_id is not None:
-                    base = self._fetch_exact(symbiote_id, None)
-                data = (
-                    base.model_dump(exclude={"id", "symbiote_id", "workspace_id"})
-                    if base is not None
-                    else {}
-                )
-                data.update(updates)
-                if existing is not None:
-                    data["id"] = existing.id
-                cfg = EnvironmentConfig(
-                    symbiote_id=symbiote_id, workspace_id=workspace_id, **data
-                )
                 try:
-                    self._write(cfg, insert=existing is None)
+                    # Read, merge and write as one unit.
+                    with self._storage.transaction():
+                        existing = self._fetch_exact(symbiote_id, workspace_id)
+                        # A workspace config starts from the symbiote's own
+                        # config, so setting one field there does not reset
+                        # the others (tools!).
+                        base = existing
+                        if base is None and workspace_id is not None:
+                            base = self._fetch_exact(symbiote_id, None)
+                        data = (
+                            base.model_dump(exclude={"id", "symbiote_id", "workspace_id"})
+                            if base is not None
+                            else {}
+                        )
+                        data.update(updates)
+                        if existing is not None:
+                            data["id"] = existing.id
+                        cfg = EnvironmentConfig(
+                            symbiote_id=symbiote_id, workspace_id=workspace_id, **data
+                        )
+                        self._write(cfg, insert=existing is None)
                     return cfg
                 except StorageIntegrityError:
                     # Another process created this config first: merge onto it.
