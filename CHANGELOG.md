@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.1] - 2026-11-13
+
+Observabilidade e governança para hosts (inspector, callbacks de progresso, contexto do chamador, veto do host, armazenamento injetável, redação de segredos, chaves de aprendizado), o adaptador do SymGateway, o demo interativo e as correções encontradas ao percorrer o demo com um LLM real.
+
+**Mudança incompatível:** a entrada marcada com `!` (ordem da aprovação de tools) altera comportamento visível ao host e traz uma nota **MIGRAÇÃO**.
+
 ### Novas funcionalidades
 
 - feat(kernel): redação de segredos no que o kernel persiste. `ToolDescriptor.secret_params` marca os parâmetros que carregam segredos: o valor vira `[REDACTED]` no `audit_log` e no trace, e passa a ser removido de tudo o que for gravado depois e do que a sessão já tinha gravado (a mensagem do usuário é salva antes da chamada que revela o segredo). `kernel.set_redactor(fn)` instala uma função do host `fn(texto) -> texto`, aplicada a todo texto derivado de conversa antes de gravar; se ela falhar, o texto é trocado por um marcador em vez de ser gravado sem checagem. `kernel.redactor.add_secret(valor)` registra um literal direto. Cobre `messages`, resumo de sessão, `memory_entries`, `audit_log`, `execution_traces`, `reflection_audit`, `skill_review_audit`, `dream_reports`, `decisions`, `process_instances`, `artifacts`, `harness_versions` e os arquivos de skill. Identificadores, timestamps e configuração do host (tools HTTP, persona, knowledge, `external_key`) não são reescritos, e logs não são cobertos. O modelo continua recebendo o valor real no turno que o usa.
@@ -23,6 +29,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - feat(kernel): acessos públicos que antes exigiam atributos privados: `kernel.update_symbiote(id, name=, role=, persona=)` (com auditoria da persona) e `kernel.list_symbiotes()`; `kernel.discover_tools(symbiote_id, source_path, url=)` e `kernel.discovered_tools` (status pending/approved/disabled); `kernel.tune_parameters(symbiote_id, days=, apply=)`, `kernel.cross_learning_candidates(symbiote_id)` e `kernel.harness_default_text(component)`. `evolve_harness` aceita `default_text` omitido e usa o texto embutido do componente.
 - feat(llm): `SymGatewayLLMAdapter` (`symbiote.adapters.llm.symgateway`) chama LLMs pelo SymGateway com a chave do gateway no lugar da do provider. `list_models()` lê `GET /v1/models` (só `service_type` `llm`); cada conversa ganha uma sessão de trabalho (`POST /_api/work-sessions`) cujo uid vai em `X-SymGateway-Session-Id` em todas as chamadas dela. O host diz a qual conversa a chamada pertence com `session_key=` (um callable; sem chave, as chamadas dividem uma sessão padrão); `with_model()` dá um segundo modelo que divide as mesmas sessões. `X-Project-Slug` só vai quando `project_slug=` é informado. Uma sessão recusada (404/409/410) é reaberta uma vez. Fala direto com `/v1/chat/completions` via httpx, porque o provider `symgateway` do forge_llm não envia o header de sessão.
 - feat(demo): `demo/` — chat com um assistente pessoal e dez abas que mostram o kernel por dentro (turno ao vivo, contexto, memória, aprendizado, tools, execução, skills, harness, web, sistema), com roteiro de apresentação. Usa um LLM real (Anthropic, OpenAI ou SymGateway; a chave vai para `demo/demo.env`), roda só em 127.0.0.1 e serve também de exemplo de host. Ver `demo/README.md`.
+- feat(demo): memórias semeadas para que o passo do dream mostre poda, reconciliação e generalização num demo recém-criado (o dream fica desligado até esse passo); pedidos de aprovação com contagem regressiva, aviso no título da aba, aviso quando expiram e prazo real depois de recarregar a página; modelo do SymGateway escolhido numa lista; "Zerar demo" sem recarga em loop; encerrar a sessão sempre abre uma nova.
 
 ### Correções
 
@@ -38,6 +45,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - fix(long-run): um handoff sem blocos pendentes (projeto terminado) não é mais injetado na sessão seguinte, e o planejador só recebe "planeje apenas os pendentes" quando há pendentes. Antes, repetir um pedido já concluído gerava um plano vazio e o turno falhava com "Planner produced no blocks of work".
 - fix(environment): `configure(planner_prompt="")` e `configure(evaluator_prompt="")` limpam o prompt. Antes não havia como limpar (`None` significa "não mudar"), e um `""` gravado ligava o avaliador do long-run com o prompt padrão.
 - fix(ui): no streaming do `<symbiote-chat>`, uma resposta que chega só no `response_done` (sem `text_delta` antes) ou um evento `error` deixavam a bolha vazia e ela era removida. Agora o texto final fica na tela e prevalece sobre os deltas.
+
+### Outros
+
+- chore(types): `forge_scraper` entra no override de dependências opcionais sem tipos do mypy; com o extra `[extract]` instalado, o mypy falhava com `import-untyped`.
 
 ## [v0.8.0] - 2026-11-13
 
