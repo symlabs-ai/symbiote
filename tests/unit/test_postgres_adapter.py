@@ -75,6 +75,40 @@ def test_init_schema_records_the_migrations() -> None:
 
 
 @needs_postgres
+def test_tool_visibility_migration_upgrades_existing_configs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Migration 5 adds ``tool_visibility`` to a database already at version 4:
+    a config written before it reads as ``"tagged"`` and takes the new value."""
+    import symbiote.adapters.storage.postgres as pg_module
+    from symbiote.adapters.storage.postgres_migrations import MIGRATIONS
+    from symbiote.environment.manager import EnvironmentManager
+
+    adapter = _adapter()
+    with monkeypatch.context() as m:
+        m.setattr(pg_module, "MIGRATIONS", tuple(v for v in MIGRATIONS if v[0] <= 4))
+        adapter.init_schema()
+    assert adapter.schema_version() == 4
+    adapter.execute("INSERT INTO symbiotes (id, name) VALUES (?, ?)", ("sym-1", "a"))
+    adapter.execute(
+        "INSERT INTO environment_configs (id, symbiote_id, tools_json) VALUES (?, ?, ?)",
+        ("cfg-1", "sym-1", '["tasks_list"]'),
+    )
+
+    adapter.init_schema()
+
+    assert adapter.schema_version() == 5
+    row = adapter.fetch_one("SELECT tool_visibility FROM environment_configs WHERE id = ?", ("cfg-1",))
+    assert row == {"tool_visibility": "tagged"}
+    env = EnvironmentManager(adapter)
+    assert env.get_tool_visibility("sym-1") == "tagged"
+    env.configure(symbiote_id="sym-1", tool_visibility="authorized")
+    assert env.get_tool_visibility("sym-1") == "authorized"
+    assert env.list_tools("sym-1") == ["tasks_list"]  # the rest of the row survives
+    adapter.close()
+
+
+@needs_postgres
 def test_replicas_starting_together_migrate_once() -> None:
     first = _adapter()
     replicas = [first] + [

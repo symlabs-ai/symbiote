@@ -137,6 +137,7 @@ def test_value_persists(tmp_path: Path) -> None:
     k2.shutdown()
 
 
+@pytest.mark.sqlite_only
 def test_sqlite_migration_adds_column(tmp_path: Path) -> None:
     adapter = SQLiteAdapter(tmp_path / "db.sqlite")
     adapter.init_schema()
