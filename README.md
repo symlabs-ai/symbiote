@@ -236,6 +236,8 @@ kernel = SymbioteKernel(config, llm)
 register(
     kernel,
     search_backend="brave",                            # web_search via SymGateway
+    # or: search_backend="symgateway_objective",
+    #     search_options={"symgateway_objective": "web_seek"},
     extract_backend=["forge_scraper", "firecrawl"],    # chain with fallback
     browser_backend="chromium",                        # browser_* via Playwright
     policy={"blocklist": ["*.ads.com", "doubleclick.net"]},

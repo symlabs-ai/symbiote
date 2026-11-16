@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-SearchBackend = Literal["brave"]
+SearchBackend = Literal["brave", "symgateway_objective"]
 ExtractBackend = Literal["forge_scraper", "firecrawl"]
 CrawlBackend = Literal["firecrawl"]
 BrowserBackend = Literal["chromium", "browserbase", "browser_use"]
@@ -29,6 +29,11 @@ class SearchOptions(BaseModel):
     symgateway_api_key: str | None = None
     """Override SymGateway API key. Defaults to env SYMGATEWAY_API_KEY."""
     timeout_seconds: float = 30.0
+    symgateway_objective: str | None = None
+    """Name of the SymGateway Objective that provides web search (e.g.
+    "web_seek"). Required by ``search_backend="symgateway_objective"``."""
+    symgateway_objective_service: str = "websearch"
+    """The Objective's service to invoke; it receives ``{"q", "count"}``."""
 
     def resolved_gateway_url(self) -> str:
         url = self.symgateway_base_url or os.getenv("SYMGATEWAY_BASE_URL", "")
@@ -37,7 +42,8 @@ class SearchOptions(BaseModel):
                 "SymGateway base URL not set. Provide search_options.symgateway_base_url "
                 "or set SYMGATEWAY_BASE_URL in env."
             )
-        # /proxy/<provider>/... lives at the root, not under /v1
+        # /proxy/<provider>/... lives at the root, not under /v1 (callers
+        # that need a /v1 path add it themselves)
         return url.rstrip("/").removesuffix("/v1")
 
     def resolved_api_key(self) -> str:

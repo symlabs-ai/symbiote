@@ -91,6 +91,8 @@ Tudo isso entregue como **tools registradas no `ToolGateway`** do Symbiote — n
 
 **Como funciona o `web_search` hoje:** `register(kernel, search_backend="brave")` ativa a tool. O handler faz `POST {SYMGATEWAY_BASE_URL_sem_v1}/proxy/brave/web-search` com o `SYMGATEWAY_API_KEY` do host. SymGateway repassa pra Brave Search API e devolve o JSON; nós normalizamos pra uma lista compacta de `{url, title, snippet}`.
 
+**Por Objective (`search_backend="symgateway_objective"`):** em vez de nomear o provider, o host nomeia o propósito. `register(kernel, search_backend="symgateway_objective", search_options={"symgateway_objective": "web_seek"})` faz o handler chamar `POST {SYMGATEWAY_BASE_URL_sem_v1}/v1/objectives/invoke` com `{"objective": "web_seek", "service": "websearch", "input": {"q": ..., "count": ...}}`. O Objective (tipo `external_api`, com serviços publicados) decide a conta, a credencial e os fallbacks no gateway. O nome do serviço é `search_options.symgateway_objective_service` (padrão `websearch`). A saída aceita é o JSON da Brave (`web.results[]`) ou uma lista já normalizada. A chave precisa de `objectives.use` e `external_services.invoke`; uma recusa do gateway chega ao modelo com o motivo (`SymGateway refused objective 'web_seek' ... Not authorized for external_services.invoke`).
+
 Vantagens do roteamento via SymGateway:
 - **Sem nova credencial** — usa o mesmo bearer token do LLM
 - **Sem SDK extra** — só `httpx`, já em `dependencies`

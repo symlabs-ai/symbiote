@@ -56,7 +56,10 @@ def register(
 
     Args:
         kernel: The Symbiote kernel to extend.
-        search_backend: Search provider for `web_search` (e.g. "brave"). None disables.
+        search_backend: Search provider for `web_search`: "brave" (the
+            gateway's Brave proxy) or "symgateway_objective" (a search service
+            of the Objective named in `search_options.symgateway_objective`).
+            None disables.
         search_routing: Per-tool search provider overrides.
         search_options: Search tool behavior (limits, SymGateway overrides).
         extract_backend: Extract provider(s) for `web_extract`. Pass a list
@@ -235,6 +238,12 @@ def _build_search_provider(
     if backend is None and routing is None:
         return None
     resolved = backend or "brave"
+    if resolved == "symgateway_objective":
+        from symbiote.browser.search.providers.symgateway_objective import (
+            ObjectiveSearchViaSymGateway,
+        )
+
+        return ObjectiveSearchViaSymGateway(options=opts)
     if resolved != "brave":
         raise NotImplementedError(
             f"Search backend {resolved!r} not implemented yet."
