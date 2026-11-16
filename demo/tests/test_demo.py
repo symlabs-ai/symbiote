@@ -202,6 +202,172 @@ def test_gateway_work_session_follows_the_symbiote_session() -> None:
         runtime_mod.SCOPE.reset(scope)
 
 
+def test_settings_can_be_tested_without_being_saved(demo: Demo, monkeypatch: pytest.MonkeyPatch) -> None:
+    saved: list[dict] = []
+    monkeypatch.setattr(settings_mod, "save", lambda updates, *a, **k: saved.append(updates))
+    before = demo.get("/api/status")["settings"]
+    assert before["server"] == settings_mod.PROVIDER_SERVERS["anthropic"]
+    form = {"provider": "anthropic", "model": "m-main", "aux_model": "m-aux"}  # empty key = the saved one
+
+    assert demo.post("/api/setup/test", form, token=False).status_code == 403
+    r = demo.post("/api/setup/test", form)
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["ok"] is True
+    assert out["server"] == before["server"]
+    assert [(c["step"], c["model"], c["ok"]) for c in out["checks"]] == [
+        ("modelo principal", "m-main", True),
+        ("modelo auxiliar", "m-aux", True),
+    ]
+    assert "ok, anotado" in out["checks"][0]["detail"]  # what the model answered
+
+    # A model that fails is reported per check, with the provider's message.
+    def flaky(s: Any, model: str) -> Any:
+        if model == "m-broken":
+            raise RuntimeError("401 invalid x-api-key")
+        return ScriptedLLM("ok")
+
+    monkeypatch.setattr(runtime_mod, "build_adapter", flaky)
+    out = demo.post("/api/setup/test", {**form, "aux_model": "m-broken"}).json()
+    assert out["ok"] is False
+    assert [c["ok"] for c in out["checks"]] == [True, False]
+    assert "401 invalid x-api-key" in out["checks"][1]["detail"]
+
+    # One check when both roles use the same model.
+    out = demo.post("/api/setup/test", {**form, "aux_model": "m-main"}).json()
+    assert [c["step"] for c in out["checks"]] == ["modelo principal e auxiliar"]
+
+    assert saved == []
+    assert demo.get("/api/status")["settings"] == before
+
+
+def test_gateway_settings_test_checks_the_model_list_first(
+    demo: Demo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeGateway:
+        closed = False
+
+        def __init__(self, models: list[str] | Exception) -> None:
+            self.models = models
+
+        def list_models(self) -> list[str]:
+            if isinstance(self.models, Exception):
+                raise self.models
+            return self.models
+
+        def with_model(self, model: str) -> Any:
+            return ScriptedLLM(f"sou {model}")
+
+        def close(self) -> None:
+            FakeGateway.closed = True
+
+    seen: dict[str, Any] = {}
+    gateway = FakeGateway(["gw-a", "gw-b"])
+    monkeypatch.setattr(
+        runtime_mod, "gateway_adapter", lambda s, *a, **k: seen.setdefault("s", s) and gateway
+    )
+    form = {"provider": "symgateway", "api_key": "sk-gw", "base_url": "http://localhost:18090/"}
+
+    out = demo.post("/api/setup/test", {**form, "model": "gw-a", "aux_model": "gw-zzz"}).json()
+    assert out["server"] == "http://localhost:18090"
+    assert seen["s"].api_key == "sk-gw"
+    assert [(c["step"], c["ok"]) for c in out["checks"]] == [
+        ("GET /v1/models", True),
+        ("modelo principal", True),
+        ("modelo auxiliar", False),  # not in the list: no call is made
+    ]
+    assert "sou gw-a" in out["checks"][1]["detail"]
+    assert out["ok"] is False
+    assert FakeGateway.closed is True
+
+    # No model picked yet: the listing alone, and a note saying what is missing.
+    out = demo.post("/api/setup/test", form).json()
+    assert [c["step"] for c in out["checks"]] == ["GET /v1/models"]
+    assert out["ok"] is False and out["note"]
+
+    # A key the gateway refuses stops at the listing.
+    gateway.models = RuntimeError("401 chave inválida")
+    out = demo.post("/api/setup/test", {**form, "model": "gw-a"}).json()
+    assert [(c["step"], c["ok"]) for c in out["checks"]] == [("GET /v1/models", False)]
+    assert "401 chave inválida" in out["checks"][0]["detail"]
+
+    assert demo.get("/api/status")["settings"]["provider"] == "anthropic"  # still the saved one
+
+
+def test_web_search_goes_through_the_gateway_objective(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("DEMO_SEARCH_OBJECTIVE", "SYMGATEWAY_API_KEY", "SYMGATEWAY_BASE_URL", "DEMO_PROVIDER"):
+        monkeypatch.delenv(name, raising=False)
+    env = tmp_path / "demo.env"
+    env.write_text("SYMGATEWAY_API_KEY=sk-gw\nSYMGATEWAY_BASE_URL=http://localhost:18090/\n")
+    loaded = settings_mod.load(env)
+    assert loaded.search_objective == "web_seek"  # the default
+    assert loaded.public()["search_via"] == "objective web_seek · http://localhost:18090"
+    env.write_text(env.read_text() + "DEMO_SEARCH_OBJECTIVE=none\n")
+    assert settings_mod.load(env).search_objective == ""
+    assert settings_mod.load(env).public()["search_via"].startswith("proxy Brave")
+
+    import symbiote.browser as browser_mod
+
+    calls: list[dict] = []
+    monkeypatch.setattr(browser_mod, "register", lambda kernel, **kw: calls.append(kw))
+
+    class FakeKernel:
+        class tool_gateway:  # noqa: N801
+            @staticmethod
+            def list_tools() -> list[str]:
+                return ["web_search"]
+
+    monkeypatch.setattr(settings_mod, "load", lambda *a, **k: loaded)
+    rt = runtime_mod.DemoRuntime(server_mod.EventBus(), data_dir=tmp_path, base_url="http://x")
+    rt._register_web(FakeKernel())  # noqa: SLF001
+    assert calls[-1]["search_backend"] == "symgateway_objective"
+    assert calls[-1]["search_options"]["symgateway_objective"] == "web_seek"
+
+    rt.settings = settings_mod.Settings(
+        symgateway_api_key="sk-gw", symgateway_base_url="http://localhost:18090", search_objective=""
+    )
+    rt._register_web(FakeKernel())  # noqa: SLF001
+    assert calls[-1]["search_backend"] == "brave"
+
+    rt.settings = settings_mod.Settings()  # no gateway: no web_search at all
+    rt._register_web(FakeKernel())  # noqa: SLF001
+    assert calls[-1]["search_backend"] is None
+
+
+def test_link_preview_endpoints(demo: Demo, tmp_path: Path) -> None:
+    previews = demo.app.state.previews
+    asked: list[str] = []
+
+    async def fake_build(key: str, url: str) -> dict | None:
+        asked.append(url)
+        if "sem-imagem" in url:
+            return None
+        previews._dir.mkdir(parents=True, exist_ok=True)  # noqa: SLF001
+        (previews._dir / f"{key}.img").write_bytes(b"\x89PNG")  # noqa: SLF001
+        meta = {"url": url, "title": "Título", "site": "Exame", "content_type": "image/png"}
+        (previews._dir / f"{key}.json").write_text(json.dumps(meta))  # noqa: SLF001
+        return previews._public(key, meta)  # noqa: SLF001
+
+    previews._build = fake_build  # noqa: SLF001
+    assert demo.post("/api/preview", {"url": "https://exame.com/x"}, token=False).status_code == 403
+
+    got = demo.post("/api/preview", {"url": "https://exame.com/x"}).json()["preview"]
+    assert got["title"] == "Título" and got["image"].startswith("/api/preview/image/")
+    image = demo.http.get(got["image"])
+    assert image.status_code == 200
+    assert image.headers["content-type"] == "image/png"
+    assert image.headers["x-content-type-options"] == "nosniff"
+
+    assert demo.post("/api/preview", {"url": "https://exame.com/sem-imagem"}).json() == {"preview": None}
+    assert demo.post("/api/preview", {"url": "javascript:alert(1)"}).json() == {"preview": None}
+    assert asked == ["https://exame.com/x", "https://exame.com/sem-imagem"]
+    # The image route serves resolved thumbnails only; it fetches nothing.
+    assert demo.http.get("/api/preview/image/" + "0" * 32).status_code == 404
+    assert demo.http.get("/api/preview/image/..%2F..%2Fdemo.env").status_code == 404
+
+
 def test_state_changes_need_the_token_and_a_local_host(demo: Demo) -> None:
     assert demo.post("/api/session/new", {"symbiote": "sol"}, token=False).status_code == 403
     r = demo.http.get("/api/status", headers={"Host": "evil.example:80"})

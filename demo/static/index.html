@@ -17,10 +17,17 @@
     </div>
     <div class="session-info" id="session-info"></div>
     <div class="spacer"></div>
-    <span class="pill" id="llm-pill" title="Modelo em uso"></span>
+    <button class="pill" id="llm-pill" type="button" title="Modelo em uso (abre as configurações)"></button>
     <button class="btn ghost" id="btn-new-session" title="Começa outra sessão sem encerrar a atual (não aprende)">Nova sessão</button>
     <button class="btn accent" id="btn-close-session" title="Encerra a sessão: score, reflexão, memória de falha, handoff, skills e dream">Encerrar sessão e aprender</button>
     <button class="btn" id="btn-tour">Roteiro</button>
+    <button class="btn ghost icon" id="btn-settings" type="button" title="Configurações do LLM" aria-label="Configurações do LLM">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>
+      </svg>
+    </button>
   </header>
 
   <main class="layout">
@@ -35,9 +42,10 @@
 
   <div class="overlay" id="setup" hidden>
     <form class="dialog setup" id="setup-form" autocomplete="off">
-      <h2><span class="logo"></span> Symbiote demo</h2>
-      <p>O demo conversa com um LLM de verdade. Informe a chave da Anthropic, da OpenAI ou do SymGateway.
-         Ela é validada com uma chamada curta e gravada em <code id="env-path">demo/demo.env</code>
+      <h2><span class="logo"></span> <span id="setup-title">Symbiote demo</span></h2>
+      <dl class="kv" id="setup-current" hidden></dl>
+      <p class="dim small">O demo conversa com um LLM de verdade: Anthropic, OpenAI ou SymGateway.
+         A chave é validada com uma chamada curta e gravada em <code id="env-path">demo/demo.env</code>
          (fora do git, permissão 0600). Ela nunca volta para o navegador.</p>
       <label>Provider
         <select name="provider">
@@ -52,6 +60,8 @@
       <div class="gw-only" hidden>
         <p class="dim small">A chave do gateway substitui a do provider e precisa de
           <code>models.read</code>, <code>work_sessions.create</code> e <code>gateway.llm.invoke</code>.
+          Para a tool <code>web_search</code>, também <code>objectives.use</code> e
+          <code>external_services.invoke</code>.
           Cada sessão do Symbiote abre uma sessão de trabalho no gateway.</p>
         <label>URL do gateway <input name="base_url" placeholder="https://symgateway.symlabs.ai"></label>
         <label>Projeto (opcional, vai no header X-Project-Slug)
@@ -72,9 +82,12 @@
         <p class="dim small">O auxiliar roda o trabalho de fundo: reflexão por LLM, evolução do harness,
           seleção semântica de tools, dream e review de skills.</p>
       </details>
+      <div class="test-result" id="setup-test" aria-live="polite" hidden></div>
       <p class="error" id="setup-error" hidden></p>
       <div class="row end">
-        <button type="button" class="btn ghost" id="setup-cancel" hidden>Cancelar</button>
+        <button type="button" class="btn ghost" id="setup-cancel" hidden>Fechar</button>
+        <button type="button" class="btn" id="setup-test-btn"
+                title="Faz chamadas reais com os valores do formulário, sem salvar">Testar</button>
         <button class="btn accent" type="submit" id="setup-submit">Validar e começar</button>
       </div>
     </form>

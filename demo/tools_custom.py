@@ -46,9 +46,17 @@ def agora(params: dict) -> dict:
 
 
 def calcular(params: dict) -> dict:
-    expression = str(params.get("expressao", ""))
-    result = _eval(ast.parse(expression.replace(",", "."), mode="eval"))
-    return {"expressao": expression, "resultado": round(result, 6)}
+    expression = params.get("expressao")
+    if not isinstance(expression, str) or not expression.strip():
+        # Says what was expected and what came, so the model fixes the call
+        # on the next iteration instead of reading a bare SyntaxError.
+        got = ", ".join(sorted(params)) or "nenhum parâmetro"
+        raise ValueError(f"informe o parâmetro 'expressao' (texto, ex.: '612.4 + 398.75'); recebi: {got}")
+    try:
+        tree = ast.parse(expression.replace(",", "."), mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(f"expressão inválida: {expression!r}") from exc
+    return {"expressao": expression, "resultado": round(_eval(tree), 6)}
 
 
 def consultar_cotacao(params: dict) -> dict:

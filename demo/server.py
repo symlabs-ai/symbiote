@@ -28,7 +28,13 @@ from pydantic import BaseModel
 from demo import settings as settings_mod
 from demo.events import EventBus
 from demo.personal_api import create_personal_api
-from demo.runtime import DemoRuntime, list_gateway_models, validate_key
+from demo.previews import LinkPreviews
+from demo.runtime import (
+    DemoRuntime,
+    check_connection,
+    list_gateway_models,
+    validate_key,
+)
 
 logger = logging.getLogger("demo")
 
@@ -128,6 +134,7 @@ def _candidate(body: SetupBody) -> settings_mod.Settings:
         symgateway_api_key=api_key if gateway else current.symgateway_api_key,
         symgateway_base_url=base_url if gateway else current.symgateway_base_url,
         symgateway_project=body.project.strip() if gateway else current.symgateway_project,
+        search_objective=current.search_objective,
     )
 
 
@@ -142,6 +149,16 @@ async def setup_models(body: SetupBody) -> dict:
     except Exception as exc:
         raise HTTPException(400, f"Não consegui listar os modelos: {exc}") from exc
     return {"models": models}
+
+
+@core.post("/setup/test")
+async def setup_test(body: SetupBody) -> dict:
+    """Try the form's settings with real calls. Nothing is saved or applied."""
+    candidate = _candidate(body)
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(check_connection, candidate), timeout=90)
+    except TimeoutError as exc:
+        raise HTTPException(504, "O teste passou de 90 s sem resposta do servidor.") from exc
 
 
 @core.post("/setup")
@@ -330,6 +347,32 @@ def approvals_toggle(body: ToggleBody, request: Request, _k: Any = Depends(get_k
     return {"enabled": body.enabled}
 
 
+# ── link previews ──────────────────────────────────────────────────────
+
+
+class PreviewBody(BaseModel):
+    url: str
+
+
+@core.post("/preview")
+async def preview(body: PreviewBody, request: Request) -> dict:
+    """Title, site and thumbnail of an external link shown in the chat."""
+    return {"preview": await request.app.state.previews.resolve(body.url)}
+
+
+@core.get("/preview/image/{key}")
+def preview_image(key: str, request: Request) -> FileResponse:
+    """A thumbnail already resolved by /preview; never fetches anything."""
+    found = request.app.state.previews.image(key)
+    if found is None:
+        raise HTTPException(404, "miniatura não encontrada")
+    path, content_type = found
+    return FileResponse(path, media_type=content_type, headers={
+        "Cache-Control": "private, max-age=86400",
+        "X-Content-Type-Options": "nosniff",
+    })
+
+
 # ── app ────────────────────────────────────────────────────────────────
 
 
@@ -360,6 +403,7 @@ def create_app(*, port: int, data_dir: Path = settings_mod.DATA_DIR) -> FastAPI:
     app.state.runtime = runtime
     app.state.token = token
     app.state.turn_tasks = set()
+    app.state.previews = LinkPreviews(data_dir / "previews")
     runtime.last_close = None
     allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}", "testserver"}
 

@@ -25,6 +25,15 @@ KEY_VARS = {
     "symgateway": "SYMGATEWAY_API_KEY",
 }
 SYMGATEWAY_DEFAULT_URL = "https://symgateway.symlabs.ai"
+# web_search goes through this SymGateway Objective (its "websearch" service).
+# DEMO_SEARCH_OBJECTIVE names another one; "none" falls back to the gateway's
+# Brave proxy (/proxy/brave/web-search).
+SEARCH_OBJECTIVE_DEFAULT = "web_seek"
+# Shown as the server in use when no {PROVIDER}_BASE_URL overrides it.
+PROVIDER_SERVERS = {
+    "anthropic": "API da Anthropic (endpoint padrão)",
+    "openai": "API da OpenAI (endpoint padrão)",
+}
 # (main model, auxiliary model). The auxiliary one runs the background work:
 # LLM reflection, harness evolution, semantic tool selection, dream, skills.
 DEFAULT_MODELS = {
@@ -45,6 +54,7 @@ class Settings:
     symgateway_api_key: str = ""
     symgateway_base_url: str = ""
     symgateway_project: str = ""
+    search_objective: str = SEARCH_OBJECTIVE_DEFAULT  # "" = the Brave proxy
 
     @property
     def complete(self) -> bool:
@@ -60,6 +70,31 @@ class Settings:
     def key_var(self) -> str:
         return KEY_VARS.get(self.provider, "")
 
+    @property
+    def server(self) -> str:
+        """Where the model calls go: the gateway, a ``{PROVIDER}_BASE_URL``
+        from the environment (ForgeLLMAdapter reads it), or the provider's
+        own API."""
+        if self.provider == "symgateway":
+            return self.gateway_url
+        if self.provider not in PROVIDERS:
+            return ""
+        override = os.environ.get(f"{self.provider.upper()}_BASE_URL")
+        return override or PROVIDER_SERVERS[self.provider]
+
+    @property
+    def web_search(self) -> bool:
+        return bool(self.symgateway_api_key and self.symgateway_base_url)
+
+    @property
+    def search_via(self) -> str:
+        """How web_search reaches the web, for the settings dialog."""
+        if not self.web_search:
+            return ""
+        if self.search_objective:
+            return f"objective {self.search_objective} · {self.symgateway_base_url.rstrip('/')}"
+        return f"proxy Brave · {self.symgateway_base_url.rstrip('/')}"
+
     def public(self) -> dict:
         """What the browser may see: never the key itself."""
         return {
@@ -67,7 +102,9 @@ class Settings:
             "model": self.model,
             "aux_model": self.aux_model,
             "api_key": mask(self.api_key),
-            "web_search": bool(self.symgateway_api_key and self.symgateway_base_url),
+            "server": self.server,
+            "web_search": self.web_search,
+            "search_via": self.search_via,
             "gateway_url": self.gateway_url if self.provider == "symgateway" else "",
             "gateway_project": self.symgateway_project,
         }
@@ -107,6 +144,7 @@ def load(path: Path = ENV_PATH) -> Settings:
         provider = next((p for p in PROVIDERS if get(KEY_VARS[p])), "")
     main, aux = DEFAULT_MODELS.get(provider, ("", ""))
     model = get("DEMO_MODEL", main)
+    objective = get("DEMO_SEARCH_OBJECTIVE", SEARCH_OBJECTIVE_DEFAULT).strip()
     try:
         port = int(get("DEMO_PORT", "8010"))
     except ValueError:
@@ -121,6 +159,7 @@ def load(path: Path = ENV_PATH) -> Settings:
         symgateway_api_key=get("SYMGATEWAY_API_KEY"),
         symgateway_base_url=get("SYMGATEWAY_BASE_URL"),
         symgateway_project=get("SYMGATEWAY_PROJECT_SLUG"),
+        search_objective="" if objective.lower() == "none" else objective,
     )
 
 

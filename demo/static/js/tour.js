@@ -66,9 +66,9 @@ const STEPS = [
   },
   {
     title: 'Deny-by-default',
-    why: 'O Sol vê as tools de browser (visibilidade é por tag e ele não tem tags), mas não está autorizado a usá-las.',
-    actions: [{ label: 'Enviar no chat', prompt: 'Use o navegador para abrir https://example.com e me diga o título.' }],
-    look: 'Ao vivo: “bloqueada pela política” — e, em seguida, o modelo delegando ao Pesquisador. Tools → audit log.',
+    why: 'O Sol vê as tools de browser (visibilidade é por tag e ele não tem tags), mas não está autorizado a usá-las. O pedido manda ele tentar antes de delegar.',
+    actions: [{ label: 'Enviar no chat', prompt: 'Tente você mesmo abrir https://example.com com a tool browser_navigate e me diga o título. Se ela for bloqueada, peça ao Pesquisador.' }],
+    look: 'Ao vivo: browser_navigate “bloqueada pela política” e, em seguida, o spawn do Pesquisador. Tools → audit log.',
     tab: 'live',
   },
   {

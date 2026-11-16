@@ -134,10 +134,11 @@ export default {
           }, 'prune (dry run)'), pruneOut)),
       h('div.card', { style: { marginTop: '12px' } },
         h('h3', 'Configuração do demo'),
-        h('p', badge(s.provider, 'purple'), ' ', `principal ${s.model} · auxiliar ${s.aux_model} · chave ${s.api_key}`,
-          s.gateway_url ? ` · ${s.gateway_url}${s.gateway_project ? ` (projeto ${s.gateway_project})` : ''}` : ''),
+        h('p', badge(s.provider, 'purple'), ' ', `${s.server} · principal ${s.model} · auxiliar ${s.aux_model} · chave ${s.api_key}`,
+          s.gateway_project ? ` (projeto ${s.gateway_project})` : ''),
+        h('p.dim.small', 'Servidor, chave e modelos são editados e testados nas configurações (a engrenagem no topo da página).'),
         h('div.row',
-          h('button.btn', { onclick: () => ctx.showSetup(true) }, 'Trocar chave ou modelo'),
+          h('button.btn', { onclick: () => ctx.showSetup(true) }, 'Abrir configurações do LLM'),
           h('button.btn.danger', {
             onclick: async (e) => {
               const ok = await confirmDialog('Zerar o demo?', 'Apaga memórias, sessões, skills, tools descobertas e os dados da API pessoal, e começa do zero. A chave continua salva.');

@@ -16,6 +16,14 @@ from symbiote.core.models import MemoryEntry
 SOL = "Sol"
 RESEARCHER = "Pesquisador"
 
+# The chat renders Markdown: a source cited as a link is clickable and reads
+# better than a raw address on its own line.
+SOURCES_RULE = (
+    "- Ao citar uma página da web, escreva um link Markdown com o título como texto e a "
+    "URL completa, como `[Título da página](https://site.com/caminho)`, seguido do veículo "
+    "e da data quando houver. Nunca escreva a URL sem `https://` nem solta numa linha à parte."
+)
+
 SOL_PERSONA = {
     "role": "Sol, assistente pessoal multipropósito",
     "tone": "caloroso, direto e sem enrolação",
@@ -33,7 +41,11 @@ SOL_PERSONA = {
         "tool `spawn` (target_symbiote='Pesquisador').\n"
         "- Arquivos: `fs_read`, `fs_write` e `fs_list` usam caminhos relativos à pasta de trabalho.\n"
         "- Respeite as preferências e regras que aparecem nas suas memórias.\n"
-        "- Respostas curtas; use listas quando ajudar. Nunca mostre IDs técnicos."
+        "- Quando pedirem para você lembrar de algo, confirme. O que a pessoa ensina vai "
+        "para a sua memória quando a sessão é encerrada e volta nas próximas conversas; "
+        "nunca diga que não consegue lembrar.\n"
+        "- Respostas curtas; use listas quando ajudar. Nunca mostre IDs técnicos.\n"
+        + SOURCES_RULE
     ),
 }
 
@@ -43,7 +55,8 @@ RESEARCHER_PERSONA = {
     "language": "português do Brasil",
     "instructions": (
         "Use `web_extract` para ler uma página a partir da URL e as tools `browser_*` quando "
-        "precisar navegar ou interagir. Sempre cite as URLs usadas. Responda em até 8 linhas."
+        "precisar navegar ou interagir. Responda em até 8 linhas.\n"
+        + SOURCES_RULE
     ),
 }
 
@@ -74,10 +87,12 @@ KNOWLEDGE = [
 # other tour steps ask about, so they rarely enter the recall before step 13.
 # (type, content, tags, importance, days since last used)
 DREAM_SEEDS = [
-    # prune: decay = days unused × (1 − importance) > 30
+    # prune: decay = days unused × (1 − importance) > 30. Their words must
+    # not appear in the tour's prompts: entering a recall counts as use and
+    # saves a memory from the prune (tests/test_tour_seeds.py).
     ("factual", "O Wi-Fi da casa de praia em Ubatuba se chamava PraiaNet.",
      ["praia"], 0.2, 160),
-    ("factual", "A assinatura da revista de jardinagem foi cancelada no ano passado.",
+    ("factual", "A assinatura da revista de jardinagem foi cancelada.",
      ["assinaturas"], 0.25, 120),
     # reconcile: the same preference stated twice (same type, same tags,
     # ≥ 80% of the words in common); the lower-importance copy goes

@@ -1,6 +1,6 @@
 // Page shell: setup screen, chat, live event feed, tabs, approvals, tour.
 
-import { api, h, act, toast, neutralizeHtml, short } from './lib.js';
+import { api, h, act, mount, toast, neutralizeHtml, short, fmtMs } from './lib.js';
 import live from './tabs/live.js';
 import context from './tabs/context.js';
 import memory from './tabs/memory.js';
@@ -50,8 +50,11 @@ const ctx = {
 async function reloadStatus() {
   state.status = await api.get('/api/status');
   const s = state.status;
-  document.getElementById('llm-pill').textContent =
-    s.ready ? `${s.settings.provider} · ${s.settings.model}` : 'sem LLM';
+  const label = s.ready ? `${s.settings.provider} · ${s.settings.model}` : 'sem LLM';
+  document.getElementById('llm-pill').textContent = label;
+  // The pill hides on narrow windows; the gear stays and carries the same text.
+  document.getElementById('btn-settings').title =
+    s.ready ? `Configurações do LLM · ${label} · ${s.settings.server}` : 'Configurações do LLM';
   updateSessionInfo();
   return s;
 }
@@ -62,19 +65,51 @@ function updateSessionInfo() {
     sym ? `${sym.name} · sessão ${sym.session_id.slice(0, 8)}` : '';
 }
 
+// The LLM settings dialog. First run (`cancellable` false): the page cannot
+// start without a key. Later, from the gear in the top bar: shows what is in
+// use, lets every value be changed and tested before it is saved.
 function showSetup(cancellable = false) {
   const s = state.status || {};
   const box = document.getElementById('setup');
   const form = document.getElementById('setup-form');
+  const err = document.getElementById('setup-error');
+  const testOut = document.getElementById('setup-test');
+  const submit = document.getElementById('setup-submit');
+  const testBtn = document.getElementById('setup-test-btn');
+  const submitLabel = cancellable ? 'Salvar e aplicar' : 'Validar e começar';
+  const close = () => { box.hidden = true; document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (cancellable && e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  document.getElementById('setup-title').textContent = cancellable ? 'Configurações do LLM' : 'Symbiote demo';
   document.getElementById('env-path').textContent = s.env_path || 'demo/demo.env';
   document.getElementById('setup-cancel').hidden = !cancellable;
-  document.getElementById('setup-cancel').onclick = () => { box.hidden = true; };
+  document.getElementById('setup-cancel').onclick = close;
+  submit.textContent = submitLabel;
+  err.hidden = true;
+  testOut.hidden = true;
   const provider = form.elements.provider;
   const modelsBox = document.getElementById('setup-models-box');
   const modelsInfo = document.getElementById('setup-models-info');
   const gwModel = form.elements.gw_model;
   const gwAux = form.elements.gw_aux_model;
   const saved = s.settings || {};
+
+  // What is in use right now, read-only; the fields below edit it.
+  const current = document.getElementById('setup-current');
+  current.hidden = !s.ready;
+  if (s.ready) {
+    const rows = [
+      ['Em uso', saved.provider],
+      ['Servidor', saved.server],
+      ['Modelo principal', saved.model],
+      ['Modelo auxiliar', saved.aux_model],
+      ['Chave', saved.api_key],
+      saved.gateway_project ? ['Projeto', saved.gateway_project] : null,
+      saved.search_via ? ['Busca na web', saved.search_via] : null,
+    ].filter(Boolean);
+    current.replaceChildren(...rows.flatMap(([k, v]) => [h('dt', k), h('dd', v || '—')]));
+  }
+
   const hasSavedKey = () => saved.provider === provider.value && !!saved.api_key;
   // Fill both selects; keep the current choice when it is still allowed.
   const fillModels = (models) => {
@@ -86,12 +121,23 @@ function showSetup(cancellable = false) {
     gwModel.value = models.includes(main) ? main : models[0] || '';
     gwAux.value = models.includes(aux) ? aux : '';
   };
+  // The form as the API expects it: one model pair, whichever provider.
+  const formBody = () => {
+    const body = Object.fromEntries(new FormData(form));
+    if (body.provider === 'symgateway') {
+      body.model = body.gw_model || '';
+      body.aux_model = body.gw_aux_model || '';
+    }
+    delete body.gw_model;
+    delete body.gw_aux_model;
+    return body;
+  };
   const loadModels = async () => {
     const btn = document.getElementById('setup-models');
     btn.disabled = true;
     modelsInfo.textContent = 'consultando /v1/models…';
     try {
-      const { models } = await api.post('/api/setup/models', Object.fromEntries(new FormData(form)));
+      const { models } = await api.post('/api/setup/models', formBody());
       fillModels(models);
       modelsInfo.textContent = models.length
         ? `${models.length} modelo(s) liberado(s) para esta chave`
@@ -105,47 +151,79 @@ function showSetup(cancellable = false) {
   };
   const syncProvider = () => {
     const gateway = provider.value === 'symgateway';
+    const same = saved.provider === provider.value;
     const [main, aux] = (s.default_models || {})[provider.value] || ['', ''];
     form.elements.model.placeholder = main;
     form.elements.aux_model.placeholder = aux;
+    // Saved values come back as editable text; another provider starts empty.
+    form.elements.model.value = same && !gateway ? saved.model || '' : '';
+    form.elements.aux_model.value = same && !gateway ? saved.aux_model || '' : '';
+    form.elements.base_url.value = same && gateway ? saved.gateway_url || '' : '';
+    form.elements.project.value = same && gateway ? saved.gateway_project || '' : '';
     form.querySelectorAll('.gw-only').forEach((el) => { el.hidden = !gateway; });
     form.querySelectorAll('.std-only').forEach((el) => { el.hidden = gateway; });
     document.getElementById('setup-models-hint').textContent = gateway ? '(obrigatório)' : '(opcional)';
-    if (gateway) modelsBox.open = true;
+    if (gateway || cancellable) modelsBox.open = true;
     form.elements.api_key.placeholder = hasSavedKey() ? `${saved.api_key} (vazio = manter)` : 'sk-…';
+    testOut.hidden = true;
     if (gateway && hasSavedKey() && gwModel.options.length <= 1 && !gwModel.value) loadModels();
   };
   if (saved.provider) provider.value = saved.provider;
-  if (saved.provider === 'symgateway') form.elements.project.value = saved.gateway_project || '';
+  form.elements.api_key.value = '';
   provider.onchange = syncProvider;
   form.elements.api_key.onchange = () => { if (provider.value === 'symgateway' && form.elements.api_key.value.trim()) loadModels(); };
+  form.elements.base_url.onchange = () => { if (provider.value === 'symgateway' && (hasSavedKey() || form.elements.api_key.value.trim())) loadModels(); };
   document.getElementById('setup-models').onclick = loadModels;
   syncProvider();
   box.hidden = false;
   form.elements.api_key.focus();
+
+  // Real calls with the values on screen; nothing is saved.
+  testBtn.onclick = async () => {
+    err.hidden = true;
+    testBtn.disabled = true;
+    testBtn.textContent = 'Testando…';
+    testOut.className = 'test-result';
+    testOut.replaceChildren(h('span.dim.small', 'chamando o servidor com os valores do formulário…'));
+    testOut.hidden = false;
+    try {
+      const r = await api.post('/api/setup/test', formBody());
+      testOut.classList.add(r.ok ? 'ok' : 'fail');
+      // mount() skips empty children; replaceChildren would print "null".
+      mount(testOut,
+        h('div.small', h('b', r.ok ? 'Funcionou' : 'Falhou'), ` · ${r.provider} · ${r.server}`),
+        r.checks.map((c) => h(`div.check.${c.ok ? 'ok' : 'fail'}`,
+          h('span.mark', c.ok ? '✓' : '✗'),
+          h('span', c.step, c.model ? h('span.dim', ` · ${c.model}`) : null),
+          h('span.ms', fmtMs(c.elapsed_ms)),
+          h('span.detail', c.detail))),
+        r.note ? h('span.dim.small', r.note) : null,
+        h('span.faint.small', 'Nada foi salvo. '
+          + (cancellable ? '"Salvar e aplicar" grava estes valores e reinicia o kernel do demo.' : '')));
+    } catch (ex) {
+      testOut.classList.add('fail');
+      testOut.replaceChildren(h('span.error', ex.message));
+    } finally {
+      testBtn.disabled = false;
+      testBtn.textContent = 'Testar';
+      testOut.scrollIntoView({ block: 'nearest' });  // clear of the sticky buttons
+    }
+  };
+
   form.onsubmit = async (e) => {
     e.preventDefault();
-    const err = document.getElementById('setup-error');
     err.hidden = true;
-    const btn = document.getElementById('setup-submit');
-    btn.disabled = true;
-    btn.textContent = 'Validando a chave…';
+    submit.disabled = true;
+    submit.textContent = 'Validando a chave…';
     try {
-      const body = Object.fromEntries(new FormData(form));
-      if (body.provider === 'symgateway') {
-        body.model = body.gw_model || '';
-        body.aux_model = body.gw_aux_model || '';
-      }
-      delete body.gw_model;
-      delete body.gw_aux_model;
-      await api.post('/api/setup', body);
+      await api.post('/api/setup', formBody());
       location.reload();
     } catch (ex) {
       err.textContent = ex.message;
       err.hidden = false;
     } finally {
-      btn.disabled = false;
-      btn.textContent = 'Validar e começar';
+      submit.disabled = false;
+      submit.textContent = submitLabel;
     }
   };
 }
@@ -193,6 +271,10 @@ function buildChat() {
       toast('Nova sessão iniciada (a anterior continua aberta, sem aprendizado).');
     },
     textFilter: neutralizeHtml,
+    // Thumbnail cards for external links; the demo server fetches the page.
+    async linkPreview(url) {
+      try { return (await api.post('/api/preview', { url })).preview; } catch { return null; }
+    },
     loadingContent: () => '<span class="symbiote-spinner"></span> pensando… (acompanhe em <b>Ao vivo</b>)',
   };
   col.replaceChildren(el);
@@ -381,6 +463,8 @@ async function boot() {
     showSetup(false);
     return;
   }
+  document.getElementById('btn-settings').onclick = () => showSetup(true);
+  document.getElementById('llm-pill').onclick = () => showSetup(true);
   for (const p of state.status.pending_approvals || []) {
     queueApproval(p);
   }

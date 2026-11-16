@@ -13,6 +13,7 @@ import contextvars
 import logging
 import shutil
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ from symbiote.adapters.llm.forge import ForgeLLMAdapter
 from symbiote.adapters.llm.symgateway import SymGatewayLLMAdapter
 from symbiote.config.models import KernelConfig
 from symbiote.core.kernel import SymbioteKernel
+from symbiote.environment.descriptors import LLMResponse
 
 logger = logging.getLogger("demo")
 
@@ -90,6 +92,9 @@ def list_gateway_models(settings: settings_mod.Settings) -> list[str]:
         adapter.close()
 
 
+_PING = [{"role": "user", "content": "Responda apenas: ok"}]
+
+
 def validate_key(settings: settings_mod.Settings) -> None:
     """One tiny real call; raises with the provider's message if it fails."""
     if settings.provider == "symgateway":
@@ -102,16 +107,78 @@ def validate_key(settings: settings_mod.Settings) -> None:
                         f"o modelo {model!r} não está liberado para esta chave. "
                         f"Disponíveis: {', '.join(models) or 'nenhum'}"
                     )
-            adapter.complete(
-                [{"role": "user", "content": "Responda apenas: ok"}], config={"max_tokens": 5}
-            )
+            adapter.complete(_PING, config={"max_tokens": 5})
         finally:
             adapter.close()
         return
     adapter = build_adapter(settings, settings.model)
-    adapter.complete(
-        [{"role": "user", "content": "Responda apenas: ok"}], config={"max_tokens": 5}
-    )
+    adapter.complete(_PING, config={"max_tokens": 5})
+
+
+def _ping(adapter: Any) -> str:
+    result = adapter.complete(_PING, config={"max_tokens": 5})
+    text = (result.content or "") if isinstance(result, LLMResponse) else str(result or "")
+    return f"respondeu {text.strip()[:60]!r}"
+
+
+def check_connection(settings: settings_mod.Settings) -> dict:
+    """Try ``settings`` with real calls, one check per step; nothing is saved.
+
+    Unlike ``validate_key`` it does not raise: each step reports whether it
+    worked, how long it took and what came back, so the page can show where
+    a configuration fails (the key, the server, one of the models).
+    """
+    checks: list[dict] = []
+
+    def run(step: str, fn: Any, *, model: str = "") -> bool:
+        started = time.perf_counter()
+        try:
+            detail, ok = fn(), True
+        except Exception as exc:
+            detail, ok = f"{type(exc).__name__}: {exc}", False
+        checks.append({
+            "step": step, "model": model, "ok": ok, "detail": detail,
+            "elapsed_ms": int((time.perf_counter() - started) * 1000),
+        })
+        return ok
+
+    if settings.model and settings.aux_model in ("", settings.model):
+        models = [("modelo principal e auxiliar", settings.model)]
+    else:
+        models = [
+            (step, model)
+            for step, model in (("modelo principal", settings.model), ("modelo auxiliar", settings.aux_model))
+            if model
+        ]
+    if settings.provider == "symgateway":
+        adapter = gateway_adapter(settings, settings.model, title="Symbiote demo · teste")
+        allowed: list[str] = []
+
+        def listing() -> str:
+            allowed.extend(adapter.list_models())
+            return f"{len(allowed)} modelo(s) liberado(s) para esta chave"
+
+        def call(model: str) -> str:
+            if model not in allowed:
+                raise ValueError("não está na lista de modelos liberados para esta chave")
+            return _ping(adapter.with_model(model))
+
+        try:
+            if run("GET /v1/models", listing):
+                for step, model in models:
+                    run(step, lambda model=model: call(model), model=model)
+        finally:
+            adapter.close()
+    else:
+        for step, model in models:
+            run(step, lambda model=model: _ping(build_adapter(settings, model)), model=model)
+    return {
+        "ok": all(c["ok"] for c in checks) and bool(models),
+        "provider": settings.provider,
+        "server": settings.server,
+        "checks": checks,
+        "note": "" if models else "Escolha o modelo principal para testar uma chamada.",
+    }
 
 
 class DemoRuntime:
@@ -257,14 +324,18 @@ class DemoRuntime:
         from symbiote.browser import register
 
         s = self.settings
-        has_gateway = bool(s.symgateway_api_key and s.symgateway_base_url)
+        has_gateway = s.web_search
+        # web_search asks the gateway for a purpose (the Objective), not for a
+        # provider; without an Objective it uses the Brave proxy directly.
+        backend = "symgateway_objective" if s.search_objective else "brave"
         try:
             register(
                 kernel,
-                search_backend="brave" if has_gateway else None,
+                search_backend=backend if has_gateway else None,
                 search_options={
                     "symgateway_base_url": s.symgateway_base_url or None,
                     "symgateway_api_key": s.symgateway_api_key or None,
+                    "symgateway_objective": s.search_objective or None,
                 } if has_gateway else None,
                 extract_backend="forge_scraper",
                 browser_backend="chromium",
