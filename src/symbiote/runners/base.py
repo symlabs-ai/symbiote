@@ -67,6 +67,8 @@ class LongRunPlan(BaseModel):
     blocks: list[dict] = []
     total_blocks: int = 0
     raw_spec: str = ""
+    # Planned beyond ``max_blocks``: cut from ``blocks`` and never run.
+    dropped_blocks: list[dict] = []
 
 
 class RunResult(BaseModel):

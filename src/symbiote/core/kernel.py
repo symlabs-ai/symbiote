@@ -1612,7 +1612,13 @@ class SymbioteKernel:
         symbiote_id: str,
         extra_context: dict | None,
     ) -> dict | None:
-        """S-01: On first message of a session, inject the most recent handoff."""
+        """S-01: On first message of a session, inject the most recent handoff.
+
+        Only for a symbiote in long_run mode: the planner is what reads it.
+        A chat turn would get the whole JSON record in its system prompt.
+        """
+        if self._environment.get_tool_mode(symbiote_id) != "long_run":
+            return extra_context
         msg_row = self._storage.fetch_one(
             "SELECT COUNT(*) as c FROM messages WHERE session_id = ?", (session_id,)
         )

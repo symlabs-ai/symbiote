@@ -60,6 +60,8 @@ if TYPE_CHECKING:
 _HANDLED_INTENTS = frozenset({"chat", "ask", "question", "talk"})
 # How much of a previous block's output the "compaction" strategy carries.
 _CARRIED_OUTPUT_CHARS = 2000
+# How much of each block's output the final answer is written from.
+_ANSWER_BLOCK_CHARS = 4000
 
 
 def _response_text(response: object) -> str:
@@ -90,6 +92,20 @@ Example output:
   {"name": "API endpoints", "description": "Implement REST API", "success_criteria": "All CRUD endpoints working with tests"},
   {"name": "Frontend", "description": "Build user interface", "success_criteria": "All pages render, forms submit correctly"}
 ]"""
+
+# The reply the user reads: written from the blocks' own reports, so it says
+# what was done instead of returning a status board.
+_ANSWER_PROMPT = """\
+You ran a multi-step project for the user, one block of work at a time.
+Below are the user's request and each block's own report of what it did.
+
+Write the reply to the user:
+- In the language of the user's request.
+- Say what was done and the concrete results (files, items created, findings),
+  taken only from the block reports. Do not invent anything they do not say.
+- If a block failed or was not run, say so plainly and what is still pending.
+- Do not mention blocks, plans, evaluators or scores: talk about the work.
+- Be concise; use a short list when it helps."""
 
 _DEFAULT_EVALUATOR_PROMPT = """\
 You are a strict quality evaluator. Review the work completed in this block
@@ -278,6 +294,22 @@ class LongRunRunner:
                 plan=plan,
             )
 
+        if plan.total_blocks > context.max_blocks:
+            # The planner was told the limit; whatever it planned beyond it
+            # is cut here, before anyone sees the plan, so every count (the
+            # plan, the progress, the trace, the handoff) is the same.
+            logger.warning(
+                "[long-run] planner returned %d blocks, limit is %d; dropping %s",
+                plan.total_blocks, context.max_blocks,
+                [b.get("name") for b in plan.blocks[context.max_blocks:]],
+            )
+            plan = LongRunPlan(
+                blocks=plan.blocks[: context.max_blocks],
+                total_blocks=context.max_blocks,
+                raw_spec=plan.raw_spec,
+                dropped_blocks=plan.blocks[context.max_blocks:],
+            )
+
         logger.info(
             "[long-run] plan: %d blocks from prompt '%s'",
             plan.total_blocks, context.user_input[:80],
@@ -294,7 +326,7 @@ class LongRunRunner:
 
         # ── Phase 2: Execute blocks ─────────────────────────────────────
         block_results: list[BlockResult] = []
-        max_blocks = min(context.max_blocks, plan.total_blocks)
+        max_blocks = plan.total_blocks
 
         # B3: Pre-flight — verify tools with health_check before spending tokens
         preflight_error = self._preflight_tools(context)
@@ -402,14 +434,14 @@ class LongRunRunner:
             else "block_failure"
         )
 
-        # Build final output summary
+        # Status of the blocks (handoff, errors) and the reply the user reads.
         output = self._build_output_summary(plan, block_results)
+        answer = self._compose_answer(context, plan, block_results) if completed else output
 
-        # Save to working memory
+        # Save to working memory: the conversation holds what the user read.
         if self._working_memory is not None:
-            summary = f"[Long-run: {completed}/{max_blocks} blocks completed]\n{output}"
             self._working_memory.update_message(
-                Message(session_id=context.session_id, role="assistant", content=summary)
+                Message(session_id=context.session_id, role="assistant", content=answer)
             )
             if self._consolidator is not None:
                 self._consolidator.consolidate_if_needed(
@@ -444,13 +476,16 @@ class LongRunRunner:
                 for idx, block in enumerate(plan.blocks)
                 if idx not in {b.block_index for b in block_results if b.success}
             ],
+            # Planned beyond max_blocks and never run. Not pending: a new
+            # session must not be told to resume them.
+            "dropped_blocks": plan.dropped_blocks,
             "output_summary": output,
         }
 
         return RunResult(
             success=completed > 0,
             error=None if completed > 0 else output,
-            output=output,
+            output=answer,
             runner_type=self.runner_type,
             loop_trace=trace,
             plan=plan,
@@ -480,6 +515,13 @@ class LongRunRunner:
                 f"- Pending blocks: {pending}\n"
                 "Plan ONLY the pending blocks. Do not re-plan completed work.\n"
             )
+
+        # A custom planner prompt gets the limit too: blocks beyond it are
+        # never run, so a plan that counts on them would end unfinished.
+        planner_prompt += (
+            f"\n\nUse at most {context.max_blocks} blocks. Merge steps if needed; "
+            "anything planned beyond that limit is not run."
+        )
 
         messages = [
             {"role": "system", "content": planner_prompt},
@@ -800,6 +842,55 @@ class LongRunRunner:
         return {"passed": True, "overall_score": 0.5, "feedback": raw[:500]}
 
     # ── Output ───────────────────────────────────────────────────────────
+
+    def _compose_answer(
+        self,
+        context: AssembledContext,
+        plan: LongRunPlan,
+        block_results: list[BlockResult],
+    ) -> str:
+        """The reply to the user, written by the model from the block reports.
+
+        Falls back to the last successful block's report when that call
+        fails: the user still reads what was done, never a status board.
+        """
+        done_idx = {b.block_index for b in block_results}
+        lines = [f"## User request\n{context.user_input}", "\n## Block reports"]
+        for b in block_results:
+            status = "done" if b.success else "FAILED"
+            lines.append(f"\n### {b.block_name} ({status})")
+            if not b.success and b.evaluator_feedback:
+                lines.append(f"Why it failed: {b.evaluator_feedback}")
+            lines.append((b.output or "(no report)")[:_ANSWER_BLOCK_CHARS])
+        not_run = [
+            blk.get("name", f"Block {i + 1}")
+            for i, blk in enumerate(plan.blocks) if i not in done_idx
+        ] + [blk.get("name", "?") for blk in plan.dropped_blocks]
+        if not_run:
+            lines.append("\n## Not run\n" + "\n".join(f"- {name}" for name in not_run))
+
+        system = _ANSWER_PROMPT
+        persona = context.persona or {}
+        voice = [f"{k}: {persona[k]}" for k in ("role", "tone", "language") if persona.get(k)]
+        if voice:
+            system += "\n\nSpeak as:\n" + "\n".join(voice)
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": "\n".join(lines)},
+        ]
+        check_turn()
+        try:
+            text = _response_text(
+                self._llm.complete(messages, config=self._config_for(context))
+            ).strip()
+            if text:
+                return text
+        except TurnStop:
+            raise
+        except Exception as exc:  # noqa: BLE001 — the work is done; the reply degrades
+            logger.warning("[long-run] final answer failed: %s", exc)
+        last = next((b.output for b in reversed(block_results) if b.success and b.output), "")
+        return last or self._build_output_summary(plan, block_results)
 
     @staticmethod
     def _build_output_summary(

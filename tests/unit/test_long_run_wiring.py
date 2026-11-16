@@ -37,6 +37,8 @@ def test_kernel_routes_long_run_mode(tmp_path: Path) -> None:
             return PLAN
         if system.startswith("EVAL"):
             return _verdict(True)
+        if system.startswith("You ran a multi-step project"):
+            return "ANSWER: tudo feito"
         return "block done"
 
     llm = ScriptedLLM(fn)
@@ -53,7 +55,11 @@ def test_kernel_routes_long_run_mode(tmp_path: Path) -> None:
     out = kernel.message(session.id, "build the whole system")
 
     assert any(_system(c["messages"]).startswith("PLANNER-PROMPT") for c in llm.calls)
-    assert "2/2 blocks" in out
+    # The user reads the reply written from the block reports, which is
+    # also what the conversation keeps; the counts stay in the handoff.
+    assert out == "ANSWER: tudo feito"
+    assert kernel._handoffs[session.id]["blocks_completed"] == 2
+    assert kernel.inspector.list_messages(session.id)[-1]["content"] == out
     assert "long_run" in kernel._runner_registry.list_runners()
     assert session.id in kernel._handoffs
     kernel.shutdown()
@@ -61,6 +67,8 @@ def test_kernel_routes_long_run_mode(tmp_path: Path) -> None:
 
 def test_long_run_through_message_async(tmp_path: Path) -> None:
     def fn(i: int, messages: list[dict]) -> str:
+        if _system(messages).startswith("You ran a multi-step project"):
+            return "ANSWER"
         return PLAN if _system(messages).startswith("You are a project planner") else "done"
 
     kernel = make_kernel(tmp_path, ScriptedLLM(fn))
@@ -70,7 +78,7 @@ def test_long_run_through_message_async(tmp_path: Path) -> None:
 
     out = asyncio.run(kernel.message_async(session.id, "build it"))
 
-    assert "2/2 blocks" in out
+    assert out == "ANSWER"
     kernel.shutdown()
 
 
@@ -179,3 +187,71 @@ def test_compaction_strategy_carries_previous_block_output() -> None:
     LongRunRunner(llm).run(_ctx(context_strategy="reset"))
     block_b = next(c for c in llm.calls if "## Current Block: B" in str(c["messages"][-1]["content"]))
     assert "OUTPUT-OF-A" not in str(block_b["messages"][-1]["content"])
+
+
+# ── The reply the user reads ────────────────────────────────────────────────
+
+
+PLAN3 = json.dumps([{"name": n, "description": "d", "success_criteria": "c"} for n in "ABC"])
+
+
+def test_plan_beyond_the_limit_is_cut_before_anyone_sees_it() -> None:
+    def fn(i: int, messages: list[dict]) -> str:
+        system = _system(messages)
+        if "project planner" in system:
+            return PLAN3  # ignores "at most 2 blocks"
+        if system.startswith("You ran a multi-step project"):
+            return "resposta"
+        return f"relatório do bloco {i}"
+
+    llm = ScriptedLLM(fn)
+    published: list = []
+    progress: list = []
+    runner = LongRunRunner(
+        llm, on_plan=published.append, on_progress=lambda e, i, n: progress.append((e, i, n))
+    )
+    result = runner.run(_ctx(max_blocks=2, persona={"role": "Sol", "language": "português do Brasil"}))
+
+    assert [b["name"] for b in published[0].blocks] == ["A", "B"]
+    assert {n for _e, _i, n in progress} == {2}
+    assert result.loop_trace.stop_reason == "end_turn"
+    assert result.output == "resposta"
+    assert "2/2 blocks" in result.handoff_data["output_summary"]
+    # The answer is written from the reports, in the persona's voice, and
+    # knows what was never run.
+    answer_call = llm.calls[-1]["messages"]
+    assert "Sol" in answer_call[0]["content"]
+    assert "relatório do bloco" in answer_call[1]["content"]
+    assert "## Not run\n- C" in answer_call[1]["content"]
+
+
+def test_a_failed_answer_call_falls_back_to_the_last_report() -> None:
+    def fn(i: int, messages: list[dict]) -> str:
+        system = _system(messages)
+        if "project planner" in system:
+            return PLAN
+        if system.startswith("You ran a multi-step project"):
+            raise ConnectionError("gateway down")
+        return f"relatório {i}"
+
+    result = LongRunRunner(ScriptedLLM(fn)).run(_ctx())
+
+    assert result.success
+    assert result.output.startswith("relatório")
+    assert "blocks" not in result.output
+
+
+def test_no_answer_call_when_no_block_succeeded() -> None:
+    def fn(i: int, messages: list[dict]) -> str:
+        system = _system(messages)
+        if "project planner" in system:
+            return PLAN
+        if system.startswith("EVAL-PROMPT"):
+            return _verdict(False)
+        return "claims done"
+
+    llm = ScriptedLLM(fn)
+    result = LongRunRunner(llm).run(_ctx(evaluator_prompt="EVAL-PROMPT"))
+
+    assert result.success is False
+    assert not any(_system(c["messages"]).startswith("You ran") for c in llm.calls)

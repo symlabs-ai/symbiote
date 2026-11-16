@@ -181,7 +181,19 @@ class TestPlanner:
         runner._run_planner(ctx)
         # Verify the custom prompt was passed as system message
         call_args = llm.complete.call_args[0][0]
-        assert call_args[0]["content"] == "Custom planner instructions"
+        assert call_args[0]["content"].startswith("Custom planner instructions")
+
+    def test_planner_is_told_the_block_limit(self):
+        llm = MagicMock()
+        llm.complete.return_value = '[{"name": "X"}]'
+        runner = LongRunRunner(llm=llm)
+        for prompt in (None, "Custom planner instructions"):
+            ctx = AssembledContext(
+                symbiote_id="s1", session_id="sess", user_input="test",
+                tool_mode="long_run", max_blocks=3, planner_prompt=prompt,
+            )
+            runner._run_planner(ctx)
+            assert "at most 3 blocks" in llm.complete.call_args[0][0][0]["content"]
 
 
 # ── Generator (block execution) ──────────────────────────────────────────────

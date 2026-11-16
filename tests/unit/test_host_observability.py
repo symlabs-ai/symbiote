@@ -138,7 +138,8 @@ def test_failing_on_plan_does_not_break_the_run(tmp_path: Path) -> None:
         raise RuntimeError("host bug")
 
     kernel.set_progress_callbacks(on_plan=boom)
-    assert "1/1 blocks" in kernel.message(session.id, "go")
+    assert kernel.message(session.id, "go") == "ok"
+    assert kernel._handoffs[session.id]["blocks_completed"] == 1
     kernel.shutdown()
 
 

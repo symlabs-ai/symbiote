@@ -110,8 +110,9 @@ class TestHandoffDataInRunResult:
         assert hd["blocks_completed"] == 2
         assert hd["pending_blocks"] == []
 
-    def test_handoff_data_partial_completion(self):
-        """When planner returns 3 blocks but max_blocks=1, pending_blocks has remainder."""
+    def test_blocks_beyond_max_blocks_are_dropped_not_pending(self):
+        """A planner that ignores max_blocks=1: the extra blocks are cut from
+        the plan and recorded as dropped, never as work to resume."""
         plan = json.dumps([
             {"name": "A", "description": "A", "success_criteria": "done"},
             {"name": "B", "description": "B", "success_criteria": "done"},
@@ -126,7 +127,10 @@ class TestHandoffDataInRunResult:
         hd = result.handoff_data
         assert hd["blocks_completed"] == 1
         assert hd["blocks_total"] == 1  # max_blocks caps it
-        assert len(hd["plan_blocks"]) == 3  # full plan is preserved
+        assert [b["name"] for b in hd["plan_blocks"]] == ["A"]
+        assert [b["name"] for b in hd["dropped_blocks"]] == ["B", "C"]
+        assert hd["pending_blocks"] == []  # nothing for a new session to resume
+        assert result.plan.total_blocks == 1
 
     def test_no_blocks_still_has_handoff(self):
         """Planner failure produces handoff_data with 0 blocks."""
@@ -225,8 +229,9 @@ class TestHandoffInjectedOnResume:
     """kernel._inject_handoff_if_resuming injects previous handoff on first message."""
 
     def _store_handoff(self, kernel, symbiote_id: str, session_id: str) -> dict:
-        """Helper: store a handoff MemoryEntry directly."""
+        """Helper: store a handoff MemoryEntry directly (symbiote in long_run)."""
         from symbiote.core.scoring import _utcnow, _uuid
+        kernel.environment.configure(symbiote_id=symbiote_id, tool_mode="long_run")
         payload = {
             "user_input": "Previous project",
             "blocks_completed": 2,
@@ -284,6 +289,23 @@ class TestHandoffInjectedOnResume:
         new_sess = kernel.start_session(symbiote_id=symbiote_id)
         assert kernel._inject_handoff_if_resuming(new_sess.id, symbiote_id, None) is None
 
+    def test_no_inject_outside_long_run_mode(self, kernel, symbiote_id, session_id):
+        # Only the planner reads a handoff; a chat turn would get the JSON
+        # record in its system prompt.
+        self._store_handoff(kernel, symbiote_id, session_id)
+        kernel.environment.configure(symbiote_id=symbiote_id, tool_mode="brief")
+        new_sess = kernel.start_session(symbiote_id=symbiote_id)
+        assert kernel._inject_handoff_if_resuming(new_sess.id, symbiote_id, None) is None
+
+    def test_handoff_never_enters_the_memory_recall(self, kernel, symbiote_id, session_id):
+        self._store_handoff(kernel, symbiote_id, session_id)
+        # Shares terms with the stored record ("Previous project").
+        recalled = kernel._memory.get_relevant(
+            "previous project blocks", symbiote_id=symbiote_id
+        )
+        assert all(m.category != "handoff" for m in recalled)
+        assert kernel._memory.get_by_category(symbiote_id, "handoff", limit=1)
+
     def test_no_inject_on_non_first_message(self, kernel, symbiote_id, session_id):
         self._store_handoff(kernel, symbiote_id, session_id)
 
@@ -315,6 +337,7 @@ class TestHandoffInjectedOnResume:
 
     def test_inject_uses_most_recent_handoff(self, kernel, symbiote_id, session_id):
         from symbiote.core.scoring import _utcnow, _uuid
+        kernel.environment.configure(symbiote_id=symbiote_id, tool_mode="long_run")
 
         def _store(content: dict, ts: str) -> None:
             entry = MemoryEntry(

@@ -149,6 +149,9 @@ class MemoryStore:
 
         rows = self._storage.fetch_all(
             "SELECT * FROM memory_entries WHERE is_active = 1 AND symbiote_id = ? "
+            # A long-run handoff is a JSON record for the planner (read with
+            # get_by_category), not something to show the model as a memory.
+            "AND COALESCE(category, '') <> 'handoff' "
             # COALESCE: never-used memories (NULL) sort last on every database.
             "ORDER BY importance DESC, COALESCE(last_used_at, '') DESC, rowid LIMIT ?",
             (symbiote_id, _RECALL_CANDIDATES),

@@ -88,6 +88,8 @@ def _long_run_block_prompts(tmp_path: Path, **config) -> list[str]:
             return PLAN
         if system.startswith("EVAL"):
             return VERDICT
+        if system.startswith("You ran a multi-step project"):
+            return "answer"  # the reply written after the blocks
         text = "\n".join(str(m.get("content")) for m in messages)
         block_calls.append(text)
         return "block done" if "[Tool result: big]" in text else tool_call_block("big")

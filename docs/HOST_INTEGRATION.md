@@ -1083,6 +1083,21 @@ kernel.environment.configure(
 # 0.5) whatever the evaluator scored, and the retry is told to fix the report,
 # not to repeat or undo calls. A host evaluator_prompt keeps this: the request
 # goes in the evaluation message, not in the system prompt.
+#
+# The planner (default or host prompt) is told max_blocks; blocks it plans
+# beyond that are cut before on_plan sees the plan and recorded in the
+# handoff as "dropped_blocks", never as pending work.
+#
+# The reply is written by one more model call from the blocks' own reports,
+# in the language of the request and the persona's voice: what was done,
+# what failed or was not run. The block status ("Project completed: 2/2
+# blocks ...") stays in handoff_data["output_summary"]. If that call fails,
+# the reply is the last successful block's report. A project with no
+# successful block makes no such call and the turn fails as before.
+#
+# The handoff (memory category "handoff") is injected on the first message
+# of a new session only while the symbiote is in long_run mode and work is
+# pending, and it never enters the memory recall of a turn.
 
 # continuous: Always-on agent (placeholder, not yet implemented)
 kernel.environment.configure(symbiote_id=sym.id, tool_mode="continuous")
