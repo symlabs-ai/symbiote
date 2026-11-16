@@ -201,6 +201,9 @@ class ChatRunner:
         context_budget: int = _DEFAULT_CONTEXT_BUDGET,
         tool_result_max_chars: int = _MICROCOMPACT_MAX_CHARS,
         on_before_tool_call: Callable[[str, dict, str], bool] | None = None,
+        # Lowest risk that goes to ``on_before_tool_call`` ("low", "medium"
+        # or "high"); tools with ``requires_approval`` are always asked.
+        approval_risk_threshold: str = "high",
         on_after_tool_result: Callable[[list[ToolCall], list[ToolCallResult]], str | None] | None = None,
         on_progress: Callable[[str, int, int], None] | None = None,
         on_stream: Callable[[str, int], None] | None = None,
@@ -233,6 +236,8 @@ class ChatRunner:
         self._context_budget = context_budget
         self._tool_result_max_chars = max(1, int(tool_result_max_chars))
         self._on_before_tool_call = on_before_tool_call
+        self._approval_risk_threshold = "high"
+        self.set_approval_callback(on_before_tool_call, risk_threshold=approval_risk_threshold)
         self._on_after_tool_result = on_after_tool_result
         self._on_progress = on_progress
         self._on_stream = on_stream
@@ -255,11 +260,13 @@ class ChatRunner:
         return self._agent_protocol.protocol_id
 
     def set_approval_callback(
-        self, callback: Callable[[str, dict, str], bool] | None
+        self, callback: Callable[[str, dict, str], bool] | None, *, risk_threshold: str = "high"
     ) -> None:
-        """Gate for high-risk tools: ``callback(tool_id, params, risk_level)``
-        returns True to allow. ``None`` removes the gate."""
+        """Gate tools at or above ``risk_threshold``; required tools always ask."""
+        if risk_threshold not in ("low", "medium", "high"):
+            raise ValueError(f"Unknown approval risk threshold: {risk_threshold}")
         self._on_before_tool_call = callback
+        self._approval_risk_threshold = risk_threshold
 
     def set_progress_callbacks(
         self,
@@ -1066,11 +1073,13 @@ class ChatRunner:
         calls: list[ToolCall],
         context: AssembledContext | None = None,
     ) -> tuple[list[ToolCall], dict[int, ToolCallResult]]:
-        """Check approval for tool calls based on risk_level.
+        """Check approval for tool calls at the configured risk threshold.
 
         Returns a tuple of (approved_calls, denial_results_by_index).
-        High-risk tools require approval via the on_before_tool_call callback.
-        If the callback is None, all tools are auto-approved (backward compat).
+        Selected risks require approval via the on_before_tool_call callback.
+        If the callback is None, all tools are auto-approved (backward compat),
+        except those whose descriptor sets ``requires_approval``: they are
+        refused, and with a callback they are always asked.
 
         With ``context`` (every call made by the loops), a high-risk call is
         first checked against policy and the host's tool guard
@@ -1095,11 +1104,32 @@ class ChatRunner:
                     ),
                 )
                 continue
-            if self._on_before_tool_call is None or self._tool_gateway is None:
+            if self._tool_gateway is None:
                 approved.append(call)
                 continue
+            requires = getattr(self._tool_gateway, "requires_approval", None)
+            # ``is True``: a gateway without the method (or a test double that
+            # answers anything) keeps the old behaviour.
+            needs_person = callable(requires) and requires(call.tool_id) is True
+            if self._on_before_tool_call is None:
+                if needs_person:
+                    # Nobody can say yes: refuse rather than run unchecked.
+                    denied[idx] = ToolCallResult(
+                        call_id=call.call_id,
+                        tool_id=call.tool_id,
+                        success=False,
+                        error=(
+                            "This tool runs only with a person's approval, and no "
+                            "approval callback is installed: it was not executed."
+                        ),
+                        risk_level=self._tool_gateway.get_risk_level(call.tool_id),
+                    )
+                else:
+                    approved.append(call)
+                continue
             risk = self._tool_gateway.get_risk_level(call.tool_id)
-            if risk != "high":
+            risk_order = {"low": 0, "medium": 1, "high": 2}
+            if risk_order.get(risk, 0) < risk_order[self._approval_risk_threshold] and not needs_person:
                 approved.append(call)
                 continue
             authorize = getattr(self._tool_gateway, "authorize", None)

@@ -16,6 +16,12 @@ clients that only want search pay no cost:
 See docs/integrations/symbiote-browser-quickstart.md for usage.
 """
 
-from symbiote.browser.register import register
+from symbiote.browser.register import (
+    default_chrome_profile,
+    find_chrome,
+    register,
+    register_browser,
+    register_user_browser,
+)
 
-__all__ = ["register"]
+__all__ = ["default_chrome_profile", "find_chrome", "register", "register_browser", "register_user_browser"]

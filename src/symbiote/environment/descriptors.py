@@ -24,6 +24,10 @@ class ToolDescriptor(BaseModel):
     # and removed from everything else the kernel stores. Never sent to the
     # model: only ``parameters`` describes the tool to it.
     secret_params: list[str] = Field(default_factory=list)
+    # Runs only with a person's yes: the approval callback is asked whatever
+    # the risk level, and with no callback installed the call is refused
+    # instead of running unchecked (as a plain high-risk tool would).
+    requires_approval: bool = False
 
     def to_openai_schema(self) -> dict:
         """Convert to OpenAI function calling format."""

@@ -859,6 +859,17 @@ Tools can declare a `risk_level` (`"low"`, `"medium"`, `"high"`). The host
 provides an approval callback. The gate fires **only for `risk_level == "high"`**
 tools — low/medium always execute and the callback is not consulted for them.
 
+A tool whose descriptor sets `requires_approval=True` runs only with a
+person's yes: the callback is asked whatever its risk level, and with **no**
+callback installed the call is refused (the model gets an error saying so)
+instead of running unchecked. The browser tools attached to the person's own
+Chrome (`symbiote.browser.register_user_browser`) set it on clicking and
+typing. A host that turns its approvals "off" for everything else keeps the
+callback installed and returns `True` for tools where
+`kernel.tool_gateway.requires_approval(tool_id)` is false. The rule applies to
+calls the model makes in the chat and long-run loops; a host calling
+`tool_gateway.execute()` itself decides on its own.
+
 **Embedded hosts (the kernel owns the runner) — use `set_approval_callback`:**
 
 ```python
@@ -1367,6 +1378,12 @@ When they fire:
 
 A hook that raises is logged and skipped; the turn continues. On the sync
 paths hooks run on the `ToolGateway` event loop.
+
+`kernel.on_shutdown(callback)` registers a function that `kernel.shutdown()`
+calls before it stops the tool loop: for what an extension opened and must
+release. `symbiote.browser.register` uses it to close its tabs and the
+Chromium it launched. Callbacks run in registration order; one that raises is
+logged and the others still run.
 
 ---
 

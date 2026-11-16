@@ -115,6 +115,59 @@ Vantagens do roteamento via SymGateway:
 
 `task_id` mapeia 1:1 com sessão do Symbiote por padrão (usa `external_key`).
 
+#### O Chrome da pessoa, com os logins dela
+
+Para um kernel que roda na máquina da pessoa (um app de desktop, um demo
+local), uma chamada dá ao agente o Chrome dela:
+
+```python
+from symbiote.browser import register_user_browser
+
+ids = register_user_browser(
+    kernel,
+    session="open",                       # o Chrome que ela já tem aberto
+    allowlist=["calendar.google.com", "accounts.google.com"],
+)
+kernel.environment.add_tools(sym.id, ids)  # user_browser_navigate, _click, ...
+kernel.set_approval_callback(ask_the_person)
+```
+
+- **`session="open"`** conecta ao Chrome que a pessoa já usa, no perfil do dia
+  a dia, com as abas e logins dela. Ela permite uma vez nesse Chrome (versão
+  144 ou mais nova): `chrome://inspect/#remote-debugging`, ligar a depuração
+  remota. O Chrome passa a publicar o endereço em `DevToolsActivePort`, na
+  pasta do perfil, e pede que ela permita cada conexão nova; as tools esperam
+  até 2 minutos por essa resposta. Enquanto ela não permitir, as tools falham
+  dizendo como permitir, para o agente orientar.
+- **`session="own"`** usa um Chrome com perfil próprio
+  (`~/.config/symbiote/user-browser`) e porta de depuração em `127.0.0.1`. Na
+  primeira chamada que precisa dele, o kernel abre esse Chrome, visível na
+  tela; a pessoa faz login nele uma vez e o perfil guarda.
+- **Aprovação obrigatória.** `_click` e `_fill` têm risco `high` e
+  `requires_approval`: com callback, cada chamada é perguntada; sem callback,
+  é recusada. A descrição das tools avisa o modelo de que o navegador é da
+  pessoa e que, diante de uma tela de login, ele deve pedir a ela que entre e
+  nunca digitar senha ou código.
+- **`allowlist` obrigatória.** As abas do agente só carregam esses domínios
+  (subdomínios incluídos), no `_navigate` e em cada carregamento da aba,
+  inclusive links clicados: um clique que sairia da lista volta à página de
+  origem e falha com o motivo.
+- **Só o que é do agente fecha.** Cada `task_id` abre uma aba própria;
+  `_close`, `kernel.shutdown()` e o fim do processo fecham essas abas e
+  desconectam. O Chrome e as outras abas da pessoa ficam.
+- **Num servidor, não.** Não há tela nem login de ninguém para usar.
+
+As tools levam o prefixo `user_browser_` e a tag `user_browser` (não
+`browser`), e convivem com a família `browser_*` do navegador isolado:
+pesquisa no isolado, contas no da pessoa. `register_browser(kernel,
+prefix=..., options=BrowserOptions(...))` registra qualquer outra família.
+
+Por baixo, `BrowserOptions` tem `cdp_port_file` (ler o endereço do
+`DevToolsActivePort` de um perfil), `cdp_url` (um endereço de depuração local,
+só `127.0.0.1`/`localhost`/`::1`), `cdp_launch` (o comando que abre o
+navegador quando nada responde em `cdp_url`) e `allowlist`. Enquanto o Chrome
+aceitar depuração, qualquer programa da máquina pode controlá-lo.
+
 ### 4.3 Tool descriptors
 
 Cada tool é declarada como `ToolDescriptor` com JSON Schema completo. Exemplo:

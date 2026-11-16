@@ -309,6 +309,7 @@ class SymbioteKernel:
         # close_session(). Loop traces are not kept here: message() persists
         # each one to execution_traces and close_session() reads them back.
         self._handoffs: dict[str, dict] = {}
+        self._shutdown_callbacks: list[Callable[[], None]] = []  # see on_shutdown
         self._handoffs_lock = threading.Lock()
 
         # Optional evolver LLM (host provides, can be different from main LLM)
@@ -446,6 +447,7 @@ class SymbioteKernel:
         callback: Callable[..., bool] | None,
         *,
         pass_context: bool = False,
+        risk_threshold: str = "high",
     ) -> None:
         """Install a human-in-the-loop approval gate on the chat runner.
 
@@ -455,8 +457,11 @@ class SymbioteKernel:
         high-risk tools execute unchecked.
 
         The callback receives ``(tool_id, params, risk_level)`` and returns
-        ``True`` to allow or ``False`` to deny. It is invoked **only** for
-        tools whose ``risk_level == "high"`` (see ``ChatRunner._check_approval``).
+        ``True`` to allow or ``False`` to deny. By default it is invoked for
+        high-risk tools; ``risk_threshold`` may be ``"medium"`` or ``"low"``
+        to ask for those risks too. Tools whose descriptor sets
+        ``requires_approval`` are always asked; those
+        last are refused when no callback is installed.
         With ``pass_context=True`` it receives a fourth argument, the
         ``ToolExecContext`` of the call (symbiote, session and the turn's
         ``host_context``); either way ``current_tool_context()`` returns it
@@ -483,10 +488,10 @@ class SymbioteKernel:
             def gate(tool_id: str, params: dict, risk_level: str) -> bool:
                 return callback(tool_id, params, risk_level, current_tool_context())
 
-        runner.set_approval_callback(gate)
+        runner.set_approval_callback(gate, risk_threshold=risk_threshold)
         long_run = self._runner_registry.get("long_run")
         if isinstance(long_run, LongRunRunner):
-            long_run.set_approval_callback(gate)
+            long_run.set_approval_callback(gate, risk_threshold=risk_threshold)
 
     @property
     def redactor(self) -> Redactor:
@@ -2374,6 +2379,13 @@ class SymbioteKernel:
             tags=["harness_failure", trace.stop_reason],
         ))
 
+    def on_shutdown(self, callback: Callable[[], None]) -> None:
+        """Run ``callback()`` when the kernel shuts down, before the tool loop
+        stops: for what an extension opened and must release (a browser and
+        its tabs, a connection). Callbacks run in registration order; one
+        that raises is logged and the others still run."""
+        self._shutdown_callbacks.append(callback)
+
     def shutdown(self, timeout: float = 10.0) -> None:
         """Wait for background work, then stop the tool loop and close storage.
 
@@ -2398,6 +2410,12 @@ class SymbioteKernel:
         if self._skills_sync is not None:
             skill_usage.remove_write_listener(self._skills_sync.on_sidecar_written)
             self._skills_sync.flush()  # usage counters not pushed yet
+        callbacks, self._shutdown_callbacks = self._shutdown_callbacks, []
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:
+                logging.getLogger(__name__).exception("shutdown callback %r failed", callback)
         self._tool_gateway.close()
         if self._owns_storage:
             self._storage.close()

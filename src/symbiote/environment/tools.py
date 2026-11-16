@@ -966,6 +966,11 @@ class ToolGateway:
             return desc.risk_level
         return "low"
 
+    def requires_approval(self, tool_id: str) -> bool:
+        """Whether the tool runs only with a person's approval (see ToolDescriptor)."""
+        desc = self._descriptors.get(tool_id)
+        return bool(desc is not None and desc.requires_approval)
+
     def register_memory_tools(
         self,
         memory_store: Any,

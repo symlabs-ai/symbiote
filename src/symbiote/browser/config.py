@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import os
 from typing import Literal
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 SearchBackend = Literal["brave", "symgateway_objective"]
 ExtractBackend = Literal["forge_scraper", "firecrawl"]
@@ -65,6 +66,65 @@ class BrowserOptions(BaseModel):
     viewport_height: int = 800
     timeout_ms: int = 30000
     isolated_session_per_task: bool = True
+    cdp_url: str | None = None
+    """Attach to a Chrome already running on this machine (started with
+    ``--remote-debugging-port``) instead of launching an isolated Chromium,
+    e.g. ``"http://127.0.0.1:9222"``. The browser_* tools then work in new tabs
+    of that browser's own profile, with its cookies and logins: they act as
+    whoever is logged in there. In this mode ``browser_click`` and
+    ``browser_fill`` are high risk (they go through the approval callback),
+    and closing a session closes only the tabs it opened, never the browser.
+    Loopback addresses only."""
+    cdp_port_file: str | None = None
+    """Path of a Chrome profile's ``DevToolsActivePort`` file: attach to the
+    browser that is already open on that profile, with the person's tabs and
+    logins. Chrome writes the file while remote debugging is allowed (Chrome
+    144+: ``chrome://inspect/#remote-debugging``) and asks the person to
+    allow each new connection. Read at every connection; use instead of
+    ``cdp_url``."""
+    cdp_connect_timeout_s: float | None = None
+    """How long a connection may take; ``None`` = ``timeout_ms``. Leave room
+    for the person to answer Chrome's permission dialog."""
+    cdp_launch: list[str] | None = None
+    """Command that starts the browser when nothing listens at ``cdp_url``:
+    the binary and its flags, with the same debugging port and a profile of
+    its own. The browser starts detached and stays open after the kernel
+    shuts down, as the person's browser does. Requires ``cdp_url``."""
+    cdp_launch_timeout_s: float = 20.0
+    """How long to wait for a launched browser to open its debugging port."""
+    allowlist: list[str] | None = None
+    """Domains the browser may open, as in ``PolicyConfig.allowlist``
+    (``example.com`` covers its subdomains, ``*.example.com`` only them).
+    Checked on ``browser_navigate`` and on every page load of a tab the tools
+    opened, including links clicked; ``None`` = no limit beyond the shared
+    policy. Recommended with ``cdp_url``."""
+
+    @property
+    def attached(self) -> bool:
+        """The tools work in a browser that is not theirs (cdp_url / cdp_port_file)."""
+        return bool(self.cdp_url or self.cdp_port_file)
+
+    @model_validator(mode="after")
+    def _launch_needs_an_address(self) -> BrowserOptions:
+        if self.cdp_launch and not self.cdp_url:
+            raise ValueError("cdp_launch needs cdp_url: the address the launched browser listens on")
+        if self.cdp_port_file and (self.cdp_url or self.cdp_launch):
+            raise ValueError("cdp_port_file attaches to the browser already open: no cdp_url or cdp_launch")
+        return self
+
+    @field_validator("cdp_url")
+    @classmethod
+    def _local_browser_only(cls, value: str | None) -> str | None:
+        if not value:
+            return None
+        parsed = urlparse(value)
+        if parsed.scheme not in ("http", "https", "ws", "wss"):
+            raise ValueError(f"cdp_url must be an http(s) or ws(s) URL, got {value!r}")
+        # The debugging port gives full control of the browser: only one on
+        # this machine, never over the network.
+        if (parsed.hostname or "").lower() not in ("127.0.0.1", "localhost", "::1"):
+            raise ValueError(f"cdp_url must point to this machine (127.0.0.1), got {value!r}")
+        return value
 
 
 class PolicyConfig(BaseModel):

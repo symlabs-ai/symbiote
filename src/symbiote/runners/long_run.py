@@ -182,6 +182,7 @@ class LongRunRunner:
         self._on_block_complete = on_block_complete
         self._on_plan = on_plan
         self._on_before_tool_call = on_before_tool_call
+        self._approval_risk_threshold = "high"
         self._token_streaming = "final"
 
     def set_native_tools(self, enabled: bool) -> None:
@@ -206,10 +207,13 @@ class LongRunRunner:
         self._token_streaming = mode
 
     def set_approval_callback(
-        self, callback: Callable[[str, dict, str], bool] | None
+        self, callback: Callable[[str, dict, str], bool] | None, *, risk_threshold: str = "high"
     ) -> None:
-        """Gate for high-risk tools inside every block (see ``ChatRunner``)."""
+        """Gate tools at or above ``risk_threshold`` inside every block."""
+        if risk_threshold not in ("low", "medium", "high"):
+            raise ValueError(f"Unknown approval risk threshold: {risk_threshold}")
         self._on_before_tool_call = callback
+        self._approval_risk_threshold = risk_threshold
 
     def set_progress_callbacks(
         self,
@@ -606,9 +610,9 @@ class LongRunRunner:
             context_budget=self._context_budget,
             runtime_context=self._runtime_context,
             **limits,
-            # High-risk tools inside a block go through the same human gate
-            # as a plain chat turn.
+            # Tools inside a block use the same approval gate as a chat turn.
             on_before_tool_call=self._on_before_tool_call,
+            approval_risk_threshold=self._approval_risk_threshold,
             token_streaming=self._token_streaming,
             agent_protocol=self._agent_protocol,
             protocol_registry=self._protocol_registry,
