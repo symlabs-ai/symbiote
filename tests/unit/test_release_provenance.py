@@ -7,7 +7,7 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-RELEASE_VERSION = "0.8.4"
+RELEASE_VERSION = "0.8.5"
 FORGE_LLM_COMMIT = "af51be9244c69cd19b817dea9528016dc582cb3f"
 FORGE_SCRAPER_COMMIT = "632e4ce5d218bedebad3411df48625f4b34d7f29"
 FORGE_LLM_PIN = (

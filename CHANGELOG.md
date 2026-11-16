@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.5] - 2026-11-16
+
+### Outros
+
+- test(postgres): a migração 5 (`tool_visibility`) é testada sobre um banco que já estava na versão 4 com uma config gravada: a config antiga passa a ler `"tagged"` e aceita `"authorized"`. O teste da coluna no SQLite ganhou a marca `sqlite_only`, porque usa `PRAGMA`.
+
 ## [v0.8.4] - 2026-11-14
 
 Os blocos do long-run passam a rodar no protocolo do kernel e com o review de skills, e o host pode listar no prompt só as tools que o symbiote pode executar.
