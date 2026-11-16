@@ -228,6 +228,7 @@ class SymbioteKernel:
             tool_gateway=self._tool_gateway,
             environment=self._environment,
             harness_versions=self._harness_versions,
+            standing_memory_limit=config.standing_memory_limit,
         )
 
         # Runners

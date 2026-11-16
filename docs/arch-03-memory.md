@@ -233,5 +233,7 @@ pie title Context Budget — Instant Mode
 
 - **Memorias nunca sao deletadas** — usam soft-delete (`is_active=False`). O `DreamEngine.PrunePhase` e o unico mecanismo que desativa memorias obsoletas.
 - **last_used_at** e atualizado automaticamente pelo `SemanticRecallProvider` a cada recall — memorias usadas frequentemente resistem ao decay.
+- **Preferencias e restricoes** (`preference`, `constraint`) entram em todo turno, por importancia, ate `KernelConfig.standing_memory_limit` (padrao 5), mesmo sem termo em comum com a mensagem; isso tambem atualiza o `last_used_at` delas.
+- **Handoff de long-run** (categoria `handoff`) nunca entra no recall de um turno; so o planejador o le, e so quando o symbiote esta em `long_run` com blocos pendentes.
 - **Cross-Symbiote Learning** (`harness/cross_learning.py`) permite transferir melhorias de harness entre symbiotes com tool sets similares (Jaccard overlap > 0.5).
 - O `ParameterTuner` ajusta automaticamente `max_tool_iterations` e `memory_share` baseado em dados historicos, com tiers de seguranca (0-3) que exigem mais sessoes para mudancas mais agressivas.

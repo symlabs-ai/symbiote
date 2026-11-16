@@ -256,7 +256,7 @@ other writers). It wraps each **composite operation** in
 | `harness_versions.create_version` / `rollback` | deactivating one version and activating the other |
 | Session score (`close_session`, `report_feedback`) | the `session_scores` row and the per-version score counters |
 | Reflection (`close_session`) | the learned memories and the session's reflection watermark |
-| Memory recall (`get_relevant`, semantic recall) | the `last_used_at` of every returned memory |
+| Memory recall (`get_relevant`, semantic recall, `get_standing`) | the `last_used_at` of every returned memory |
 | Dream reconcile | retiring the duplicate and tagging the memory that stays |
 | `discover_tools` | all the tools found by one scan |
 | Secret scrub of a session (redaction) | every table the secret is removed from |
@@ -1124,6 +1124,19 @@ kernel.environment.configure(symbiote_id=sym.id, context_mode="packed")
 # Reduces prompt size, good for symbiotes with large memory stores
 kernel.environment.configure(symbiote_id=sym.id, context_mode="on_demand")
 ```
+
+### Preferences and constraints hold in every turn
+
+In `packed` mode, memories reach the prompt by relevance: a memory enters
+when it shares a term with the message. A preference ("prefers short
+answers") or a constraint ("never book anything before 9am") is different:
+it applies to every request, whatever its words. The memories of type
+`preference` and `constraint` therefore enter every turn, the most important
+first, up to `KernelConfig.standing_memory_limit` (default `5`; `0` restores
+relevance only). They count against the same memory budget as the others,
+and entering a turn updates their `last_used_at`, so the dream does not
+prune them as unused. A host `MemoryPort` without `get_standing()` keeps the
+relevance-only behaviour.
 
 ### Memory is scoped per symbiote
 

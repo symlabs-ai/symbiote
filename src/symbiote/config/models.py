@@ -68,6 +68,11 @@ class KernelConfig(BaseModel):
     # Same for long-term memory: ``kernel.prune()`` deletes the memory entries
     # created more than N days ago, whatever their session.
     memory_retention_days: int | None = Field(default=None, ge=0)
+    # Preferences and constraints enter every turn's context (the most
+    # important first, up to this many), whatever words the message uses:
+    # "prefers short answers" applies to a question about the week too.
+    # The other memories still come by relevance. 0 = relevance only.
+    standing_memory_limit: int = Field(default=5, ge=0)
     # Kill switch for everything that writes skills (the ``skill_manage``
     # tool, the background review, dream's lifecycle changes, usage counters).
     # False makes the skill library read-only for the whole kernel: for hosts

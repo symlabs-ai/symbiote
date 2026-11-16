@@ -88,6 +88,10 @@ class ContextInspection(BaseModel):
 _MEMORIES_SHARE = 0.40
 _KNOWLEDGE_SHARE = 0.25
 
+# Memories that hold in every turn, not only when the message shares a word
+# with them (see KernelConfig.standing_memory_limit).
+STANDING_MEMORY_TYPES = ("preference", "constraint")
+
 
 # ── Assembler ────────────────────────────────────────────────────────────────
 
@@ -106,7 +110,9 @@ class ContextAssembler:
         semantic_llm: LLMPort | None = None,
         harness_versions: object | None = None,
         skills_loader: object | None = None,
+        standing_memory_limit: int = 5,
     ) -> None:
+        self._standing_memory_limit = standing_memory_limit
         self._identity = identity
         self._memory = memory
         self._knowledge = knowledge
@@ -139,6 +145,19 @@ class ContextAssembler:
         the single loader. Pass None to clear.
         """
         self._skills_loader_resolver = resolver
+
+    def _standing_memories(self, symbiote_id: str) -> list:
+        """Preferences and constraints for every turn (most important first).
+
+        A memory port without ``get_standing`` (a host's own) keeps the
+        relevance-only behaviour.
+        """
+        get_standing = getattr(self._memory, "get_standing", None)
+        if not self._standing_memory_limit or get_standing is None:
+            return []
+        return list(get_standing(
+            symbiote_id, STANDING_MEMORY_TYPES, self._standing_memory_limit
+        ))
 
     def _loader_for(self, symbiote_id: str):
         """Resolve the SkillsLoader to use for this symbiote (scope-aware)."""
@@ -197,6 +216,11 @@ class ContextAssembler:
             raw_memories = self._memory.get_relevant(
                 user_input, session_id, symbiote_id=symbiote_id
             )
+            recalled = {m.id for m in raw_memories}
+            raw_memories = [
+                *(m for m in self._standing_memories(symbiote_id) if m.id not in recalled),
+                *raw_memories,
+            ]
             memories_dicts = [
                 {
                     "content": m.content,

@@ -168,6 +168,31 @@ class MemoryStore:
                 )
         return results
 
+    def get_standing(
+        self, symbiote_id: str, types: tuple[str, ...], limit: int = 5
+    ) -> list[MemoryEntry]:
+        """Active entries of ``types`` that hold in every turn, the most
+        important first. Like a recall, it updates their last_used_at: they
+        are in use, and the dream must not prune them as stale."""
+        if not self.is_enabled(symbiote_id) or not types or limit <= 0:
+            return []
+        marks = ", ".join("?" for _ in types)
+        rows = self._storage.fetch_all(
+            "SELECT * FROM memory_entries "
+            f"WHERE is_active = 1 AND symbiote_id = ? AND type IN ({marks}) "
+            "ORDER BY importance DESC, created_at DESC, rowid LIMIT ?",
+            (symbiote_id, *types, limit),
+        )
+        entries = [self._row_to_entry(r) for r in rows]
+        now = datetime.now(tz=UTC).isoformat()
+        with self._storage.transaction():
+            for entry in entries:
+                self._storage.execute(
+                    "UPDATE memory_entries SET last_used_at = ? WHERE id = ?",
+                    (now, entry.id),
+                )
+        return entries
+
     def get_by_type(
         self, symbiote_id: str, entry_type: str, limit: int = 20
     ) -> list[MemoryEntry]:
