@@ -5,6 +5,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.6] - 2026-11-16
+
+O roteiro do demo, rodado de ponta a ponta contra um modelo real, mostrou seis comportamentos fora do esperado; quatro eram do kernel e estão corrigidos aqui. Entram também a busca web por um objective do SymGateway e links com miniatura no `<symbiote-chat>`.
+
+**Mudanças de comportamento para hosts:** a resposta de um turno `long_run` deixa de ser o quadro `"Project completed: N/M blocks"` (que continua em `handoff_data["output_summary"]`) e passa a ser escrita pelo modelo, com uma chamada a mais por projeto; preferências e restrições entram em todo turno (até 5, `standing_memory_limit=0` desliga); uma chamada que falha pode ser repetida até a terceira falha.
+
+### Novas funcionalidades
+
+- feat(memory): memórias do tipo `preference` e `constraint` entram no contexto de todo turno, as mais importantes primeiro, até `KernelConfig.standing_memory_limit` (padrão 5; `0` volta ao recall só por relevância), independentemente das palavras da mensagem. Antes, "prefere respostas em tópicos curtos" só chegava ao modelo quando a pergunta falava de formato, e o modelo chegou a negar uma preferência que existia. Entrar num turno conta como uso para o dream. Um `MemoryPort` do host sem `get_standing()` mantém o comportamento anterior.
+- feat(browser): `search_backend="symgateway_objective"` faz o `web_search` pedir ao SymGateway um propósito (`POST /v1/objectives/invoke` com objective e service, ex.: `web_seek` / `websearch`) em vez de um provedor. Aceita como saída o JSON do Brave, `{"results": [...]}` ou uma lista; uma recusa traz o motivo dado pelo gateway (ex.: a permissão que falta).
+- feat(ui): o `<symbiote-chat>` transforma endereços da resposta em links (domínios sem `https://` também; nunca dentro de código; links `javascript:` são descartados), abertos fora do chat. Um host que fornece `linkPreview(url)` no adapter ganha cartões com miniatura, título e site para os seis primeiros links de cada resposta; sem ele nada muda.
+- feat(demo): engrenagem com as configurações do LLM (servidor, modelos e chave, editáveis e com botão Testar que não salva nada); `web_search` pelo objective `web_seek` do gateway; links clicáveis com miniaturas buscadas pelo servidor do demo (só endereços públicos em cada salto, imagens raster de até 3 MB).
+
+### Correções
+
+- fix(long-run): o planejador passa a ser informado do `max_blocks`, e blocos planejados além dele são cortados antes do `on_plan` e guardados no handoff como `dropped_blocks`, nunca como pendentes. Plano, progresso, trace e handoff dão a mesma contagem (a resposta dizia "3/4 blocks" num projeto que rodou tudo o que podia). A resposta ao usuário é escrita por uma chamada a mais ao modelo a partir dos relatórios dos blocos, no idioma do pedido e na voz da persona; se essa chamada falha, vale o relatório do último bloco bem-sucedido.
+- fix(long-run): o handoff (categoria `handoff`) não entra mais no recall de memórias de um turno e só é injetado na primeira mensagem de uma sessão quando o symbiote está em `long_run` com trabalho pendente. Um turno de chat recebia o registro JSON inteiro no prompt de sistema (cerca de 5 mil caracteres).
+- fix(loop): duas chamadas idênticas seguidas só contam como estagnação quando a primeira deu certo. Repetir uma chamada que falhou (pedido do usuário ou erro passageiro) agora vai até o circuit breaker na terceira falha seguida, e a memória de falha nomeia a tool em vez de sugerir "verificar se a task já foi completada".
+- fix(dream, skills): as fases generalize, mine e evaluate do dream escrevem no idioma da persona (ou do material mostrado), e o review de skills escreve a descrição e o corpo da skill no idioma da conversa, que é contra o que a descrição é comparada. Antes saíam em inglês numa conversa em português.
+- fix(demo): o roteiro mostra o que promete. O Sol sabe que o que aprende é gravado ao encerrar a sessão; o passo 7 tenta o navegador antes de delegar e esbarra na política; as sementes de poda do dream não têm palavras em comum com os prompts do roteiro (com teste); a calculadora nomeia o parâmetro que espera.
+
 ## [v0.8.5] - 2026-11-16
 
 ### Outros
