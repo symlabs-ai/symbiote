@@ -5,6 +5,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.7] - 2026-11-16
+
+O agente pode trabalhar no Chrome que a pessoa já usa, com os logins dela, sem configuração de arquivo; o host escolhe a partir de que risco uma tool pede aprovação.
+
+**Mudança de comportamento para hosts:** nenhuma por padrão. `set_approval_callback` continua perguntando só no risco alto; uma tool com `requires_approval=True` sem callback instalado é recusada em vez de rodar.
+
+### Novas funcionalidades
+
+- feat(browser): `register_user_browser(kernel, allowlist=[...], session="open")` registra tools que se conectam ao Chrome do dia a dia da pessoa (ela liga a depuração remota em `chrome://inspect/#remote-debugging` e permite a conexão no diálogo do Chrome). O agente trabalha numa aba própria, só nos sites da lista (inclusive em links clicados) e nunca digita senha ou código; clicar e preencher sempre pedem a aprovação de uma pessoa. `session="own"` usa um Chrome separado, com perfil próprio, que o kernel abre quando precisa. `register_browser(prefix=...)` permite mais de uma família de navegador no mesmo kernel.
+- feat(approval): `ToolDescriptor.requires_approval` faz a tool sempre passar pelo callback de aprovação, qualquer que seja o risco, e ser recusada se não houver callback. `set_approval_callback(callback, risk_threshold="low"|"medium"|"high")` escolhe a partir de que risco perguntar, também dentro dos blocos do long-run.
+- feat(kernel): `Kernel.on_shutdown(callback)` para extensões liberarem o que abriram (o navegador e suas abas) antes de o loop de tools parar.
+- feat(demo): o Sol ganha as tools `meu_chrome_*` no Chrome aberto da pessoa, configuráveis na engrenagem ("Chrome do Sol": sessão e sites liberados), e explica como ligar a conexão quando ela ainda não existe. Nível de aprovação (perguntar no risco baixo, médio ou alto, nunca, ou permitir tudo, inclusive no Chrome) e máximo de turnos viram seletores junto da caixa de mensagem; as abas sobem para o topo e o "Ao vivo" vira um painel recolhível à direita do chat; destaque em azul claro para contraste, também no `<symbiote-chat>`.
+
+### Correções
+
+- fix(demo): a chave de aprovação da interface respondia 422 (a rota `/api/approvals/toggle` era capturada por `/api/approvals/{request_id}`); a página se recarrega sozinha depois de um reinício do servidor em vez de falhar com 403; o desligamento espera no máximo 3 segundos pelo stream de eventos.
+- fix(demo): os passos do roteiro que dependem da API pessoal (passo 4) avisam quando ela não foi carregada; zerar o demo zera também o progresso do roteiro; a persona do Sol distingue as tools da API pessoal e quando usar `fs_read` em vez de `bash`.
+
 ## [v0.8.6] - 2026-11-16
 
 O roteiro do demo, rodado de ponta a ponta contra um modelo real, mostrou seis comportamentos fora do esperado; quatro eram do kernel e estão corrigidos aqui. Entram também a busca web por um objective do SymGateway e links com miniatura no `<symbiote-chat>`.
