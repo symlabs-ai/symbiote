@@ -294,6 +294,75 @@ const SYMBIOTE_STYLES = `
 .symbiote-msg.assistant a {
   color: var(--symbiote-primary, var(--primary, #3B82F6));
   text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+.symbiote-msg.assistant a:hover {
+  filter: brightness(1.15);
+}
+
+/* ── Link preview cards (adapter.linkPreview) ── */
+.symbiote-previews {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.symbiote-previews:empty {
+  display: none;
+}
+.symbiote-msg.assistant a.symbiote-preview {
+  display: flex;
+  align-items: stretch;
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 0.4rem;
+  border: 1px solid var(--symbiote-border, var(--border, #3f3f46));
+  border-radius: 8px;
+  background: rgba(255,255,255,0.03);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+.symbiote-msg.assistant a.symbiote-preview[hidden] {
+  display: none;
+}
+.symbiote-msg.assistant a.symbiote-preview:hover {
+  filter: none;
+  background: rgba(255,255,255,0.07);
+  border-color: var(--symbiote-primary, var(--primary, #3B82F6));
+}
+.symbiote-preview-thumb {
+  flex: none;
+  width: 84px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: 5px;
+  background: rgba(255,255,255,0.06);
+}
+.symbiote-preview-body {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.symbiote-preview-title {
+  font-size: 0.85em;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--symbiote-text-primary, inherit);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.symbiote-preview-site {
+  font-size: 0.75em;
+  color: var(--symbiote-text-muted, #a1a1aa);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── Tool result badges ── */

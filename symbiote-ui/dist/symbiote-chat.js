@@ -163,6 +163,19 @@ if(__exports != exports)module.exports = exports;return module.exports}));
  *   Returns custom HTML for the loading indicator shown while waiting for response.
  *   Default: spinner + "..."
  *   Example: () => '<span class="my-pulse">Newsing...</span>'
+ *
+ * @property {(url: string) => Promise<LinkPreview|null>} [linkPreview]
+ *   When present, each assistant message gets a card (thumbnail, title, site)
+ *   for its first external links. The host resolves the preview, normally on
+ *   its server so the browser does not contact the cited site; resolve to
+ *   null (or leave `image` empty) for a link that should get no card.
+ */
+
+/**
+ * @typedef {Object} LinkPreview
+ * @property {string} image - URL of the thumbnail (required for a card)
+ * @property {string} [title] - Page title; the URL is shown when missing
+ * @property {string} [site] - Site name; the hostname is shown when missing
  */
 
 /**
@@ -477,6 +490,75 @@ const SYMBIOTE_STYLES = `
 .symbiote-msg.assistant a {
   color: var(--symbiote-primary, var(--primary, #3B82F6));
   text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+.symbiote-msg.assistant a:hover {
+  filter: brightness(1.15);
+}
+
+/* ── Link preview cards (adapter.linkPreview) ── */
+.symbiote-previews {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.symbiote-previews:empty {
+  display: none;
+}
+.symbiote-msg.assistant a.symbiote-preview {
+  display: flex;
+  align-items: stretch;
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 0.4rem;
+  border: 1px solid var(--symbiote-border, var(--border, #3f3f46));
+  border-radius: 8px;
+  background: rgba(255,255,255,0.03);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+.symbiote-msg.assistant a.symbiote-preview[hidden] {
+  display: none;
+}
+.symbiote-msg.assistant a.symbiote-preview:hover {
+  filter: none;
+  background: rgba(255,255,255,0.07);
+  border-color: var(--symbiote-primary, var(--primary, #3B82F6));
+}
+.symbiote-preview-thumb {
+  flex: none;
+  width: 84px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: 5px;
+  background: rgba(255,255,255,0.06);
+}
+.symbiote-preview-body {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.symbiote-preview-title {
+  font-size: 0.85em;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--symbiote-text-primary, inherit);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.symbiote-preview-site {
+  font-size: 0.75em;
+  color: var(--symbiote-text-muted, #a1a1aa);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── Tool result badges ── */
@@ -753,7 +835,76 @@ function buildAvatarHtml(name, avatarUrl) {
  *
  * Renders markdown using marked.js if available, with a basic regex fallback.
  * Looks for marked in: 1) the shadow root's scope, 2) window.marked, 3) _symbioteMarked (vendored).
+ *
+ * Either way the result goes through symbioteLinkify: addresses written as
+ * plain text become links, links open in a new tab, and links with a script
+ * scheme are reduced to their text.
  */
+
+// A web address in running text. Group 1 is the character before it (never
+// part of a word, an e-mail or a longer URL); group 2 is the address:
+//   - with a scheme or "www.":            https://site.com/x, www.site.com
+//   - a bare domain followed by a path:   exame.com/inteligencia-artificial/
+//   - a bare domain alone, common TLDs:   g1.globo.com
+const _SYMBIOTE_ADDRESS = new RegExp(
+  '(^|[^\\w@/.:%#=&?~+-])('
+  + '(?:https?://|www\\.)[^\\s<>"\']+'
+  + '|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,24}/[^\\s<>"\']*'
+  + '|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)+(?:com|org|gov|edu|io|ai|dev|app|br)(?![\\w-]|\\.\\w)'
+  + ')',
+  'gi'
+);
+const _SYMBIOTE_UNSAFE_HREF = /^(javascript|data|vbscript):/i;
+
+function symbioteLinkify(html) {
+  if (typeof document === 'undefined') return html;
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html;
+  const root = tpl.content;
+
+  // 1) Plain-text addresses → links. Text already inside a link or code stays.
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const texts = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const parent = node.parentElement;
+    if (!parent || !parent.closest('a, code, pre')) texts.push(node);
+  }
+  for (const node of texts) {
+    const text = node.nodeValue;
+    const parts = [];
+    let last = 0;
+    _SYMBIOTE_ADDRESS.lastIndex = 0;
+    for (let m = _SYMBIOTE_ADDRESS.exec(text); m; m = _SYMBIOTE_ADDRESS.exec(text)) {
+      let address = m[2];
+      // Punctuation that closes the sentence is not part of the address.
+      address = address.replace(/[.,;:!?]+$/, '');
+      if (address.endsWith(')') && !address.includes('(')) address = address.slice(0, -1);
+      const start = m.index + m[1].length;
+      const link = document.createElement('a');
+      link.href = /^https?:\/\//i.test(address) ? address : 'https://' + address;
+      link.textContent = address;
+      parts.push(text.slice(last, start), link);
+      last = start + address.length;
+      _SYMBIOTE_ADDRESS.lastIndex = last;
+    }
+    if (parts.length) {
+      parts.push(text.slice(last));
+      node.replaceWith(...parts);
+    }
+  }
+
+  // 2) Every link: no script schemes, and never navigate the chat away.
+  for (const link of root.querySelectorAll('a')) {
+    const href = (link.getAttribute('href') || '').replace(/[\u0000-\u0020]/g, '');
+    if (_SYMBIOTE_UNSAFE_HREF.test(href)) {
+      link.replaceWith(...link.childNodes);
+    } else if (/^https?:/i.test(href)) {
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+    }
+  }
+  return tpl.innerHTML;
+}
 
 function symbioteFormatMarkdown(text) {
   // Try vendored marked first, then global
@@ -761,7 +912,7 @@ function symbioteFormatMarkdown(text) {
     || (typeof window !== 'undefined' && window.marked);
 
   if (marked && typeof marked.parse === 'function') {
-    return marked.parse(text, { breaks: true });
+    return symbioteLinkify(marked.parse(text, { breaks: true }));
   }
 
   // Basic fallback: escape HTML, then apply simple formatting
@@ -771,7 +922,7 @@ function symbioteFormatMarkdown(text) {
   s = s.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
   s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
   s = s.replace(/\n/g, '<br>');
-  return s;
+  return symbioteLinkify(s);
 }
 
 // ── src/symbiote-chat.js ──
@@ -789,6 +940,9 @@ function symbioteFormatMarkdown(text) {
  *     document.querySelector('symbiote-chat').adapter = { sendMessage, loadHistory, clearHistory };
  *   </script>
  */
+
+// Cards per answer when the adapter implements linkPreview.
+const SYMBIOTE_MAX_LINK_PREVIEWS = 6;
 
 class SymbioteChat extends HTMLElement {
 
@@ -1152,9 +1306,11 @@ class SymbioteChat extends HTMLElement {
       if (finalText !== null) {
         // Already rendered by _handleSSE (response_done / error).
         this._fireMessageRendered(msgId, finalText);
+        this._addLinkPreviews(msgDiv);
       } else if (accumulated) {
         msgDiv.innerHTML = symbioteFormatMarkdown(this._applyTextFilter(accumulated));
         this._fireMessageRendered(msgId, accumulated);
+        this._addLinkPreviews(msgDiv);
       } else {
         msgDiv.remove();
       }
@@ -1301,7 +1457,68 @@ class SymbioteChat extends HTMLElement {
 
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
+    if (!isHtml && role !== 'user') this._addLinkPreviews(div);
     return id;
+  }
+
+  // Cards (thumbnail, title, site) for the external links of an answer.
+  // Opt-in: only when the host's adapter implements
+  //   linkPreview(url) -> Promise<{url, title, site, image} | null>
+  // The host decides how a preview is obtained; a link without one gets no card.
+  _addLinkPreviews(msgDiv) {
+    const resolve = this._adapter && this._adapter.linkPreview;
+    if (typeof resolve !== 'function') return;
+    const urls = [];
+    for (const a of msgDiv.querySelectorAll('a[href]')) {
+      const href = a.href;
+      if (/^https?:\/\//i.test(href) && !urls.includes(href)) urls.push(href);
+      if (urls.length >= SYMBIOTE_MAX_LINK_PREVIEWS) break;
+    }
+    if (!urls.length) return;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'symbiote-previews';
+    msgDiv.appendChild(wrap);
+    const container = this._getMessagesContainer();
+    // One slot per link, in the order of the text, whatever order they answer in.
+    for (const url of urls) {
+      const slot = document.createElement('a');
+      slot.className = 'symbiote-preview';
+      slot.href = url;
+      slot.target = '_blank';
+      slot.rel = 'noopener noreferrer';
+      slot.hidden = true;
+      wrap.appendChild(slot);
+      Promise.resolve()
+        .then(() => resolve.call(this._adapter, url))
+        .then((info) => {
+          if (!info || !info.image) { slot.remove(); return; }
+          const atBottom = !container
+            || container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+          const img = document.createElement('img');
+          img.className = 'symbiote-preview-thumb';
+          img.alt = '';
+          img.loading = 'lazy';
+          img.onerror = () => slot.remove();
+          img.src = info.image;
+          const body = document.createElement('span');
+          body.className = 'symbiote-preview-body';
+          const title = document.createElement('span');
+          title.className = 'symbiote-preview-title';
+          title.textContent = info.title || url;
+          const site = document.createElement('span');
+          site.className = 'symbiote-preview-site';
+          let host = '';
+          try { host = new URL(url).hostname.replace(/^www\./, ''); } catch (_) { /* keep empty */ }
+          site.textContent = info.site || host;
+          body.append(title, site);
+          slot.append(img, body);
+          slot.hidden = false;
+          // Keep following the conversation if the reader was at its end.
+          if (container && atBottom) container.scrollTop = container.scrollHeight;
+        })
+        .catch(() => slot.remove());
+    }
   }
 
   _removeMessage(id) {

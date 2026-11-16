@@ -126,6 +126,26 @@ When `adapter.sendMessage()` returns `tool_results`, the component renders color
 - **Red** badge for failed tool calls
 - Hover tooltip shows the result/error details
 
+## Links
+
+Web addresses in an answer are clickable, including ones the model wrote without a scheme (`exame.com/artigo`), and open in a new tab. Links with a script scheme (`javascript:`, `data:`, `vbscript:`) are shown as plain text.
+
+### Link previews (optional)
+
+Give the adapter a `linkPreview(url)` method and each assistant message gets a card (thumbnail, title, site) for its first six external links, in the order they appear:
+
+```js
+chat.adapter = {
+  // ...sendMessage, loadHistory, clearHistory
+  async linkPreview(url) {
+    const r = await fetch('/api/preview', { method: 'POST', body: JSON.stringify({ url }) });
+    return (await r.json()).preview;   // { image, title?, site? } or null for no card
+  },
+};
+```
+
+The component only draws the card; how a preview is obtained is the host's job. Resolve it on your server (read the page's Open Graph tags there) so the browser does not contact the cited site, and validate the address before fetching it: it came out of a model answer. `demo/previews.py` is a reference implementation.
+
 ## Building from Source
 
 The distributable is a single concatenated file. Rebuild after editing source files:

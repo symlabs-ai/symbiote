@@ -67,6 +67,19 @@
  *   Returns custom HTML for the loading indicator shown while waiting for response.
  *   Default: spinner + "..."
  *   Example: () => '<span class="my-pulse">Newsing...</span>'
+ *
+ * @property {(url: string) => Promise<LinkPreview|null>} [linkPreview]
+ *   When present, each assistant message gets a card (thumbnail, title, site)
+ *   for its first external links. The host resolves the preview, normally on
+ *   its server so the browser does not contact the cited site; resolve to
+ *   null (or leave `image` empty) for a link that should get no card.
+ */
+
+/**
+ * @typedef {Object} LinkPreview
+ * @property {string} image - URL of the thumbnail (required for a card)
+ * @property {string} [title] - Page title; the URL is shown when missing
+ * @property {string} [site] - Site name; the hostname is shown when missing
  */
 
 /**

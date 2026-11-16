@@ -13,6 +13,9 @@
  *   </script>
  */
 
+// Cards per answer when the adapter implements linkPreview.
+const SYMBIOTE_MAX_LINK_PREVIEWS = 6;
+
 class SymbioteChat extends HTMLElement {
 
   static get observedAttributes() {
@@ -375,9 +378,11 @@ class SymbioteChat extends HTMLElement {
       if (finalText !== null) {
         // Already rendered by _handleSSE (response_done / error).
         this._fireMessageRendered(msgId, finalText);
+        this._addLinkPreviews(msgDiv);
       } else if (accumulated) {
         msgDiv.innerHTML = symbioteFormatMarkdown(this._applyTextFilter(accumulated));
         this._fireMessageRendered(msgId, accumulated);
+        this._addLinkPreviews(msgDiv);
       } else {
         msgDiv.remove();
       }
@@ -524,7 +529,68 @@ class SymbioteChat extends HTMLElement {
 
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
+    if (!isHtml && role !== 'user') this._addLinkPreviews(div);
     return id;
+  }
+
+  // Cards (thumbnail, title, site) for the external links of an answer.
+  // Opt-in: only when the host's adapter implements
+  //   linkPreview(url) -> Promise<{url, title, site, image} | null>
+  // The host decides how a preview is obtained; a link without one gets no card.
+  _addLinkPreviews(msgDiv) {
+    const resolve = this._adapter && this._adapter.linkPreview;
+    if (typeof resolve !== 'function') return;
+    const urls = [];
+    for (const a of msgDiv.querySelectorAll('a[href]')) {
+      const href = a.href;
+      if (/^https?:\/\//i.test(href) && !urls.includes(href)) urls.push(href);
+      if (urls.length >= SYMBIOTE_MAX_LINK_PREVIEWS) break;
+    }
+    if (!urls.length) return;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'symbiote-previews';
+    msgDiv.appendChild(wrap);
+    const container = this._getMessagesContainer();
+    // One slot per link, in the order of the text, whatever order they answer in.
+    for (const url of urls) {
+      const slot = document.createElement('a');
+      slot.className = 'symbiote-preview';
+      slot.href = url;
+      slot.target = '_blank';
+      slot.rel = 'noopener noreferrer';
+      slot.hidden = true;
+      wrap.appendChild(slot);
+      Promise.resolve()
+        .then(() => resolve.call(this._adapter, url))
+        .then((info) => {
+          if (!info || !info.image) { slot.remove(); return; }
+          const atBottom = !container
+            || container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+          const img = document.createElement('img');
+          img.className = 'symbiote-preview-thumb';
+          img.alt = '';
+          img.loading = 'lazy';
+          img.onerror = () => slot.remove();
+          img.src = info.image;
+          const body = document.createElement('span');
+          body.className = 'symbiote-preview-body';
+          const title = document.createElement('span');
+          title.className = 'symbiote-preview-title';
+          title.textContent = info.title || url;
+          const site = document.createElement('span');
+          site.className = 'symbiote-preview-site';
+          let host = '';
+          try { host = new URL(url).hostname.replace(/^www\./, ''); } catch (_) { /* keep empty */ }
+          site.textContent = info.site || host;
+          body.append(title, site);
+          slot.append(img, body);
+          slot.hidden = false;
+          // Keep following the conversation if the reader was at its end.
+          if (container && atBottom) container.scrollTop = container.scrollHeight;
+        })
+        .catch(() => slot.remove());
+    }
   }
 
   _removeMessage(id) {
