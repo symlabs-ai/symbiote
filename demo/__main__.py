@@ -17,7 +17,11 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     print(f"\n  Symbiote demo → http://127.0.0.1:{args.port}\n")
-    uvicorn.run(create_app(port=args.port), host="127.0.0.1", port=args.port, log_level="warning")
+    # The page keeps an event stream open, which never ends by itself: without
+    # a deadline a stopped server waits for it forever, holding the database
+    # and the open tab (which then never sees the new server and its token).
+    uvicorn.run(create_app(port=args.port), host="127.0.0.1", port=args.port, log_level="warning",
+                timeout_graceful_shutdown=3)
 
 
 if __name__ == "__main__":

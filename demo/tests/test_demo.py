@@ -433,6 +433,20 @@ def test_approval_gate_waits_for_the_page(demo: Demo) -> None:
     assert results[-1]["approved"] is False
 
 
+def test_the_approval_switch_turns_the_gate_off_and_on(demo: Demo) -> None:
+    # Regression: /approvals/{request_id} was declared first and took
+    # "toggle" as an id, answering 422 "approved: Field required".
+    r = demo.post("/api/approvals/toggle", {"enabled": False})
+    assert r.status_code == 200 and r.json() == {"enabled": False}
+    assert demo.get("/api/status")["approvals_enabled"] is False
+    events = demo.chat("apague tudo")  # runs without asking
+    assert not [e for e in demo.events() if e["type"] == "approval_request"]
+    assert [d for e, d in events if e == "tool_done"]
+
+    assert demo.post("/api/approvals/toggle", {"enabled": True}).json() == {"enabled": True}
+    assert demo.get("/api/status")["approvals_enabled"] is True
+
+
 def test_unauthorized_tool_is_blocked_by_policy(demo: Demo) -> None:
     demo.chat("abra o navegador")
     ends = [e for e in demo.events() if e["type"] == "tool_end" and e["tool_id"] == "browser_navigate"]

@@ -1,6 +1,27 @@
 // Small helpers shared by every tab: API calls, DOM building, formatting.
 
 const TOKEN = document.querySelector('meta[name="demo-token"]').content;
+const TOKEN_ERROR = 'token do demo ausente ou inválido';
+
+// Each server start makes a new token. A page opened before a restart holds
+// the old one and every action would fail with 403: reload it instead.
+export async function serverRestarted() {
+  try {
+    const html = await (await fetch('/', { cache: 'no-store' })).text();
+    const m = html.match(/name="demo-token" content="([^"]+)"/);
+    return Boolean(m && m[1] !== TOKEN);
+  } catch {
+    return false; // server still down: the event stream retries
+  }
+}
+
+let reloading = false;
+export function reloadAfterRestart() {
+  if (reloading) return;
+  reloading = true;
+  toast('O servidor do demo reiniciou. Recarregando a página…', 'warn');
+  setTimeout(() => window.location.reload(), 1500);
+}
 
 async function request(method, path, body) {
   const opts = { method, headers: {} };
@@ -14,6 +35,7 @@ async function request(method, path, body) {
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
   if (!resp.ok) {
+    if (resp.status === 403 && data && data.detail === TOKEN_ERROR) reloadAfterRestart();
     const detail = data && data.detail ? data.detail : `HTTP ${resp.status}`;
     throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
   }

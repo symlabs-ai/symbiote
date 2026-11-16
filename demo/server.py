@@ -326,6 +326,18 @@ def feedback(body: FeedbackBody, kernel: Any = Depends(get_kernel)) -> dict:
     return {"ok": True}
 
 
+class ToggleBody(BaseModel):
+    enabled: bool
+
+
+# Declared before /approvals/{request_id}: routes match in order, and that
+# one would take "toggle" as the id of an approval request.
+@core.post("/approvals/toggle")
+def approvals_toggle(body: ToggleBody, request: Request, _k: Any = Depends(get_kernel)) -> dict:
+    get_runtime(request).set_approvals(body.enabled)
+    return {"enabled": body.enabled}
+
+
 class DecisionBody(BaseModel):
     approved: bool
 
@@ -335,16 +347,6 @@ def decide(request_id: str, body: DecisionBody, request: Request) -> dict:
     if not get_runtime(request).broker.decide(request_id, body.approved):
         raise HTTPException(404, "pedido de aprovação não encontrado (já expirou?)")
     return {"ok": True}
-
-
-class ToggleBody(BaseModel):
-    enabled: bool
-
-
-@core.post("/approvals/toggle")
-def approvals_toggle(body: ToggleBody, request: Request, _k: Any = Depends(get_kernel)) -> dict:
-    get_runtime(request).set_approvals(body.enabled)
-    return {"enabled": body.enabled}
 
 
 # ── link previews ──────────────────────────────────────────────────────

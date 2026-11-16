@@ -1,6 +1,6 @@
 // Page shell: setup screen, chat, live event feed, tabs, approvals, tour.
 
-import { api, h, act, mount, toast, neutralizeHtml, short, fmtMs } from './lib.js';
+import { api, h, act, mount, toast, neutralizeHtml, short, fmtMs, serverRestarted, reloadAfterRestart } from './lib.js';
 import live from './tabs/live.js';
 import context from './tabs/context.js';
 import memory from './tabs/memory.js';
@@ -385,8 +385,17 @@ function handleEvent(ev) {
 
 function connectEvents() {
   const source = new EventSource(`/api/events?since=${state.lastSeq}`);
+  let dropped = false;
   source.onmessage = (msg) => {
     try { handleEvent(JSON.parse(msg.data)); } catch (e) { console.error(e); }
+  };
+  // The stream drops when the server stops and reconnects by itself; a new
+  // token on the other side means a restart, and this page is stale.
+  source.onerror = () => { dropped = true; };
+  source.onopen = async () => {
+    if (!dropped) return;
+    dropped = false;
+    if (await serverRestarted()) reloadAfterRestart();
   };
 }
 
