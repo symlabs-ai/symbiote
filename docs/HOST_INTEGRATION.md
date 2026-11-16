@@ -856,8 +856,28 @@ The final score combines auto-score (60%) with user feedback (40%).
 ## Human-in-the-Loop
 
 Tools can declare a `risk_level` (`"low"`, `"medium"`, `"high"`). The host
-provides an approval callback. The gate fires **only for `risk_level == "high"`**
-tools — low/medium always execute and the callback is not consulted for them.
+provides an approval callback. By default the gate fires **only for
+`risk_level == "high"`** tools — low/medium execute and the callback is not
+consulted for them.
+
+`risk_threshold` sets the lowest risk that goes to the callback:
+
+| `risk_threshold` | The callback is asked for |
+| --- | --- |
+| `"high"` (default) | high-risk tools |
+| `"medium"` | medium- and high-risk tools |
+| `"low"` | every tool call |
+
+```python
+kernel.set_approval_callback(approval_gate, risk_threshold="medium")
+```
+
+Any other value raises `ValueError`. The threshold applies to the whole
+kernel (chat turns, `instant` mode and the blocks of `tool_mode="long_run"`),
+not per symbiote or per user; a host that wants it to vary per user installs
+the lowest threshold it needs and lets the callback answer `True` by itself
+for the rest (`pass_context=True` gives it the turn's `host_context`). Calling
+`set_approval_callback` again replaces both the callback and the threshold.
 
 A tool whose descriptor sets `requires_approval=True` runs only with a
 person's yes: the callback is asked whatever its risk level, and with **no**
@@ -874,7 +894,8 @@ calls the model makes in the chat and long-run loops; a host calling
 
 ```python
 def approval_gate(tool_id: str, params: dict, risk: str) -> bool:
-    # Called only for high-risk tools. Return True to allow, False to deny.
+    # Called for tools at or above risk_threshold (default: high) and for
+    # tools with requires_approval. Return True to allow, False to deny.
     return ask_user(f"Allow {tool_id} with {params}?")
 
 kernel.set_approval_callback(approval_gate)
@@ -901,6 +922,7 @@ runner = ChatRunner(
     llm=llm,
     tool_gateway=kernel.tool_gateway,
     on_before_tool_call=approval_gate,
+    approval_risk_threshold="high",  # or "medium" / "low"
 )
 ```
 
@@ -918,7 +940,8 @@ ToolDescriptor(
 
 ### Host veto: the tool guard
 
-The approval callback asks a *person* and only about high-risk tools. The tool
+The approval callback asks a *person*, and only about the risks the host
+selected (high, by default). The tool
 guard is the host's own decision (IAM, quotas, tenancy rules) and covers
 **every** tool call, whatever its risk level:
 
