@@ -13,6 +13,7 @@ import json
 from typing import Any
 
 from symbiote.core.ports import StoragePort
+from symbiote.core.subjects import ANY_SUBJECT, AnySubject
 
 
 def _decode(row: dict, *columns: str) -> dict:
@@ -59,12 +60,17 @@ class KernelInspector:
         symbiote_id: str | None = None,
         *,
         status: str | None = None,
+        subject_key: str | None | AnySubject = ANY_SUBJECT,
         limit: int = 50,
     ) -> list[dict]:
-        """Sessions, newest first, with the symbiote's name and the score (if any)."""
+        """Sessions, newest first, with the symbiote's name and the score (if any).
+
+        ``subject_key`` keeps the sessions of one end user; ``None`` keeps
+        the ones without an end user. By default, all of them.
+        """
         sql = (
             "SELECT s.id, s.symbiote_id, sym.name AS symbiote_name, s.goal, s.status, "
-            "s.external_key, s.started_at, s.ended_at, s.summary, "
+            "s.external_key, s.subject_key, s.started_at, s.ended_at, s.summary, "
             "sc.auto_score, sc.user_score, sc.final_score, sc.stop_reason "
             "FROM sessions s JOIN symbiotes sym ON sym.id = s.symbiote_id "
             "LEFT JOIN session_scores sc ON sc.session_id = s.id"
@@ -77,6 +83,11 @@ class KernelInspector:
         if status is not None:
             conditions.append("s.status = ?")
             params.append(status)
+        if subject_key is None:
+            conditions.append("s.subject_key IS NULL")
+        elif not isinstance(subject_key, AnySubject):
+            conditions.append("s.subject_key = ?")
+            params.append(subject_key)
         if conditions:
             sql += " WHERE " + " AND ".join(conditions)
         sql += " ORDER BY s.started_at DESC, s.rowid DESC LIMIT ?"
@@ -100,15 +111,28 @@ class KernelInspector:
         *,
         include_inactive: bool = False,
         category: str | None = None,
+        subject_key: str | None | AnySubject = ANY_SUBJECT,
         limit: int = 200,
     ) -> list[dict]:
-        """A symbiote's memories, newest first (active only by default)."""
+        """A symbiote's memories, newest first (active only by default).
+
+        Each row carries its ``subject_key`` (``None``: shared by every
+        session). ``subject_key="..."`` keeps the memories of that end user
+        alone; ``subject_key=None`` keeps the shared ones. By default, every
+        partition.
+        """
         sql = (
-            "SELECT id, session_id, type, category, scope, content, tags_json, importance, "
+            "SELECT id, session_id, subject_key, type, category, scope, content, "
+            "tags_json, importance, "
             "source, confidence, created_at, last_used_at, updated_at, is_active "
             "FROM memory_entries WHERE symbiote_id = ?"
         )
         params: list[Any] = [symbiote_id]
+        if subject_key is None:
+            sql += " AND subject_key IS NULL"
+        elif not isinstance(subject_key, AnySubject):
+            sql += " AND subject_key = ?"
+            params.append(subject_key)
         if not include_inactive:
             sql += " AND is_active = 1"
         if category is not None:
@@ -118,6 +142,51 @@ class KernelInspector:
         params.append(limit)
         rows = self._storage.fetch_all(sql, tuple(params))
         return [_decode(r, "tags_json") for r in rows]
+
+    def list_subjects(self, symbiote_id: str, *, limit: int = 200) -> list[dict]:
+        """The end users of a symbiote, most recently seen first.
+
+        One row per ``subject_key`` that has a session or a memory:
+        ``sessions`` (how many), ``last_session_at`` (start of the newest,
+        None when only memories are left) and ``memories`` (active ones).
+        """
+        sessions = self._storage.fetch_all(
+            "SELECT subject_key, COUNT(*) AS sessions, MAX(started_at) AS last_session_at "
+            "FROM sessions WHERE symbiote_id = ? AND subject_key IS NOT NULL "
+            "GROUP BY subject_key",
+            (symbiote_id,),
+        )
+        memories = self._storage.fetch_all(
+            "SELECT subject_key, COUNT(*) AS memories FROM memory_entries "
+            "WHERE symbiote_id = ? AND subject_key IS NOT NULL AND is_active = 1 "
+            "GROUP BY subject_key",
+            (symbiote_id,),
+        )
+        subjects: dict[str, dict] = {}
+        for row in sessions:
+            subjects[row["subject_key"]] = {
+                "subject_key": row["subject_key"],
+                "sessions": int(row["sessions"]),
+                "last_session_at": row["last_session_at"],
+                "memories": 0,
+            }
+        for row in memories:
+            entry = subjects.setdefault(
+                row["subject_key"],
+                {
+                    "subject_key": row["subject_key"],
+                    "sessions": 0,
+                    "last_session_at": None,
+                    "memories": 0,
+                },
+            )
+            entry["memories"] = int(row["memories"])
+        ordered = sorted(
+            subjects.values(),
+            key=lambda s: (s["last_session_at"] or "", s["subject_key"]),
+            reverse=True,
+        )
+        return ordered[:limit]
 
     # ── scores & traces ────────────────────────────────────────────────
 

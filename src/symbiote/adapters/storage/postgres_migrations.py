@@ -407,12 +407,25 @@ _V5_TOOL_VISIBILITY = """
 ALTER TABLE environment_configs ADD COLUMN tool_visibility TEXT COLLATE "C" DEFAULT 'tagged';
 """
 
+_V6_SUBJECT_KEY = """
+ALTER TABLE sessions ADD COLUMN subject_key TEXT COLLATE "C";
+
+ALTER TABLE memory_entries ADD COLUMN subject_key TEXT COLLATE "C";
+
+ALTER TABLE environment_configs ADD COLUMN learn_from_subject_sessions INTEGER DEFAULT 0;
+
+CREATE INDEX idx_memory_symbiote_subject ON memory_entries(symbiote_id, subject_key, is_active);
+
+CREATE INDEX idx_sessions_symbiote_subject ON sessions(symbiote_id, subject_key);
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "baseline", _V1_BASELINE),
     (2, "session_locks", _V2_SESSION_LOCKS),
     (3, "skill_library", _V3_SKILL_LIBRARY),
     (4, "cancel_relay", _V4_CANCEL_RELAY),
     (5, "tool_visibility", _V5_TOOL_VISIBILITY),
+    (6, "subject_key", _V6_SUBJECT_KEY),
 )
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

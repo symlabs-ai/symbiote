@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 
 from symbiote.environment.descriptors import ToolDescriptor
+from symbiote.environment.exec_context import current_tool_context
 
 if TYPE_CHECKING:
     from symbiote.core.kernel import SymbioteKernel
@@ -89,7 +90,8 @@ class SubagentManager:
 
     When a Symbiota calls the ``spawn`` tool, this manager:
     1. Resolves the target Symbiota (by name or ID)
-    2. Creates an isolated session on the target
+    2. Creates an isolated session on the target, for the same end user
+       (``subject_key``) as the session that delegated
     3. Runs the task via the kernel's message flow
     4. Returns the result to the caller
 
@@ -209,6 +211,7 @@ class SubagentManager:
             session = self._kernel.start_session(
                 symbiote_id=target.id,
                 goal=f"[subagent] {task}",
+                subject_key=self._calling_subject(),
             )
 
             # Build per-call LLM overrides. Only carry ``mode`` when
@@ -261,6 +264,20 @@ class SubagentManager:
                 with contextlib.suppress(Exception):
                     self._kernel.close_session(session.id)
             _spawn_depth.reset(depth_token)
+
+    def _calling_subject(self) -> str | None:
+        """The end user of the session that called ``spawn``.
+
+        The delegated symbiote works for that same person: it reads the
+        person's partition of its own memory and stores there what it
+        learns. Taken from the calling session, never from the tool's
+        parameters, which the model writes.
+        """
+        caller = current_tool_context()
+        if caller is None or not caller.session_id:
+            return None
+        parent = self._kernel.get_session(caller.session_id)
+        return parent.subject_key if parent is not None else None
 
     def _resolve_symbiote(self, name_or_id: str):
         """Resolve a Symbiota by name or ID."""

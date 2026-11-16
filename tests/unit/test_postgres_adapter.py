@@ -97,7 +97,7 @@ def test_tool_visibility_migration_upgrades_existing_configs(
 
     adapter.init_schema()
 
-    assert adapter.schema_version() == 5
+    assert adapter.schema_version() == SCHEMA_VERSION
     row = adapter.fetch_one("SELECT tool_visibility FROM environment_configs WHERE id = ?", ("cfg-1",))
     assert row == {"tool_visibility": "tagged"}
     env = EnvironmentManager(adapter)
@@ -105,6 +105,50 @@ def test_tool_visibility_migration_upgrades_existing_configs(
     env.configure(symbiote_id="sym-1", tool_visibility="authorized")
     assert env.get_tool_visibility("sym-1") == "authorized"
     assert env.list_tools("sym-1") == ["tasks_list"]  # the rest of the row survives
+    adapter.close()
+
+
+@needs_postgres
+def test_subject_key_migration_upgrades_existing_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Migration 6 adds ``subject_key`` to a database already at version 5:
+    the sessions and memories written before it belong to no end user, and
+    the symbiote does not learn from end users' sessions."""
+    import symbiote.adapters.storage.postgres as pg_module
+    from symbiote.adapters.storage.postgres_migrations import MIGRATIONS
+    from symbiote.core.session import SessionManager
+    from symbiote.environment.manager import EnvironmentManager
+
+    adapter = _adapter()
+    with monkeypatch.context() as m:
+        m.setattr(pg_module, "MIGRATIONS", tuple(v for v in MIGRATIONS if v[0] <= 5))
+        adapter.init_schema()
+    assert adapter.schema_version() == 5
+    adapter.execute("INSERT INTO symbiotes (id, name) VALUES (?, ?)", ("sym-1", "a"))
+    adapter.execute(
+        "INSERT INTO sessions (id, symbiote_id, status, started_at) VALUES (?, ?, ?, ?)",
+        ("ses-1", "sym-1", "active", "2026-01-01T00:00:00+00:00"),
+    )
+    adapter.execute(
+        "INSERT INTO memory_entries (id, symbiote_id, type, scope, content, source, "
+        "created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ("mem-1", "sym-1", "factual", "global", "old fact about Acme", "user",
+         "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+    )
+    adapter.execute(
+        "INSERT INTO environment_configs (id, symbiote_id, tools_json) VALUES (?, ?, ?)",
+        ("cfg-1", "sym-1", "[]"),
+    )
+
+    adapter.init_schema()
+
+    assert adapter.schema_version() == SCHEMA_VERSION
+    assert SessionManager(adapter).get("ses-1").subject_key is None
+    memory = MemoryStore(adapter)
+    assert [m.subject_key for m in memory.search("Acme", symbiote_id="sym-1")] == [None]
+    assert memory.search("Acme", symbiote_id="sym-1", subject_key="ana")  # shared: visible
+    assert EnvironmentManager(adapter).get_config("sym-1").learn_from_subject_sessions is False
     adapter.close()
 
 

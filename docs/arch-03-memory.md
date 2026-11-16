@@ -229,6 +229,30 @@ pie title Context Budget — Instant Mode
     "User Input + Tools" : 20
 ```
 
+## Memoria por usuario final (`subject_key`)
+
+Um symbiote que conversa com varias pessoas guarda uma particao de memoria por pessoa. O host informa quem e a pessoa ao abrir a sessao (`kernel.start_session(symbiote_id, subject_key="...")`); o kernel so compara o valor por igualdade. A particao e o par (symbiote, `subject_key`), e `subject_key` nulo e a particao compartilhada.
+
+| | Sessao com `subject_key = S` | Sessao sem `subject_key` |
+|---|---|---|
+| Le | as memorias compartilhadas e as de `S` | so as compartilhadas |
+| Grava | so na particao de `S` | nas compartilhadas |
+
+As duas regras ficam no `MemoryStore`, o ponto por onde toda leitura e toda escrita passam:
+
+- **Escrita**: `store()` consulta a sessao da entrada e preenche `MemoryEntry.subject_key`. Reflexao, memoria de falha, handoff, consolidacao e `learn` nao precisam passar a chave. Uma entrada que nomeia outro usuario que nao o da sua sessao e recusada.
+- **Leitura**: `search`, `get_relevant`, `get_standing`, `get_by_type` e `get_by_category` recebem a `subject_key` da sessao atendida. O filtro entra no SQL antes do limite de candidatas do recall (`_RECALL_CANDIDATES`), entao memorias de outros usuarios nao tiram as compartilhadas da lista.
+- **Alteracao**: `update` e `deactivate` aceitam `subject_key` e tratam como inexistente a memoria de outra particao. A reflexao por LLM so oferece como alvo de PATCH as memorias da propria particao da sessao.
+
+O que acompanha a particao:
+
+- **Delegacao**: a sessao aberta pelo `spawn` herda a `subject_key` da sessao que delegou.
+- **Dream**: `prune` julga cada memoria sozinha e cobre todas as particoes; `reconcile` e `generalize` trabalham so na compartilhada.
+- **Aprendizado do symbiote como um todo**: com `EnvironmentConfig.learn_from_subject_sessions` desligado (padrao), as sessoes de usuarios finais tem score gravado, mas o `ParameterTuner`, o evolver do harness, as fases `mine` e `evaluate` do dream e o review de skills as ignoram.
+- **Inspecao e exclusao**: `kernel.inspector.list_subjects()`, `list_memories(subject_key=...)` e `kernel.purge_subject(symbiote_id, subject_key)`.
+
+`MemoryEntry.scope` continua sendo um rotulo (`global`, `user`, `session`...), sem efeito sobre quem le a memoria.
+
 ## Notas
 
 - **Memorias nunca sao deletadas** — usam soft-delete (`is_active=False`). O `DreamEngine.PrunePhase` e o unico mecanismo que desativa memorias obsoletas.

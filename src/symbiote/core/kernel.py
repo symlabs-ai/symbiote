@@ -30,6 +30,7 @@ from symbiote.core.exceptions import (
     SessionBusyError,
     SessionLockLostError,
     TurnCancelledError,
+    ValidationError,
 )
 from symbiote.core.hooks import CompositeHook
 from symbiote.core.identity import IdentityManager
@@ -50,6 +51,12 @@ from symbiote.core.session_lock import (
     InProcessSessionLock,
     SessionLease,
     renew_interval,
+)
+from symbiote.core.subjects import (
+    learns_from_subjects,
+    subject_kwargs,
+    subject_of_session,
+    validate_subject_key,
 )
 from symbiote.core.turn_control import (
     CANCELLED,
@@ -766,13 +773,30 @@ class SymbioteKernel:
         symbiote_id: str,
         goal: str | None = None,
         external_key: str | None = None,
+        subject_key: str | None = None,
     ) -> Session:
         """Start a session. Raises EntityNotFoundError for an unknown symbiote
-        (instead of a bare FOREIGN KEY IntegrityError)."""
+        (instead of a bare FOREIGN KEY IntegrityError).
+
+        ``subject_key`` names the end user on the other side when the
+        symbiote talks to several people: an opaque string the host chooses
+        (a user id, a visitor cookie), compared only for equality. The
+        session then reads the symbiote's shared memories plus that user's
+        own, and everything it learns is stored for that user alone; no
+        other end user sees it. It cannot be changed after the session
+        starts. Without it (the default) the session reads and writes the
+        shared memory, as before. Whether such sessions also feed the
+        harness and the skills is
+        ``EnvironmentConfig.learn_from_subject_sessions``. Raises
+        ``ValidationError`` for an empty or too long key.
+        """
         if self._identity.get(symbiote_id) is None:
             raise EntityNotFoundError("Symbiote", symbiote_id)
         return self._sessions.start(
-            symbiote_id=symbiote_id, goal=goal, external_key=external_key
+            symbiote_id=symbiote_id,
+            goal=goal,
+            external_key=external_key,
+            subject_key=subject_key,
         )
 
     def get_or_create_session(
@@ -780,12 +804,19 @@ class SymbioteKernel:
         symbiote_id: str,
         external_key: str,
         goal: str | None = None,
+        subject_key: str | None = None,
     ) -> Session:
-        """Find or create a session by external key (e.g. user_id:url_key)."""
+        """Find or create a session by external key (e.g. user_id:url_key).
+
+        ``subject_key`` (see ``start_session``) is given to a session created
+        here. A session that already exists keeps its own; asking for it with
+        a different ``subject_key`` raises ``ValidationError``.
+        """
         return self._sessions.get_or_create_by_external_key(
             symbiote_id=symbiote_id,
             external_key=external_key,
             goal=goal,
+            subject_key=subject_key,
         )
 
     def get_session(self, session_id: str) -> Session | None:
@@ -1710,7 +1741,14 @@ class SymbioteKernel:
         if msg_row is None or msg_row["c"] > 0:
             return extra_context
 
-        handoff_entries = self._memory.get_by_category(symbiote_id, "handoff", limit=1)
+        # Only a handoff left by the same end user (or, without one, by the
+        # shared sessions): one person's unfinished project is never resumed
+        # in another person's conversation.
+        subject = subject_kwargs(self._memory, session_id)
+        handoff_entries = self._memory.get_by_category(
+            symbiote_id, "handoff", limit=1,
+            **({**subject, "include_shared": False} if subject else {}),
+        )
         if not handoff_entries:
             return extra_context
 
@@ -2106,6 +2144,84 @@ class SymbioteKernel:
                     self._handoffs.pop(sid, None)
         return counts
 
+    # Every table that carries a session id: what a session of an end user
+    # leaves behind besides its memories.
+    _PURGE_SUBJECT_BY_SESSION = (
+        *_PURGE_BY_SESSION,
+        "turn_contexts",
+        "execution_traces",
+        "session_scores",
+        "reflection_audit",
+        "skill_review_audit",
+        "audit_log",
+    )
+
+    def purge_subject(
+        self, symbiote_id: str, subject_key: str, *, dry_run: bool = False
+    ) -> dict[str, int]:
+        """Erase what the kernel stored about one end user of a symbiote.
+
+        Deletes the sessions started with ``subject_key`` for this symbiote,
+        their messages, decisions, traces, scores and audit rows, and every
+        memory of that end user's partition. The shared memories and the
+        other end users are left untouched. Returns the rows deleted per
+        table (or that would be, with ``dry_run``); an end user the symbiote
+        never saw gives zeros.
+
+        The same key under another symbiote is another partition: when the
+        person also talked to symbiotes this one delegated to (``spawn``),
+        call this for each of them.
+
+        Cannot be undone. Not covered, because they are no longer tied to
+        the person: skills written from their sessions and the scores
+        already added to the harness versions, both of which exist only if
+        ``learn_from_subject_sessions`` was on. Stop sending turns for the
+        end user first: rows written by a turn still in flight are not
+        covered. The deletes are one transaction (all or nothing).
+
+        Raises ``EntityNotFoundError`` when the symbiote does not exist and
+        ``ValidationError`` for an empty ``subject_key``.
+        """
+        subject = validate_subject_key(subject_key)
+        if subject is None:
+            raise ValidationError("purge_subject needs a subject_key")
+        if self._storage.fetch_one(
+            "SELECT id FROM symbiotes WHERE id = ?", (symbiote_id,)
+        ) is None:
+            raise EntityNotFoundError("Symbiote", symbiote_id)
+
+        sessions = "SELECT id FROM sessions WHERE symbiote_id = ? AND subject_key = ?"
+        owner = (symbiote_id, subject)
+        targets: list[tuple[str, str, tuple]] = [
+            (table, f"session_id IN ({sessions})", owner)
+            for table in self._PURGE_SUBJECT_BY_SESSION
+        ]
+        targets.append((
+            "memory_entries",
+            f"symbiote_id = ? AND (subject_key = ? OR session_id IN ({sessions}))",
+            (*owner, *owner),
+        ))
+        targets.append(("sessions", "symbiote_id = ? AND subject_key = ?", owner))
+
+        session_ids = [r["id"] for r in self._storage.fetch_all(sessions, owner)]
+        counts: dict[str, int] = {}
+        with self._storage.transaction():
+            for table, where, params in targets:
+                row = self._storage.fetch_one(
+                    f"SELECT COUNT(*) AS c FROM {table} WHERE {where}", params  # noqa: S608
+                )
+                found = int(row["c"]) if row else 0
+                counts[table] = found
+                if not dry_run and found:
+                    self._storage.execute(
+                        f"DELETE FROM {table} WHERE {where}", params  # noqa: S608
+                    )
+        if not dry_run:
+            with self._handoffs_lock:
+                for sid in session_ids:
+                    self._handoffs.pop(sid, None)
+        return counts
+
     def _quiesce_symbiote(self, symbiote_id: str, timeout: float = 5.0) -> None:
         """Wait briefly for the symbiote's background work and forget its
         cached per-symbiote objects."""
@@ -2404,9 +2520,24 @@ class SymbioteKernel:
 
         # Track score per active harness version (for evolution rollback).
         # Only on the session's first score, so re-closing does not count it twice.
+        # The session of an end user counts only when the symbiote learns
+        # from those sessions.
+        if not self._session_feeds_learning(session_id, symbiote_id):
+            return
         from symbiote.harness.evolver import EVOLVABLE_COMPONENTS
         for component in EVOLVABLE_COMPONENTS:
             self._harness_versions.update_score(symbiote_id, component, final)
+
+    def _session_feeds_learning(self, session_id: str, symbiote_id: str) -> bool:
+        """Whether a session counts for what is learned for the symbiote as
+        a whole (harness scores, tuner, evolver, dream, skill review).
+
+        Always for a session without an end user; for the session of an end
+        user, only when ``learn_from_subject_sessions`` is on.
+        """
+        if subject_of_session(self._storage, session_id) is None:
+            return True
+        return learns_from_subjects(self._storage, symbiote_id)
 
     def _generate_failure_memory(
         self, session_id: str, symbiote_id: str, trace: LoopTrace | None

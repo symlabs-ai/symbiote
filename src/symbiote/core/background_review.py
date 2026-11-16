@@ -58,6 +58,7 @@ from symbiote.core.provenance import (
     reset_current_write_origin,
     set_current_write_origin,
 )
+from symbiote.core.subjects import learns_from_subjects, subject_of_session
 from symbiote.skills.store import (
     SkillError,
     SkillsStore,
@@ -223,6 +224,12 @@ class BackgroundReviewEngine:
             "skipped": 0,
             "ops": [],
         }
+        if self._is_excluded(session_id, symbiote_id):
+            # Not a review: no LLM call and no audit row.
+            self._release(session_id)
+            result["ok"] = True
+            result["excluded"] = True
+            return result
         try:
             messages = self._messages.get_messages(session_id, limit)
             if not messages:
@@ -262,18 +269,38 @@ class BackgroundReviewEngine:
             )
             result["error"] = f"{type(exc).__name__}: {exc}"
         finally:
-            # Release the per-session slot so the next nudge can spawn
-            # a fresh thread. Only remove if WE own the entry — a future
-            # spawn may have replaced it (shouldn't happen with the
-            # is_alive() guard, but defend in depth).
-            with self._active_lock:
-                current = self._active.get(session_id)
-                if current is threading.current_thread():
-                    del self._active[session_id]
+            self._release(session_id)
             # Sprint 5 — best-effort audit row. Never blocks return, never
             # raises (audit failure logged then swallowed).
             self._write_audit(session_id, symbiote_id, trigger, result)
         return result
+
+    def _release(self, session_id: str) -> None:
+        """Release the per-session slot so the next nudge can spawn a fresh
+        thread. Only removes the entry if this thread owns it — a future
+        spawn may have replaced it (shouldn't happen with the is_alive()
+        guard, but defend in depth)."""
+        with self._active_lock:
+            current = self._active.get(session_id)
+            if current is threading.current_thread():
+                del self._active[session_id]
+
+    def _is_excluded(self, session_id: str, symbiote_id: str) -> bool:
+        """True for the session of an end user (``subject_key``) of a
+        symbiote that does not learn from those sessions
+        (``learn_from_subject_sessions`` off): what one visitor did must not
+        become a skill every other session gets. Needs the storage; without
+        it nothing is excluded."""
+        if self._storage is None:
+            return False
+        try:
+            if subject_of_session(self._storage, session_id) is None:
+                return False
+            return not learns_from_subjects(self._storage, symbiote_id)
+        except Exception as exc:
+            # Not knowing whose session it is, do not learn from it.
+            _log.warning("skill review: cannot tell the session's subject: %s", exc)
+            return True
 
     def _write_audit(
         self,

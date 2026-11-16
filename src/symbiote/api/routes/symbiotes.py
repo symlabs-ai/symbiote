@@ -169,7 +169,7 @@ def set_config(
         "tools", "tool_mode", "tool_loading", "tool_tags", "tool_visibility",
         "max_tool_iterations",
         "tool_call_timeout", "loop_timeout", "memory_share", "knowledge_share",
-        "context_mode", "prompt_caching",
+        "context_mode", "prompt_caching", "learn_from_subject_sessions",
     ):
         val = getattr(body, field_name, None)
         if val is not None:
@@ -226,6 +226,7 @@ def _build_config_response(env: EnvironmentManager, symbiote_id: str) -> ConfigR
         knowledge_share=cfg.knowledge_share,
         context_mode=cfg.context_mode,
         prompt_caching=cfg.prompt_caching,
+        learn_from_subject_sessions=cfg.learn_from_subject_sessions,
         planner_prompt=lr_cfg.get("planner_prompt"),
         evaluator_prompt=lr_cfg.get("evaluator_prompt"),
         evaluator_criteria=lr_cfg.get("evaluator_criteria"),

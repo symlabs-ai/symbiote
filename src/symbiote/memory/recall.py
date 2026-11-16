@@ -210,8 +210,10 @@ class SemanticRecallProvider:
         """Fetch candidate entries using OR-based keyword matching."""
         from symbiote.memory.store import MemoryStore
 
-        # Build OR conditions for each keyword
-        conditions = ["is_active = 1"]
+        # Build OR conditions for each keyword. This provider is not told
+        # which end user it serves, so it reads the shared memories only
+        # (``subject_key``, see ``symbiote.core.subjects``).
+        conditions = ["is_active = 1", "subject_key IS NULL"]
         params: list = []
 
         # Match any keyword in content or tags

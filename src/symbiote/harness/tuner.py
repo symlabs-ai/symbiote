@@ -19,6 +19,7 @@ from typing import Any
 
 from symbiote.core.ports import StoragePort
 from symbiote.core.sql import days_ago
+from symbiote.core.subjects import learning_sessions_clause
 
 logger = logging.getLogger(__name__)
 
@@ -279,17 +280,23 @@ class ParameterTuner:
     # ── Data access ──────────────────────────────────────────────────────
 
     def _get_recent_traces(self, symbiote_id: str, days: int) -> list[dict]:
+        # End users' sessions enter only if the symbiote learns from them
+        # (``learn_from_subject_sessions``).
+        learning = learning_sessions_clause(self._storage, symbiote_id)
         return self._storage.fetch_all(
             "SELECT * FROM execution_traces "
-            "WHERE symbiote_id = ? AND created_at >= ? "
+            "WHERE symbiote_id = ? AND created_at >= ?"
+            f"{learning} "
             "ORDER BY created_at DESC",
             (symbiote_id, days_ago(days)),
         )
 
     def _get_recent_scores(self, symbiote_id: str, days: int) -> list[dict]:
+        learning = learning_sessions_clause(self._storage, symbiote_id)
         return self._storage.fetch_all(
             "SELECT * FROM session_scores "
-            "WHERE symbiote_id = ? AND computed_at >= ? "
+            "WHERE symbiote_id = ? AND computed_at >= ?"
+            f"{learning} "
             "ORDER BY computed_at DESC",
             (symbiote_id, days_ago(days)),
         )

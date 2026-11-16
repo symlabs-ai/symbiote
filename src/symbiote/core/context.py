@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.identity import IdentityManager
 from symbiote.core.ports import KnowledgePort, MemoryPort
+from symbiote.core.subjects import subject_kwargs
 from symbiote.memory.working import WorkingMemory
 
 if TYPE_CHECKING:
@@ -146,17 +147,21 @@ class ContextAssembler:
         """
         self._skills_loader_resolver = resolver
 
-    def _standing_memories(self, symbiote_id: str) -> list:
+    def _standing_memories(
+        self, symbiote_id: str, subject: dict[str, Any] | None = None
+    ) -> list:
         """Preferences and constraints for every turn (most important first).
 
-        A memory port without ``get_standing`` (a host's own) keeps the
-        relevance-only behaviour.
+        ``subject`` is the session's ``subject_kwargs``: the shared ones plus
+        the end user's own. A memory port without ``get_standing`` (a host's
+        own) keeps the relevance-only behaviour.
         """
         get_standing = getattr(self._memory, "get_standing", None)
         if not self._standing_memory_limit or get_standing is None:
             return []
         return list(get_standing(
-            symbiote_id, STANDING_MEMORY_TYPES, self._standing_memory_limit
+            symbiote_id, STANDING_MEMORY_TYPES, self._standing_memory_limit,
+            **(subject or {}),
         ))
 
     def _loader_for(self, symbiote_id: str):
@@ -213,12 +218,18 @@ class ContextAssembler:
         # 3. Relevant memories (skipped in on_demand mode)
         memories_dicts: list[dict] = []
         if context_mode != "on_demand":
+            # The session of an end user reads the shared memories plus that
+            # user's own; any other session, the shared ones.
+            subject = subject_kwargs(self._memory, session_id)
             raw_memories = self._memory.get_relevant(
-                user_input, session_id, symbiote_id=symbiote_id
+                user_input, session_id, symbiote_id=symbiote_id, **subject
             )
             recalled = {m.id for m in raw_memories}
             raw_memories = [
-                *(m for m in self._standing_memories(symbiote_id) if m.id not in recalled),
+                *(
+                    m for m in self._standing_memories(symbiote_id, subject)
+                    if m.id not in recalled
+                ),
                 *raw_memories,
             ]
             memories_dicts = [

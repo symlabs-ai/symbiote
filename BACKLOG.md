@@ -13,6 +13,7 @@
 | B-45 | Test harness pytest — validar tests/e2e/test_kimi_tool_loop.py (requer YouNews + SymGateway rodando) | 2026-03-20, harness | baixa | |
 | B-46 | **[BUG] 4 testes pré-existentes falhos em test_generation_settings + test_instant_mode**: assertions mockam `_run_instant(ctx, on_token)` sem o kwarg `llm_config=None` adicionado na v0.5.0. Fix trivial: atualizar 4 assert chamadas pra `_run_instant(ctx, on_token, llm_config=None)`. Não é regressão funcional, é só drift de teste. Ver F3 detalhamento abaixo. | 2026-05-27, sprint5-followup | baixa | ✅ resolvido 2026-05-28 |
 | B-47 | **[BUG] `SQLiteAdapter` single-cursor thread safety**: conexão única compartilhada entre threads. Race em writes/reads concorrentes manifesta como `sqlite3.InterfaceError: bad parameter or other API misuse` (visto no teste H1 do Sprint 4.1). Mitigado em produção single-user (rotinas mid-session são sequenciais), mas qualquer nova feature paralela morre nele. Fix: lock em `SQLiteAdapter` ou connection pool. Ver F4 detalhamento. | 2026-05-27, sprint5-followup | média | ✅ resolvido 2026-05-28 (opção 1: lock) |
+| B-79 | **Memória por usuário final (`subject_key`)**: a memória é particionada só por `symbiote_id`, então um symbiota que atende várias pessoas mistura o que aprende de cada uma. Adicionar uma chave opaca de usuário final à sessão e à memória: a sessão lê a memória compartilhada mais a do próprio usuário e grava só na do usuário. Bloqueia a publicação de symbiotas para terceiros no estúdio de symbiotas. Ver detalhamento em "Detalhamento de features". | 2026-11-16, estúdio de symbiotas | alta | ✅ resolvido 2026-11-16 (v0.8.9). Ver "Como ficou" no detalhamento |
 
 ### Detalhamento dos itens pendentes
 
@@ -211,3 +212,76 @@ Actual:   _run_instant(<AssembledContext...>, None, llm_config=None)
 Decisão pendente do mantenedor. Pro caso single-user local-first, opção 1 é suficiente.
 
 **Estimativa**: opção 1 = ~30 LoC + teste de stress concorrente. <2h.
+
+## Detalhamento de features
+
+### B-79 — Memória por usuário final (`subject_key`)
+
+**Para quem é.** Hosts em que um mesmo symbiota conversa com várias pessoas. O caso que motiva o pedido é o estúdio de symbiotas, um produto novo que fica em outro repositório e usa o Symbiote como engine. Nele o dono cria um symbiota e o publica para terceiros, por API key ou por um widget de chat. Cada terceiro precisa ter a própria memória com aquele symbiota, sem ver a dos outros.
+
+**Como é hoje.**
+
+- A tabela `memory_entries` tem `symbiote_id` e `session_id`, e nenhuma coluna que diga de qual pessoa é a memória (`src/symbiote/adapters/storage/sqlite.py:50`).
+- `MemoryEntry.scope` aceita o valor `"user"`, mas é só um rótulo: não há campo com a identidade do usuário, e o recall não filtra por ele (`src/symbiote/core/models.py:106`).
+- Todas as leituras filtram só por symbiota: `get_relevant`, `get_standing`, `search`, `get_by_type` e `get_by_category` em `src/symbiote/memory/store.py`.
+- Tudo o que grava usa `scope="global"`: a reflexão (`src/symbiote/core/reflection.py:358`, `:634`, `:716`), a memória de falha (`src/symbiote/core/kernel.py:2450`), o handoff do long-run (`src/symbiote/core/kernel.py:1741`) e o `teach` (`src/symbiote/core/capabilities.py:93`).
+- `Session.external_key` identifica a conversa para o host reencontrá-la. O kernel não o usa para separar memória.
+
+O efeito: o que o visitante A conta ao symbiota entra no recall do visitante B, e qualquer visitante consegue gravar uma "regra" que todos os outros passam a receber no prompt.
+
+**O que se pede.**
+
+1. **Uma chave de usuário final, `subject_key`.** É um texto opaco que o host informa ao criar a sessão e que identifica a pessoa do outro lado. O kernel não interpreta o valor; só compara por igualdade. `NULL` significa "sem usuário final", que é o comportamento de hoje. O nome é uma proposta; o time pode escolher outro.
+   - `Session.subject_key`, definido em `start_session(..., subject_key=None)` e em `get_or_create_session`, e imutável depois.
+   - `MemoryEntry.subject_key`, com a coluna `memory_entries.subject_key TEXT NULL` e um índice por `(symbiote_id, subject_key)`. A migração vale para SQLite e Postgres.
+   - Mesmo limite de tamanho do `external_key` (`MAX_KEY_CHARS`); texto vazio é recusado.
+
+2. **Regra de leitura.** Uma sessão com `subject_key = S` enxerga as memórias compartilhadas (`subject_key IS NULL`) e as de `S`. Uma sessão sem `subject_key` enxerga só as compartilhadas. O filtro precisa estar no SQL: o recall carrega um número fixo de candidatas ordenadas por importância (`_RECALL_CANDIDATES`), e filtrar depois deixaria as memórias de milhares de visitantes expulsarem as compartilhadas dessa lista.
+
+3. **Regra de escrita.** Toda memória gravada em nome de uma sessão com `subject_key = S` recebe `subject_key = S`. Uma sessão com usuário final nunca cria, altera nem desativa uma memória compartilhada ou de outro usuário. Isso inclui o PATCH que a reflexão por LLM faz em memórias existentes: o alvo precisa ser da mesma partição (`_resolve_target_id` e `_apply_llm_facts` em `src/symbiote/core/reflection.py`).
+
+4. **Onde a chave precisa chegar.**
+   - `ContextAssembler`: recall e memórias permanentes (`src/symbiote/core/context.py:216` e `_standing_memories`).
+   - A tool builtin `search_memories` (`src/symbiote/environment/tools.py:1028`): a chave vem da sessão que está chamando, nunca de um parâmetro que o modelo preenche.
+   - `spawn`: a sessão do symbiota delegado herda o `subject_key` da sessão que delegou. Sem isso, a delegação perde a memória do visitante ou grava na partição errada.
+   - Reflexão, consolidador (`src/symbiote/memory/consolidator.py:153`), memória de falha, handoff e as capabilities `teach`, `show` e `reflect`.
+   - Dream: nenhuma fase junta, generaliza ou reconcilia memórias de partições diferentes. O mínimo aceitável é o dream trabalhar só na partição compartilhada.
+   - API HTTP e SDK: `CreateSessionRequest.subject_key` e o equivalente no `SymbioteClient`.
+
+5. **Aprendizado a partir de sessões de terceiros.** Além da memória, o encerramento de sessão alimenta coisas que valem para o symbiota inteiro: o score (`session_scores`), que o tuner, o evolver do harness e o dream leem, e o review de skills. Decidido em 2026-11-16: isso é configurável por uma flag no `EnvironmentConfig`, por symbiota, que diz se as sessões com `subject_key` entram nesses cálculos. Com a flag desligada, a sessão ainda tem score gravado, mas o tuner, o evolver, as fases `mine` e `evaluate` do dream e o review de skills a ignoram. Com a flag ligada, elas contam como as sessões do dono.
+
+6. **Inspeção e exclusão.**
+   - `kernel.inspector`: listar memórias filtrando por `subject_key` e listar os usuários finais de um symbiota com a contagem de memórias e sessões.
+   - Uma operação que apaga tudo de um usuário final num symbiota (memórias, sessões e mensagens), para o dono atender um pedido de exclusão de dados.
+
+7. **Compatibilidade.** Sem `subject_key`, nada muda: as linhas existentes ficam com `NULL` e todo host atual continua como está. O parâmetro novo no `MemoryPort` é opcional e por nome. Um host que traz o próprio adapter de memória sem suporte à chave recebe um erro claro ao abrir uma sessão com `subject_key`, em vez de a partição ser ignorada em silêncio.
+
+**Critérios de aceite.**
+
+- Dois usuários finais do mesmo symbiota: o que um ensina não aparece no contexto, no `search_memories` nem na reflexão do outro.
+- Os dois recebem as memórias compartilhadas que o dono ensinou numa sessão sem `subject_key`.
+- Uma sessão com `subject_key` não consegue alterar nem desativar uma memória compartilhada, inclusive pelo PATCH da reflexão por LLM.
+- Com mais memórias de usuários finais do que `_RECALL_CANDIDATES`, as memórias compartilhadas continuam entrando no recall.
+- Numa delegação por `spawn`, o symbiota delegado lê e grava na partição do mesmo usuário final.
+- Um ciclo de dream não desativa, junta nem generaliza memórias de partições diferentes.
+- A exclusão de um usuário final remove as memórias, sessões e mensagens dele e deixa as dos outros intactas.
+- Um banco criado antes da migração abre e se comporta como antes, em SQLite e em Postgres.
+- Os caminhos síncrono e assíncrono se comportam igual (`tests/unit/test_sync_async_parity.py`).
+- `docs/arch-03-memory.md` e `docs/HOST_INTEGRATION.md` descrevem a chave e as duas regras.
+
+**Fora do escopo.** Ficam para tickets próprios: API keys restritas a um symbiota publicado, o subconjunto de tools que um symbiota publicado pode usar, limite de uso por chave e a caixa de aprovação assíncrona do dono.
+
+**Decisões em aberto.**
+
+- O valor padrão da flag do item 5. A proposta é desligado: conversas de terceiros não mudam o harness nem geram skills, a menos que o dono ligue.
+- Se o dono, numa sessão sem `subject_key`, deve ter um modo de recall que enxergue as partições dos usuários finais. A proposta é não: ele consulta pelo inspector.
+
+**Como ficou (2026-11-16).** Implementado conforme os itens 1 a 7, com estes pontos decididos na implementação:
+
+- As duas decisões em aberto seguiram a proposta: `learn_from_subject_sessions` nasce desligado, e a sessão sem `subject_key` lê só a partição compartilhada.
+- A regra de escrita está em `MemoryStore.store()`, que tira a partição da sessão da entrada. Nenhum escritor (reflexão, memória de falha, handoff, consolidador, `learn`) passa a chave, e um escritor novo já nasce dentro da regra.
+- Dream: `reconcile` e `generalize` trabalham só na partição compartilhada. `prune` cobre todas as partições, porque julga cada memória sozinha e sem ele a memória dos usuários finais só cresceria.
+- Item 7: o kernel sempre usa o próprio `MemoryStore`, então não há host com adapter de memória sem suporte passando por ele. Os componentes que aceitam um `MemoryPort` de fora (`ContextAssembler`, `ReflectionEngine`) só passam `subject_key` a um port que tenha `subject_for_session`; um port antigo é chamado como antes e lê a memória sem partição. O erro explícito pedido no item 7 não foi implementado, por não haver caminho no kernel que chegue a ele.
+- Além do pedido: o handoff de long-run só é retomado pela mesma pessoa; `ExportService.export_memory` e o `SemanticRecallProvider` leem só a partição compartilhada por padrão; `kernel.purge_subject` também apaga traces, scores e linhas de auditoria das sessões da pessoa.
+- Não coberto por `purge_subject`: skills escritas a partir das sessões da pessoa e scores já somados às versões do harness. Os dois só existem com `learn_from_subject_sessions` ligado.
+- Testes: `tests/unit/test_subject_key.py` (um por critério de aceite) e `test_subject_key_migration_upgrades_existing_rows` em `tests/unit/test_postgres_adapter.py`.

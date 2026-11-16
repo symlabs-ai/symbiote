@@ -162,6 +162,12 @@ Correções do relatório `reports/2026-11-13_relatorio-melhorias.md`. Detalhes 
 | API com inicialização única; CLI sem MarkupError nem traceback; índices, retenção opcional (`kernel.prune`) e `synchronous=NORMAL` | A-1 a A-3, C-1 a C-3, P-1 a P-3 | ✅ |
 | Streaming na API HTTP | D-17 | backlog (B-69) |
 
+### Pós-MVP (Memória por usuário final — 2026-11-16)
+
+| Feature | Backlog | Status |
+|---------|---------|--------|
+| Memória particionada por usuário final (`subject_key`): a sessão lê a memória compartilhada mais a do próprio usuário e grava só na dele; `spawn` herda a chave; `learn_from_subject_sessions` decide se essas sessões alimentam harness, dream e skills; `inspector.list_subjects` e `kernel.purge_subject` | B-79 | ✅ Entregue |
+
 ### O que está fora do escopo
 
 - Multi-tenant completo
@@ -227,6 +233,11 @@ Pipeline: identity → working memory → memories → knowledge → rank → tr
 Deny-by-default. Tools autorizadas via EnvironmentManager (`configure`, `add_tools`, `remove_tools`). Exceção: as meta-tools do modo ativo (`get_tool_schema` com `tool_loading="index"`; `search_memories`/`search_knowledge` com `context_mode="on_demand"`). Audit log com timestamp.
 **User Story**: US-04, US-09
 **Entrypoint**: via biblioteca (`PolicyGate.check()`)
+
+### Memória por usuário final
+Um symbiote que conversa com várias pessoas guarda uma partição de memória por pessoa. O host informa a pessoa ao abrir a sessão (`subject_key`); essa sessão lê as memórias compartilhadas mais as da pessoa e grava só na partição dela. Detalhes em `docs/HOST_INTEGRATION.md` ("End users").
+**User Story**: US-06 (backlog B-79)
+**Entrypoint**: `kernel.start_session(symbiote_id, subject_key="...")` / `POST /sessions` com `subject_key`
 
 ### Export
 Sessões, memórias e decisões exportáveis em Markdown legível.

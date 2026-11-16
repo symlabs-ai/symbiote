@@ -19,6 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from symbiote.core.subjects import subject_kwargs
 from symbiote.core.turn_control import check_turn
 from symbiote.core.turn_record import current_turn_record
 from symbiote.environment.descriptors import (
@@ -1033,16 +1034,21 @@ def _make_memory_search_handler(memory_store: Any) -> Callable[[dict], Any]:
         scope = params.get("scope")
         limit = params.get("limit", 5)
         symbiote_id = _calling_symbiote()
+        # The partition comes from the calling session, never from the
+        # model's params: the session of an end user searches the shared
+        # memories plus that user's own.
+        ctx = current_tool_context()
+        subject = subject_kwargs(memory_store, ctx.session_id if ctx else None)
         # Substring matches first, then memories sharing terms with the query:
         # models search with keywords ("prioridade financeira ano"), which are
         # rarely a literal substring of any memory.
         results = memory_store.search(
-            query, scope=scope, limit=limit, symbiote_id=symbiote_id
+            query, scope=scope, limit=limit, symbiote_id=symbiote_id, **subject
         )
         if len(results) < limit and query.strip():
             seen = {m.id for m in results}
             for entry in memory_store.get_relevant(
-                query, limit=limit * 2, symbiote_id=symbiote_id
+                query, limit=limit * 2, symbiote_id=symbiote_id, **subject
             ):
                 if entry.id in seen or (scope is not None and entry.scope != scope):
                     continue

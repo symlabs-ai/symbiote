@@ -12,6 +12,7 @@ from symbiote.core.identity import IdentityManager
 from symbiote.core.models import MemoryEntry
 from symbiote.core.ports import KnowledgePort, MemoryPort
 from symbiote.core.session import SessionManager
+from symbiote.core.subjects import subject_kwargs
 from symbiote.core.turn_record import current_turn_record
 from symbiote.runners.base import RunnerRegistry, RunResult
 
@@ -82,6 +83,10 @@ class CapabilitySurface:
     ) -> MemoryEntry:
         """Persist a durable fact as long-term memory.
 
+        In the session of an end user (a session with ``subject_key``) the
+        fact belongs to that end user; otherwise it is shared by every
+        session of the symbiote.
+
         Raises ``CapabilityError`` when long-term memory is off for the
         symbiote (``memory_enabled=False``).
         """
@@ -112,7 +117,10 @@ class CapabilitySurface:
     ) -> str:
         """Query knowledge + relevant memories, return a structured explanation."""
         knowledge_entries = self._knowledge.query(symbiote_id, query)
-        memories = self._memory.get_relevant(query, session_id, symbiote_id=symbiote_id)
+        memories = self._memory.get_relevant(
+            query, session_id, symbiote_id=symbiote_id,
+            **subject_kwargs(self._memory, session_id),
+        )
 
         parts: list[str] = []
 
@@ -300,7 +308,10 @@ class CapabilitySurface:
         query: str,
     ) -> str:
         """Format and return relevant data as readable Markdown."""
-        memories = self._memory.get_relevant(query, session_id, symbiote_id=symbiote_id)
+        memories = self._memory.get_relevant(
+            query, session_id, symbiote_id=symbiote_id,
+            **subject_kwargs(self._memory, session_id),
+        )
         knowledge_entries = self._knowledge.query(symbiote_id, query)
         messages = self._sessions.get_messages(session_id, limit=20)
 

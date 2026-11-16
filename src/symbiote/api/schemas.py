@@ -50,6 +50,10 @@ class CreateSessionRequest(BaseModel):
     symbiote_id: str = Field(max_length=MAX_KEY_CHARS)
     goal: str | None = Field(default=None, max_length=MAX_TEXT_CHARS)
     external_key: str | None = Field(default=None, max_length=MAX_KEY_CHARS)
+    # The end user this session belongs to: the session reads the symbiote's
+    # shared memories plus this user's own, and what it learns is stored for
+    # this user alone. An opaque value chosen by the host; cannot be changed.
+    subject_key: str | None = Field(default=None, min_length=1, max_length=MAX_KEY_CHARS)
 
 
 class SessionResponse(BaseModel):
@@ -57,6 +61,7 @@ class SessionResponse(BaseModel):
     symbiote_id: str
     goal: str | None = None
     external_key: str | None = None
+    subject_key: str | None = None
     status: str
     summary: str | None = None
 
@@ -77,6 +82,7 @@ class MemoryEntryResponse(BaseModel):
     id: str
     symbiote_id: str
     session_id: str | None = None
+    subject_key: str | None = None  # None: shared by every session
     type: str
     scope: str
     content: str
@@ -149,6 +155,8 @@ class ConfigRequest(BaseModel):
     knowledge_share: float | None = None
     context_mode: str | None = None  # "packed" | "on_demand"
     prompt_caching: bool | None = None
+    # Whether sessions of end users (subject_key) feed harness, dream and skills
+    learn_from_subject_sessions: bool | None = None
     # Long-run mode
     planner_prompt: str | None = None
     evaluator_prompt: str | None = None
@@ -173,6 +181,7 @@ class ConfigResponse(BaseModel):
     knowledge_share: float = 0.25
     context_mode: str = "packed"
     prompt_caching: bool = False
+    learn_from_subject_sessions: bool = False
     planner_prompt: str | None = None
     evaluator_prompt: str | None = None
     evaluator_criteria: list[dict] | None = None

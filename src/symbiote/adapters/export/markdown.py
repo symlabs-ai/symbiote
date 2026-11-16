@@ -95,13 +95,23 @@ class ExportService:
 
         return "\n".join(lines)
 
-    def export_memory(self, symbiote_id: str) -> str:
-        """Export long-term memories as Markdown, grouped by type."""
+    def export_memory(self, symbiote_id: str, *, subject_key: str | None = None) -> str:
+        """Export long-term memories as Markdown, grouped by type.
+
+        By default the memories shared by every session of the symbiote.
+        With ``subject_key``, the memories of that end user alone (what the
+        symbiote keeps about one person). The two are never mixed in one
+        export.
+        """
+        partition = "subject_key IS NULL"
+        params: tuple[str, ...] = (symbiote_id,)
+        if subject_key is not None:
+            partition, params = "subject_key = ?", (symbiote_id, subject_key)
         entries = self._storage.fetch_all(
             "SELECT * FROM memory_entries "
-            "WHERE symbiote_id = ? AND is_active = 1 "
+            f"WHERE symbiote_id = ? AND is_active = 1 AND {partition} "
             "ORDER BY type, importance DESC, created_at DESC",
-            (symbiote_id,),
+            params,
         )
 
         lines: list[str] = []

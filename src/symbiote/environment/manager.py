@@ -62,6 +62,8 @@ class EnvironmentManager:
         reflection_mode: str | None = None,
         reflection_max_tokens: int | None = None,
         memory_enabled: bool | None = None,
+        # End users' sessions (``subject_key``) feed harness, dream and skills
+        learn_from_subject_sessions: bool | None = None,
         # Skill self-improvement fields (Sprint 4)
         skill_review_enabled: bool | None = None,
         skill_injection_enabled: bool | None = None,
@@ -522,6 +524,7 @@ class EnvironmentManager:
             reflection_mode=row.get("reflection_mode") or "keyword",
             reflection_max_tokens=_int(row, "reflection_max_tokens", 4000),
             memory_enabled=bool(_int(row, "memory_enabled", 1)),
+            learn_from_subject_sessions=bool(_int(row, "learn_from_subject_sessions", 0)),
             skill_review_enabled=bool(row.get("skill_review_enabled", 0)),
             skill_injection_enabled=bool(row.get("skill_injection_enabled", 0)),
             skill_injection_mode=row.get("skill_injection_mode") or "full",

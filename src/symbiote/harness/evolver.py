@@ -21,6 +21,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from symbiote.core.sql import days_ago
+from symbiote.core.subjects import learning_sessions_clause
 from symbiote.harness.versions import HarnessVersionRepository
 
 if TYPE_CHECKING:
@@ -364,11 +365,17 @@ class HarnessEvolver:
         "ORDER BY t.created_at DESC, t.rowid DESC LIMIT 1) "
     )
 
+    def _learning(self, symbiote_id: str) -> str:
+        """End users' sessions enter only if the symbiote learns from them
+        (``learn_from_subject_sessions``)."""
+        return learning_sessions_clause(self._storage, symbiote_id, "ss.session_id")
+
     def _get_failed_sessions(self, symbiote_id: str, days: int) -> list[dict]:
         return self._storage.fetch_all(
             self._SESSIONS_WITH_LATEST_TRACE
             + "WHERE ss.symbiote_id = ? AND ss.final_score < 0.5 "
-            "AND ss.computed_at >= ? "
+            "AND ss.computed_at >= ?"
+            f"{self._learning(symbiote_id)} "
             "ORDER BY ss.final_score ASC LIMIT 20",
             (symbiote_id, days_ago(days)),
         )
@@ -377,7 +384,8 @@ class HarnessEvolver:
         return self._storage.fetch_all(
             self._SESSIONS_WITH_LATEST_TRACE
             + "WHERE ss.symbiote_id = ? AND ss.final_score >= 0.8 "
-            "AND ss.computed_at >= ? "
+            "AND ss.computed_at >= ?"
+            f"{self._learning(symbiote_id)} "
             "ORDER BY ss.final_score DESC LIMIT 10",
             (symbiote_id, days_ago(days)),
         )

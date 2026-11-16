@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from symbiote.core.models import MemoryEntry
+from symbiote.core.subjects import learning_sessions_clause
 from symbiote.dream.models import DreamContext, DreamPhaseResult
 from symbiote.skills import usage as skill_usage
 
@@ -65,7 +66,10 @@ class PrunePhase:
 
     Memory side (legacy): decay = days_since_last_used * (1 - importance);
     if decay > threshold, soft-delete. ``constraint`` and ``handoff`` types
-    are protected.
+    are protected. Each memory is judged alone, so this is the one phase
+    that also covers the partitions of end users (``subject_key``): a
+    visitor's stale memories decay like any other, and no memory of one
+    partition affects another's.
 
     Skills side (Sprint 4): walks the skill library via ``ctx.skills_loader``
     (when provided). For each skill with ``agent_created=true`` and
@@ -242,8 +246,11 @@ class ReconcilePhase:
 
     def run(self, ctx: DreamContext) -> DreamPhaseResult:
         start = datetime.now(tz=UTC)
+        # Shared memories only: a pair is never formed across end users'
+        # partitions, so one person's memory cannot replace another's.
         rows = ctx.storage.fetch_all(
-            "SELECT * FROM memory_entries WHERE is_active = 1 AND symbiote_id = ?",
+            "SELECT * FROM memory_entries WHERE is_active = 1 AND symbiote_id = ? "
+            "AND subject_key IS NULL",
             (ctx.symbiote_id,),
         )
 
@@ -350,6 +357,9 @@ class GeneralizePhase:
                 error="no_llm",
             )
 
+        # Shared memories only (what ``get_by_type`` returns without a
+        # subject): the rule written below is shared, and must not be
+        # distilled from what individual end users said.
         entries = ctx.memory.get_by_type(ctx.symbiote_id, "procedural", limit=100)
         # Earlier generalizations are not clustered again, and a cluster they
         # already cover is skipped (otherwise every cycle adds one more copy).
@@ -474,9 +484,12 @@ class MinePhase:
             )
 
         since = ctx.last_dream_at.isoformat() if ctx.last_dream_at else "1970-01-01"
+        # End users' sessions enter only if the symbiote learns from them.
+        learning = learning_sessions_clause(ctx.storage, ctx.symbiote_id)
         rows = ctx.storage.fetch_all(
             "SELECT * FROM execution_traces "
-            "WHERE symbiote_id = ? AND created_at > ? AND stop_reason != 'end_turn' "
+            "WHERE symbiote_id = ? AND created_at > ? AND stop_reason != 'end_turn'"
+            f"{learning} "
             "ORDER BY created_at DESC LIMIT 50",
             (ctx.symbiote_id, since),
         )
@@ -587,9 +600,13 @@ class EvaluatePhase:
             )
 
         since = ctx.last_dream_at.isoformat() if ctx.last_dream_at else "1970-01-01"
+        # End users' sessions enter only if the symbiote learns from them:
+        # the insight written below is shared and quotes the conversation.
+        learning = learning_sessions_clause(ctx.storage, ctx.symbiote_id)
         scores = ctx.storage.fetch_all(
             "SELECT * FROM session_scores "
-            "WHERE symbiote_id = ? AND final_score < 0.5 AND computed_at > ? "
+            "WHERE symbiote_id = ? AND final_score < 0.5 AND computed_at > ?"
+            f"{learning} "
             "ORDER BY final_score ASC LIMIT 10",
             (ctx.symbiote_id, since),
         )

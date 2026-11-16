@@ -42,6 +42,9 @@ class Session(BaseModel):
     goal: str | None = None
     workspace_id: str | None = None
     external_key: str | None = None
+    # The end user this session belongs to (see ``symbiote.core.subjects``).
+    # Set when the session starts and never changed. None: no end user.
+    subject_key: str | None = None
     status: str = "active"
     started_at: datetime = Field(default_factory=_utcnow)
     ended_at: datetime | None = None
@@ -103,7 +106,13 @@ class MemoryEntry(BaseModel):
     session_id: str | None = None
     type: MemoryType
     category: MemoryCategory | None = None
+    # A label, not a partition: no read is restricted by it except the
+    # ``scope`` filter of ``search``. The partition is ``subject_key``.
     scope: Literal["global", "user", "project", "workspace", "session"]
+    # The end user this memory belongs to (see ``symbiote.core.subjects``).
+    # None: shared by every session of the symbiote. ``MemoryStore.store``
+    # fills it from the entry's session when left as None.
+    subject_key: str | None = None
     content: str
     tags: list[str] = Field(default_factory=list)
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -203,6 +212,14 @@ class EnvironmentConfig(BaseModel):
     # memory_entries (reflection, failure memory, handoff, dream, ``learn``)
     # and nothing is recalled into the context or by ``search_memories``.
     memory_enabled: bool = True
+    # Whether the sessions of end users (sessions with a ``subject_key``)
+    # feed what is learned for the symbiote as a whole: the parameter tuner,
+    # the harness evolver and its per-version scores, the dream's ``mine``
+    # and ``evaluate`` phases and the skill review. False: those sessions
+    # still get a score and their own memories, but none of the above reads
+    # them. True: they count like any other session. Memory partitions do
+    # not depend on this flag.
+    learn_from_subject_sessions: bool = False
     # Skill self-improvement (Sprint 4)
     # When True, BackgroundReviewEngine runs after close_session (and optionally
     # mid-session every skill_nudge_interval tool iterations) to consider

@@ -67,14 +67,20 @@ def create_session(
             symbiote_id=body.symbiote_id,
             external_key=body.external_key,
             goal=body.goal,
+            subject_key=body.subject_key,
         )
     else:
-        sess = sessions.start(symbiote_id=body.symbiote_id, goal=body.goal)
+        sess = sessions.start(
+            symbiote_id=body.symbiote_id,
+            goal=body.goal,
+            subject_key=body.subject_key,
+        )
     return SessionResponse(
         id=sess.id,
         symbiote_id=sess.symbiote_id,
         goal=sess.goal,
         external_key=sess.external_key,
+        subject_key=sess.subject_key,
         status=sess.status,
     )
 
@@ -95,6 +101,7 @@ def get_session(
         symbiote_id=sess.symbiote_id,
         goal=sess.goal,
         external_key=sess.external_key,
+        subject_key=sess.subject_key,
         status=sess.status,
         summary=sess.summary,
     )
@@ -116,6 +123,7 @@ def get_session_by_key(
         symbiote_id=sess.symbiote_id,
         goal=sess.goal,
         external_key=sess.external_key,
+        subject_key=sess.subject_key,
         status=sess.status,
         summary=sess.summary,
     )
@@ -165,6 +173,7 @@ def close_session(
         symbiote_id=sess.symbiote_id,
         goal=sess.goal,
         external_key=sess.external_key,
+        subject_key=sess.subject_key,
         status=sess.status,
         summary=sess.summary,
     )
@@ -182,16 +191,24 @@ def search_memory(
     memory: Annotated[MemoryStore, Depends(get_memory_store)],
     scope: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 10,
+    subject_key: Annotated[str | None, Query(min_length=1)] = None,
 ) -> list[MemoryEntryResponse]:
+    """Search a symbiote's memories: the shared ones, plus the ones of the
+    end user ``subject_key`` when given."""
     _require_symbiote_access(adapter, symbiote_id, auth)
     entries = memory.search(
-        query=query, scope=scope, limit=limit, symbiote_id=symbiote_id
+        query=query,
+        scope=scope,
+        limit=limit,
+        symbiote_id=symbiote_id,
+        subject_key=subject_key,
     )
     return [
         MemoryEntryResponse(
             id=e.id,
             symbiote_id=e.symbiote_id,
             session_id=e.session_id,
+            subject_key=e.subject_key,
             type=e.type,
             scope=e.scope,
             content=e.content,

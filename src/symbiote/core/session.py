@@ -7,9 +7,14 @@ import threading
 from datetime import datetime
 from typing import Literal
 
-from symbiote.core.exceptions import EntityNotFoundError, StorageIntegrityError
+from symbiote.core.exceptions import (
+    EntityNotFoundError,
+    StorageIntegrityError,
+    ValidationError,
+)
 from symbiote.core.models import Decision, Message, Session, _utcnow
 from symbiote.core.ports import StoragePort
+from symbiote.core.subjects import validate_subject_key
 
 _key_locks: dict[tuple[str, str], threading.Lock] = {}
 _key_locks_guard = threading.Lock()
@@ -36,25 +41,34 @@ class SessionManager:
         goal: str | None = None,
         workspace_id: str | None = None,
         external_key: str | None = None,
+        subject_key: str | None = None,
     ) -> Session:
-        """Create a new active session and persist it."""
+        """Create a new active session and persist it.
+
+        ``subject_key`` names the end user the session belongs to (see
+        ``symbiote.core.subjects``); it cannot be changed afterwards. Raises
+        ``ValidationError`` when it is empty or too long.
+        """
         session = Session(
             symbiote_id=symbiote_id,
             goal=goal,
             workspace_id=workspace_id,
             external_key=external_key,
+            subject_key=validate_subject_key(subject_key),
             status="active",
         )
         self._storage.execute(
             "INSERT INTO sessions "
-            "(id, symbiote_id, goal, workspace_id, external_key, status, started_at, ended_at, summary) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, symbiote_id, goal, workspace_id, external_key, subject_key, "
+            "status, started_at, ended_at, summary) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 session.id,
                 session.symbiote_id,
                 session.goal,
                 session.workspace_id,
                 session.external_key,
+                session.subject_key,
                 session.status,
                 session.started_at.isoformat(),
                 None,
@@ -68,22 +82,38 @@ class SessionManager:
         symbiote_id: str,
         external_key: str,
         goal: str | None = None,
+        subject_key: str | None = None,
     ) -> Session:
         """Find an active session by external_key, or create one.
 
         Concurrent calls for the same (symbiote, key) get the same session: a
         process-wide lock per key serializes find-or-create, and the unique
         index on (symbiote_id, external_key) covers other processes.
+
+        ``subject_key`` is given to a session created here. A session that
+        already exists keeps its own: asking for it with a different
+        ``subject_key`` raises ``ValidationError``, because the conversation
+        of one end user must never continue as another's. Without
+        ``subject_key`` the existing session is returned as it is.
         """
+        subject_key = validate_subject_key(subject_key)
         with _external_key_lock(symbiote_id, external_key):
             try:
-                return self._get_or_create_by_external_key(symbiote_id, external_key, goal)
+                return self._get_or_create_by_external_key(
+                    symbiote_id, external_key, goal, subject_key
+                )
             except StorageIntegrityError:
                 # Another process created it between our SELECT and INSERT.
-                return self._get_or_create_by_external_key(symbiote_id, external_key, goal)
+                return self._get_or_create_by_external_key(
+                    symbiote_id, external_key, goal, subject_key
+                )
 
     def _get_or_create_by_external_key(
-        self, symbiote_id: str, external_key: str, goal: str | None
+        self,
+        symbiote_id: str,
+        external_key: str,
+        goal: str | None,
+        subject_key: str | None = None,
     ) -> Session:
         row = self._storage.fetch_one(
             "SELECT * FROM sessions WHERE external_key = ? AND symbiote_id = ? "
@@ -92,6 +122,12 @@ class SessionManager:
         )
         if row is not None:
             session = self._row_to_session(row)
+            if subject_key is not None and session.subject_key != subject_key:
+                raise ValidationError(
+                    f"session with external_key {external_key!r} belongs to "
+                    "another subject_key (or to none); a session's subject "
+                    "cannot change"
+                )
             if session.status == "closed":
                 self._storage.execute(
                     "UPDATE sessions SET status = 'active', ended_at = NULL WHERE id = ?",
@@ -105,6 +141,7 @@ class SessionManager:
             symbiote_id=symbiote_id,
             goal=goal,
             external_key=external_key,
+            subject_key=subject_key,
         )
 
     def find_by_external_key(self, external_key: str) -> Session | None:
@@ -268,6 +305,7 @@ class SessionManager:
             goal=row.get("goal"),
             workspace_id=row.get("workspace_id"),
             external_key=row.get("external_key"),
+            subject_key=row.get("subject_key"),
             status=row["status"],
             started_at=datetime.fromisoformat(row["started_at"]),
             ended_at=ended_at,

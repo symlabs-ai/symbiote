@@ -172,7 +172,16 @@ class LLMPort(Protocol):
 
 
 class MemoryPort(Protocol):
-    """Structural interface for memory storage operations."""
+    """Structural interface for memory storage operations.
+
+    A port that keeps one partition per end user (``symbiote.core.subjects``)
+    also offers ``subject_for_session(session_id)`` and accepts a
+    ``subject_key`` keyword in ``search``, ``get_relevant``, ``get_standing``,
+    ``get_by_type``, ``get_by_category``, ``update`` and ``deactivate``, as
+    ``MemoryStore`` does. The kernel passes that keyword only to a port that
+    has ``subject_for_session``, and only for the session of an end user, so
+    a port written before subjects existed keeps working unchanged.
+    """
 
     def store(self, entry: Any) -> str: ...
 

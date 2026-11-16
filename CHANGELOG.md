@@ -5,6 +5,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+Memória por usuário final: um symbiote que conversa com várias pessoas passa a guardar uma partição de memória por pessoa (B-79, pedido pelo estúdio de symbiotas).
+
+**Mudança de comportamento para hosts:** nenhuma para quem não usa `subject_key`. As sessões e memórias existentes ficam na partição compartilhada, que é o comportamento anterior. O banco ganha a migração 12 no SQLite e a 6 no PostgreSQL, aplicadas na inicialização.
+
+### Novas funcionalidades
+
+- feat(memory): `kernel.start_session(..., subject_key="...")` e `get_or_create_session(..., subject_key="...")` dizem de qual usuário final é a sessão. Uma sessão com `subject_key` lê as memórias compartilhadas do symbiote mais as daquele usuário e grava só na partição dele; uma sessão sem a chave lê e grava as compartilhadas. A chave é um texto opaco de até 500 caracteres, definida ao abrir a sessão e imutável: pedir a mesma `external_key` com outra `subject_key` levanta `ValidationError`.
+- feat(memory): as duas regras ficam no `MemoryStore`. `store()` tira a partição da sessão da entrada, então reflexão, memória de falha, handoff, consolidação e `learn` gravam no lugar certo sem passar a chave. `search`, `get_relevant`, `get_standing`, `get_by_type` e `get_by_category` aceitam `subject_key`; o filtro entra no SQL antes do limite de candidatas do recall. `update` e `deactivate` aceitam `subject_key` e tratam como inexistente a memória de outra partição.
+- feat(memory): contexto do turno, `search_memories`, `teach`, `show`, o handoff de long-run e a reflexão usam a partição da sessão. A reflexão por LLM só oferece como alvo de PATCH as memórias da própria partição; um PATCH vindo da sessão de um usuário final não alcança uma memória compartilhada.
+- feat(spawn): a sessão aberta por `spawn` herda a `subject_key` da sessão que delegou; o symbiote delegado lê e grava na partição da mesma pessoa.
+- feat(config): `EnvironmentConfig.learn_from_subject_sessions` (padrão `False`). Desligado, as sessões de usuários finais têm score e memórias próprias, mas ficam fora do `ParameterTuner`, do evolver do harness e dos scores por versão, das fases `mine` e `evaluate` do dream e do review de skills. Ligado, contam como as demais.
+- feat(dream): `reconcile` e `generalize` trabalham só na partição compartilhada, então nada é unido entre usuários finais; `prune` julga cada memória sozinha e cobre todas as partições.
+- feat(inspector): `kernel.inspector.list_subjects(symbiote_id)` lista os usuários finais com contagem de sessões e de memórias; `list_memories` e `list_sessions` aceitam `subject_key` e devolvem a coluna.
+- feat(kernel): `kernel.purge_subject(symbiote_id, subject_key, dry_run=False)` apaga, numa transação, as sessões, mensagens, traces, scores, linhas de auditoria e memórias de um usuário final naquele symbiote, sem tocar nos outros.
+- feat(api): `POST /sessions` aceita `subject_key` e `SessionResponse` a devolve; `GET /memory/search` aceita `subject_key`; `PUT /symbiotes/{id}/config` aceita `learn_from_subject_sessions`. No SDK, `SymbioteClient.create_session(..., subject_key=...)` e `search_memory(..., subject_key=...)`. Na CLI, `symbiote memory search --subject`.
+
+### Outros
+
+- `ExportService.export_memory(symbiote_id, subject_key=None)` exporta as memórias compartilhadas ou, com a chave, as de um usuário final; as duas nunca se misturam num export. O `SemanticRecallProvider`, que não recebe a sessão, lê só as compartilhadas.
+- docs: seção "End users: one memory partition per person" em `docs/HOST_INTEGRATION.md` e "Memoria por usuario final" em `docs/arch-03-memory.md`.
+
 ## [v0.8.8] - 2026-11-16
 
 Os dois pontos que o protótipo do SymGateway deixou em aberto na v0.8.7: saber pelo próprio turno por que o loop de tools parou, e o tipo do que `message()` devolve.

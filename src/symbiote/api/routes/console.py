@@ -186,7 +186,7 @@ def api_symbiote_memory(
     """Get active memory entries for a symbiote (admin console — what it knows)."""
     _require_symbiote_access(adapter, symbiote_id, auth)
     rows = adapter.fetch_all(
-        "SELECT id, session_id, type, scope, content, importance, source, "
+        "SELECT id, session_id, subject_key, type, scope, content, importance, source, "
         "tags_json, created_at, last_used_at "
         "FROM memory_entries WHERE symbiote_id = ? AND is_active = 1 "
         "ORDER BY created_at DESC LIMIT ?",

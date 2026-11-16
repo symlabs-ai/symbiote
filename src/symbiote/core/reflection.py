@@ -26,7 +26,7 @@ import logging
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import TypeVar
+from typing import Any, TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field
 from symbiote.core._review_prompts import REFLECTION_PROMPT, render_prompt
 from symbiote.core.models import MemoryEntry, MemoryType
 from symbiote.core.ports import LLMPort, MemoryPort, MessagePort, StoragePort
+from symbiote.core.subjects import subject_kwargs
 
 _T = TypeVar("_T")
 
@@ -252,6 +253,10 @@ class ReflectionEngine:
     ) -> ReflectionResult:
         discarded_count = sum(1 for m in messages if self._is_noise(m["content"]))
         summary = self._generate_summary(messages)
+        # The session of an end user reflects inside that user's partition:
+        # the facts it stores belong to the user (``MemoryStore.store``), and
+        # the memories offered to the LLM as PATCH targets are only theirs.
+        subject = subject_kwargs(self._memory_store, session_id)
 
         if self._mode == "keyword":
             facts = self._extract_keyword(messages)
@@ -269,7 +274,7 @@ class ReflectionEngine:
 
         if self._mode == "hybrid":
             keyword_facts = self._extract_keyword(messages)
-            llm_facts, llm_error = self._extract_llm_safe(messages, symbiote_id)
+            llm_facts, llm_error = self._extract_llm_safe(messages, symbiote_id, subject)
             # Persist keyword only (safer migration); log diff for audit.
             persisted = self._commit(
                 lambda: self._persist_facts(keyword_facts, symbiote_id, session_id), mark
@@ -289,7 +294,7 @@ class ReflectionEngine:
             )
 
         # llm / llm_main — engineered LLM extraction
-        llm_facts, llm_error = self._extract_llm_safe(messages, symbiote_id)
+        llm_facts, llm_error = self._extract_llm_safe(messages, symbiote_id, subject)
         if llm_error is not None:
             # Hard fallback to keyword on LLM failure so we never produce
             # zero output silently on the close_session path.
@@ -316,7 +321,8 @@ class ReflectionEngine:
             )
 
         persisted, skipped = self._commit(
-            lambda: self._apply_llm_facts(llm_facts, symbiote_id, session_id), mark
+            lambda: self._apply_llm_facts(llm_facts, symbiote_id, session_id, subject),
+            mark,
         )
         skipped_note = (
             f"skipped {skipped} invalid fact(s) from the LLM" if skipped else None
@@ -428,7 +434,10 @@ class ReflectionEngine:
     # ── LLM extraction (engineered prompt) ─────────────────────────────
 
     def _extract_llm_safe(
-        self, messages: list[dict], symbiote_id: str
+        self,
+        messages: list[dict],
+        symbiote_id: str,
+        subject: dict[str, Any] | None = None,
     ) -> tuple[list[dict], str | None]:
         """Extract via LLM; return (facts, error_string_or_None).
 
@@ -438,15 +447,20 @@ class ReflectionEngine:
         if self._llm is None:
             return [], "no LLM configured"
         try:
-            facts = self._extract_llm(messages, symbiote_id)
+            facts = self._extract_llm(messages, symbiote_id, subject)
             return facts, None
         except Exception as exc:
             return [], f"{type(exc).__name__}: {exc}"
 
-    def _extract_llm(self, messages: list[dict], symbiote_id: str) -> list[dict]:
+    def _extract_llm(
+        self,
+        messages: list[dict],
+        symbiote_id: str,
+        subject: dict[str, Any] | None = None,
+    ) -> list[dict]:
         """Run the engineered prompt and return validated, guarded facts."""
         msg_text = self._format_messages_for_prompt(messages)
-        existing = self._format_existing_memories(symbiote_id)
+        existing = self._format_existing_memories(symbiote_id, subject=subject)
         prompt = render_prompt(
             REFLECTION_PROMPT,
             messages=msg_text,
@@ -485,18 +499,37 @@ class ReflectionEngine:
         "factual",
     )
 
-    def _format_existing_memories(self, symbiote_id: str, per_type_limit: int = 5) -> str:
+    @staticmethod
+    def _own_partition(subject: dict[str, Any] | None) -> dict[str, Any]:
+        """Keywords that restrict a ``get_by_type`` to the partition the
+        session may write to: the end user's own (``subject`` set) or, with
+        none, the shared one — which is what a port reads by default."""
+        return {**subject, "include_shared": False} if subject else {}
+
+    def _format_existing_memories(
+        self,
+        symbiote_id: str,
+        per_type_limit: int = 5,
+        *,
+        subject: dict[str, Any] | None = None,
+    ) -> str:
         """Fetch top-N relevant memories so the LLM can pick PATCH targets.
 
         Returns a compact "ID :: type :: content" rendering keyed for short
         token cost. IDs are shortened to first 8 chars for prompt economy;
         the parser accepts both short and full IDs when looking up target_id.
+
+        Only memories of the session's own partition are offered: a PATCH
+        from the session of an end user must not reach a shared memory.
         """
         try:
             recent: list = []
+            own = self._own_partition(subject)
             for t in self._PATCH_CANDIDATE_TYPES:
                 recent.extend(
-                    self._memory_store.get_by_type(symbiote_id, t, limit=per_type_limit)
+                    self._memory_store.get_by_type(
+                        symbiote_id, t, limit=per_type_limit, **own
+                    )
                 )
         except Exception:
             return "(none available)"
@@ -521,26 +554,38 @@ class ReflectionEngine:
             lines.append(f"- {short_id} :: {mtype} :: {content}")
         return "\n".join(lines)
 
-    def _resolve_target_id(self, short_or_full: str, symbiote_id: str) -> str | None:
+    def _resolve_target_id(
+        self,
+        short_or_full: str,
+        symbiote_id: str,
+        subject: dict[str, Any] | None = None,
+    ) -> str | None:
         """Resolve a target_id from LLM output (may be short 8-char prefix) to a full id.
 
         Returns the full id if exactly one active memory matches, else None.
+        A memory outside the session's own partition (``subject``) never
+        matches.
         """
         if not short_or_full:
             return None
+        own_subject = (subject or {}).get("subject_key")
         # If it looks like a full UUID, use it directly.
         if len(short_or_full) >= 32:
             # Ownership is checked here rather than via a ``symbiote_id``
             # kwarg so host MemoryPort implementations keep working: an LLM
-            # must never be able to patch another symbiote's memory.
+            # must never be able to patch another symbiote's memory, nor a
+            # memory of another partition of the same symbiote.
             existing = self._memory_store.get(short_or_full)
             if existing is None or getattr(existing, "symbiote_id", None) != symbiote_id:
+                return None
+            if getattr(existing, "subject_key", None) != own_subject:
                 return None
             return short_or_full
         # Short prefix — look up the unique active match.
         try:
+            own = self._own_partition(subject)
             for t in self._PATCH_CANDIDATE_TYPES:
-                for m in self._memory_store.get_by_type(symbiote_id, t, limit=50):
+                for m in self._memory_store.get_by_type(symbiote_id, t, limit=50, **own):
                     if str(getattr(m, "id", "")).startswith(short_or_full):
                         return m.id
         except Exception:
@@ -646,7 +691,11 @@ class ReflectionEngine:
         return persisted
 
     def _apply_llm_facts(
-        self, facts: list[dict], symbiote_id: str, session_id: str
+        self,
+        facts: list[dict],
+        symbiote_id: str,
+        session_id: str,
+        subject: dict[str, Any] | None = None,
     ) -> tuple[int, int]:
         """Persist LLM-extracted facts honouring action=create|patch.
 
@@ -685,7 +734,7 @@ class ReflectionEngine:
             raw_target = fact.get("target_id")
 
             if action == "patch" and raw_target and has_update:
-                resolved = self._resolve_target_id(str(raw_target), symbiote_id)
+                resolved = self._resolve_target_id(str(raw_target), symbiote_id, subject)
                 if resolved is not None:
                     try:
                         ok = self._memory_store.update(  # type: ignore[attr-defined]
@@ -693,6 +742,9 @@ class ReflectionEngine:
                             content=content,
                             importance=importance,
                             tags=tags,
+                            # For an end user's session the store itself
+                            # refuses a target of another partition.
+                            **(subject or {}),
                         )
                         if ok:
                             persisted += 1

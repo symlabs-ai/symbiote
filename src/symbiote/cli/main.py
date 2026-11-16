@@ -500,12 +500,16 @@ def memory_search(
     ),
     scope: str | None = typer.Option(None, "--scope", help="Memory scope filter"),
     limit: int = typer.Option(10, "--limit", help="Max results"),
+    subject: str | None = typer.Option(
+        None, "--subject", help="Also search the memories of this end user (subject_key)"
+    ),
 ) -> None:
-    """Search one symbiote's memory entries."""
+    """Search one symbiote's memory entries (the shared ones by default)."""
     kernel = _make_kernel()
     try:
         results = kernel._memory.search(
-            query=query, scope=scope, limit=limit, symbiote_id=symbiote_id
+            query=query, scope=scope, limit=limit, symbiote_id=symbiote_id,
+            subject_key=subject,
         )
         if not results:
             console.print("No memories found.")

@@ -576,6 +576,89 @@ closed = kernel.close_session(session.id)
 # closed.summary contains the auto-generated session summary
 ```
 
+### End users: one memory partition per person (`subject_key`)
+
+Use this when one symbiote talks to several people, for example a symbiote
+published on a site or behind your own app. Without it, memory belongs to the
+symbiote as a whole: what one person tells it is recalled in everybody's
+conversations.
+
+Name the person when you start the session:
+
+```python
+session = kernel.start_session(sym.id, subject_key=f"customer:{customer.id}")
+# or, with an external key:
+session = kernel.get_or_create_session(
+    sym.id, external_key=f"chat:{chat.id}", subject_key=f"customer:{customer.id}"
+)
+```
+
+`subject_key` is an opaque string you choose (a user id from your app, a
+visitor cookie). The kernel only compares it for equality; it must not be
+empty and takes up to 500 characters. It is set when the session starts and
+cannot change: `get_or_create_session` raises `ValidationError` when the
+session already exists under a different `subject_key` (or under none), so one
+person's conversation never continues as another's.
+
+Two rules follow from it:
+
+| | A session with `subject_key="S"` | A session without `subject_key` |
+|---|---|---|
+| **Reads** | the shared memories plus the ones of `S` | the shared memories only |
+| **Writes** | only to the partition of `S` | the shared memories |
+
+So what you teach the symbiote in your own sessions (no `subject_key`) is
+shared and reaches every end user, read-only for them. What an end user says
+is learned for that end user alone: reflection, failure memories, the long-run
+handoff, `capabilities.learn` and `search_memories` all stay inside the
+partition, and a PATCH from LLM reflection cannot reach a shared memory. No
+call site needs to pass the key: `MemoryStore` takes it from the session.
+
+What else to know:
+
+- **Delegation.** A symbiote reached through `spawn` works for the same end
+  user as the session that delegated, in its own memory: the partition is the
+  pair (symbiote, `subject_key`).
+- **Knowledge and skills are not partitioned.** Knowledge is what you register
+  for the symbiote; every session reads it.
+- **Learning from end users' sessions is off by default.** Those sessions get
+  a score and their own memories, but they do not move the harness (parameter
+  tuner, evolver, per-version scores), the dream's `mine` and `evaluate`
+  phases or the skill review. Turn it on per symbiote with
+  `kernel.environment.configure(symbiote_id=sym.id, learn_from_subject_sessions=True)`.
+  With it on, a skill or a shared insight can be written from what an end user
+  did or said; leave it off unless you trust the people talking to the
+  symbiote.
+- **Dream.** `prune` judges each memory alone and covers every partition.
+  `reconcile` and `generalize` work on the shared memories only, so nothing is
+  merged across end users.
+- **`external_key` and `host_context` are different things.** `external_key`
+  finds a conversation again; `host_context` carries the caller's data to your
+  tools for one turn. Neither separates memory.
+
+Inspecting and erasing:
+
+```python
+kernel.inspector.list_subjects(sym.id)
+# [{"subject_key": "customer:42", "sessions": 3, "last_session_at": "...", "memories": 5}, ...]
+kernel.inspector.list_memories(sym.id, subject_key="customer:42")  # that person's
+kernel.inspector.list_memories(sym.id, subject_key=None)           # the shared ones
+kernel.inspector.list_sessions(sym.id, subject_key="customer:42")
+
+# Everything the kernel stored about one person under this symbiote: sessions,
+# messages, traces, scores, audit rows and memories. One transaction; cannot
+# be undone. dry_run=True returns the counts without deleting.
+kernel.purge_subject(sym.id, "customer:42")
+```
+
+`purge_subject` covers one symbiote. If the person also reached other
+symbiotes through `spawn`, call it for each of them.
+
+Over HTTP, `POST /sessions` accepts `subject_key`, `GET /memory/search` accepts
+it as a query parameter, and `PUT /symbiotes/{id}/config` accepts
+`learn_from_subject_sessions`; `SymbioteClient.create_session(...,
+subject_key=...)` is the SDK equivalent.
+
 ---
 
 ## Conversation Memory (multi-turn) — read this before building a chat bot

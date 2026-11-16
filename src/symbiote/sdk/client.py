@@ -99,13 +99,22 @@ class SymbioteClient:
         symbiote_id: str,
         goal: str | None = None,
         external_key: str | None = None,
+        subject_key: str | None = None,
     ) -> dict:
-        """Create or resume a session."""
+        """Create or resume a session.
+
+        ``subject_key`` names the end user the session belongs to, when the
+        symbiote talks to several people: the session reads the symbiote's
+        shared memories plus that user's own, and what it learns is stored
+        for that user alone. It cannot be changed afterwards.
+        """
         body: dict[str, Any] = {"symbiote_id": symbiote_id}
         if goal is not None:
             body["goal"] = goal
         if external_key is not None:
             body["external_key"] = external_key
+        if subject_key is not None:
+            body["subject_key"] = subject_key
         return self._post("/sessions", body)
 
     def get_session(self, session_id: str) -> dict:
@@ -188,8 +197,10 @@ class SymbioteClient:
         limit: int = 10,
         *,
         symbiote_id: str,
+        subject_key: str | None = None,
     ) -> list[dict]:
-        """Search one symbiote's memory entries."""
+        """Search one symbiote's memory entries: the shared ones, plus the
+        ones of the end user ``subject_key`` when given."""
         params: dict[str, Any] = {
             "query": query,
             "limit": limit,
@@ -197,6 +208,8 @@ class SymbioteClient:
         }
         if scope:
             params["scope"] = scope
+        if subject_key:
+            params["subject_key"] = subject_key
         return self._get("/memory/search", params=params)
 
     # ── Tools ─────────────────────────────────────────────────────────────

@@ -184,6 +184,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "_migrate_skill_library",
     "_migrate_cancel_relay",
     "_migrate_tool_visibility",
+    "_migrate_subject_key",
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -605,6 +606,26 @@ class SQLiteAdapter:
                 "ALTER TABLE environment_configs "
                 "ADD COLUMN tool_visibility TEXT DEFAULT 'tagged'"
             )
+        self._conn.commit()
+
+    def _migrate_subject_key(self) -> None:
+        """12: memory per end user (``subject_key`` on sessions and memories)
+        and the switch for learning from end users' sessions."""
+        for stmt in (
+            "ALTER TABLE sessions ADD COLUMN subject_key TEXT",
+            "ALTER TABLE memory_entries ADD COLUMN subject_key TEXT",
+            "ALTER TABLE environment_configs "
+            "ADD COLUMN learn_from_subject_sessions INTEGER DEFAULT 0",
+        ):
+            with contextlib.suppress(sqlite3.OperationalError):  # column already exists
+                self._conn.execute(stmt)
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS idx_memory_symbiote_subject "
+            "ON memory_entries(symbiote_id, subject_key, is_active)",
+            "CREATE INDEX IF NOT EXISTS idx_sessions_symbiote_subject "
+            "ON sessions(symbiote_id, subject_key)",
+        ):
+            self._conn.execute(stmt)
         self._conn.commit()
 
     def execute(self, sql: str, params: tuple | None = None) -> sqlite3.Cursor:
