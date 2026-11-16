@@ -65,6 +65,9 @@ class DreamContext:
     # transitions stale agent_created skills toward archived. None means
     # "skills lifecycle is not managed by this kernel".
     skills_loader: SkillsLoader | None = None
+    # The language the symbiote speaks (its persona's "language"), so what
+    # the dream writes into memory reads like the rest of it.
+    language: str | None = None
 
 
 # ── Phase result ────────────────────────────────────────────────────────────

@@ -196,7 +196,10 @@ produce at least one PATCH or WRITE_FILE.
 
 _SKILL_OUTPUT_SCHEMA = """\
 Output ONLY a JSON array (no prose, no markdown fence). Empty array `[]` if
-nothing surfaced. Schema per entry:
+nothing surfaced. Write the description and the body of a skill in the
+language the user writes in the conversation (the name stays kebab-case):
+the description is matched against the user's next requests.
+Schema per entry:
 
 For action=create:
 {

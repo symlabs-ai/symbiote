@@ -315,12 +315,20 @@ class ReconcilePhase:
 # ── Phase 3: Generalize ────────────────────────────────────────────────────
 
 
+def _language_rule(ctx: DreamContext) -> str:
+    """What the dream writes becomes memories the agent reads in its own
+    language; without a persona language, follow the source material."""
+    if ctx.language:
+        return f"Write in {ctx.language}."
+    return "Write in the language of the memories or conversation shown."
+
+
 _GENERALIZE_PROMPT = """\
 You are analyzing a cluster of procedural memories from an AI agent. \
 These memories describe similar step-by-step procedures.
 
 Synthesize them into ONE higher-level procedural memory that captures \
-the general pattern. Be concise — one or two sentences.
+the general pattern. Be concise — one or two sentences. {language_rule}
 
 Memories:
 {memories}
@@ -377,7 +385,9 @@ class GeneralizePhase:
                 break
 
             memories_text = "\n".join(f"- {e.content}" for e in cluster)
-            prompt = _GENERALIZE_PROMPT.format(memories=memories_text)
+            prompt = _GENERALIZE_PROMPT.format(
+                memories=memories_text, language_rule=_language_rule(ctx)
+            )
 
             try:
                 rule = _llm_complete(ctx.llm, prompt).strip()
@@ -440,6 +450,8 @@ to avoid them in the future.
 Failure data:
 {failures}
 
+{language_rule}
+
 Return a JSON array of objects with:
 - "content": the procedural rule (one sentence)
 - "importance": float 0.0–1.0
@@ -497,7 +509,9 @@ class MinePhase:
                 error="budget_exhausted",
             )
 
-        prompt = _MINE_PROMPT.format(failures="\n".join(failure_summary[:20]))
+        prompt = _MINE_PROMPT.format(
+            failures="\n".join(failure_summary[:20]), language_rule=_language_rule(ctx)
+        )
         details: list[dict] = []
         applied = 0
 
@@ -549,7 +563,8 @@ class MinePhase:
 _EVALUATE_PROMPT = """\
 You are reviewing a past conversation from an AI agent that received \
 a low quality score ({score:.2f}/1.0). Identify what went wrong and \
-suggest a concrete procedural rule to improve future performance.
+suggest a concrete procedural rule to improve future performance. \
+{language_rule}
 
 Conversation:
 {conversation}
@@ -605,7 +620,9 @@ class EvaluatePhase:
                 continue
 
             convo = "\n".join(f"[{m['role']}] {m['content'][:200]}" for m in messages)
-            prompt = _EVALUATE_PROMPT.format(score=final_score, conversation=convo)
+            prompt = _EVALUATE_PROMPT.format(
+                score=final_score, conversation=convo, language_rule=_language_rule(ctx)
+            )
 
             try:
                 insight = _llm_complete(ctx.llm, prompt).strip()

@@ -78,6 +78,20 @@ class DreamEngine:
         count = int(row["cnt"]) if row else 0
         return count >= self._min_sessions
 
+    def _persona_language(self, symbiote_id: str) -> str | None:
+        row = self._storage.fetch_one(
+            "SELECT persona_json FROM symbiotes WHERE id = ?", (symbiote_id,)
+        )
+        raw = row["persona_json"] if row else None
+        try:
+            persona = json.loads(raw) if isinstance(raw, str | bytes) else raw
+        except ValueError:
+            return None
+        language = persona.get("language") if isinstance(persona, dict) else None
+        if not isinstance(language, str) or not language.strip():
+            return None
+        return language.strip()
+
     def dream(self, symbiote_id: str, dream_mode: str) -> DreamReport:
         """Run a dream cycle synchronously. Returns the report."""
         if dream_mode not in ("light", "full"):
@@ -101,6 +115,7 @@ class DreamEngine:
             dry_run=self._dry_run,
             last_dream_at=last_dream_at,
             skills_loader=self._skills_loader,  # may be None
+            language=self._persona_language(symbiote_id),
         )
 
         phase_classes = _FULL_PHASES if dream_mode == "full" else _LIGHT_PHASES

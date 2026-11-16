@@ -145,3 +145,30 @@ def test_two_clusters_in_one_dream_are_both_generalized(tmp_path: Path) -> None:
     )
     assert len(rows) == 2
     kernel.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("persona", "rule"),
+    [
+        ({"language": "português do Brasil"}, "Write in português do Brasil."),
+        (None, "Write in the language of the memories or conversation shown."),
+    ],
+)
+def test_what_the_dream_writes_follows_the_symbiote_language(
+    tmp_path: Path, persona: dict | None, rule: str
+) -> None:
+    llm = ScriptedLLM("Antes de reservar, compare opções e salve o comprovante.")
+    kernel = make_kernel(tmp_path, llm)
+    sym = kernel.create_symbiote(name="a", role="r", persona=persona)
+    kernel.environment.configure(symbiote_id=sym.id, dream_mode="full")
+    for text in ("reservar hotel: comparar 3 opções", "comprar passagem: comparar 2 sites",
+                 "alugar carro: comparar 3 locadoras"):
+        kernel._memory.store(MemoryEntry(symbiote_id=sym.id, type="procedural", scope="global",
+                                         source="reflection", content=text,
+                                         tags=["viagem", "reserva"], importance=0.6))
+
+    kernel.dream(sym.id)
+
+    assert llm.calls, "the generalize phase asked nothing"
+    assert rule in llm.prompt_text(0)
+    kernel.shutdown()
