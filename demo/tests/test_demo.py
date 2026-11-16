@@ -109,6 +109,9 @@ def _serve(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, configured: bool)
     )
     monkeypatch.setattr(settings_mod, "load", lambda *a, **k: fake)
     monkeypatch.setattr(settings_mod, "save", lambda *a, **k: None)
+    # Sol's Chrome: a profile and a port of the test's own (nothing is opened).
+    monkeypatch.setattr(settings_mod, "CHROME_PROFILE", tmp_path / "chrome-profile")
+    monkeypatch.setattr(settings_mod, "CHROME_PORT", _free_port())
     monkeypatch.setattr(runtime_mod, "validate_key", lambda s: None)
     monkeypatch.setattr(server_mod, "validate_key", lambda s: None)
     monkeypatch.setattr(
@@ -445,6 +448,74 @@ def test_the_approval_switch_turns_the_gate_off_and_on(demo: Demo) -> None:
 
     assert demo.post("/api/approvals/toggle", {"enabled": True}).json() == {"enabled": True}
     assert demo.get("/api/status")["approvals_enabled"] is True
+
+
+def test_quick_approval_modes_and_step_limit(demo: Demo) -> None:
+    for mode in ("low", "medium", "high", "allow_all"):
+        response = demo.post("/api/approvals/mode", {"mode": mode})
+        assert response.status_code == 200
+        assert response.json()["mode"] == mode
+        assert demo.get("/api/status")["approval_mode"] == mode
+
+    runtime = demo.runtime
+    assert runtime._approval("meu_chrome_click", {"ref": "@e1"}, "medium") is True  # noqa: SLF001
+    assert runtime.broker.pending() == []
+    assert demo.post("/api/approvals/mode", {"mode": "invalid"}).status_code == 422
+
+    result = demo.post("/api/config", {
+        "symbiote": "sol", "fields": {"max_tool_iterations": 12},
+    })
+    assert result.status_code == 200
+    assert demo.get("/api/config?symbiote=sol")["config"]["max_tool_iterations"] == 12
+
+
+def test_sol_has_its_own_chrome_and_clicks_there_always_ask(demo: Demo) -> None:
+    rt = demo.runtime
+    if rt.chrome_error:
+        pytest.skip(f"no Chrome here: {rt.chrome_error}")
+    assert rt.chrome_tools[0] == "meu_chrome_navigate"
+    tools = {t["tool_id"]: t for t in demo.get("/api/tools?symbiote=sol")["tools"]}
+    assert tools["meu_chrome_click"]["authorized"] and tools["meu_chrome_click"]["source"] == "meu chrome"
+    researcher = {t["tool_id"]: t for t in demo.get("/api/tools?symbiote=researcher")["tools"]}
+    assert not researcher["meu_chrome_click"]["authorized"]  # research stays isolated
+    gw = rt.kernel.tool_gateway
+    assert gw.requires_approval("meu_chrome_click") and gw.requires_approval("meu_chrome_fill")
+    assert not gw.requires_approval("meu_chrome_navigate")
+
+    # With the switch off, other tools run unasked but Sol's Chrome still asks.
+    assert demo.post("/api/approvals/toggle", {"enabled": False}).status_code == 200
+    assert rt._approval("bash", {"command": "ls"}, "high") is True  # noqa: SLF001
+    answer: list[bool] = []
+    asking = threading.Thread(target=lambda: answer.append(
+        rt._approval("meu_chrome_click", {"ref": "@e1"}, "high")))  # noqa: SLF001
+    asking.start()
+    for _ in range(100):
+        pending = demo.get("/api/status")["pending_approvals"]
+        if pending:
+            break
+        time.sleep(0.05)
+    assert pending and pending[0]["tool_id"] == "meu_chrome_click"
+    demo.post(f"/api/approvals/{pending[0]['id']}", {"approved": False})
+    asking.join(timeout=5)
+    assert answer == [False]
+
+
+def test_the_sites_of_sols_chrome_change_from_the_page(demo: Demo) -> None:
+    if demo.runtime.chrome_error:
+        pytest.skip(f"no Chrome here: {demo.runtime.chrome_error}")
+    assert demo.post("/api/setup/chrome", {"allowlist": " "}).status_code == 422
+    r = demo.post("/api/setup/chrome", {"allowlist": "https://calendar.google.com/r\nmail.google.com"})
+    assert r.status_code == 200, r.text
+    assert r.json()["settings"]["chrome_allowlist"] == ["calendar.google.com", "mail.google.com"]
+    assert demo.runtime.chrome_tools  # registered again with the new list
+    assert r.json()["settings"]["chrome_session"] == "open"  # the Chrome already open
+    assert "detail" in demo.post("/api/setup/chrome/test").json()
+
+    own = demo.post("/api/setup/chrome", {"allowlist": "calendar.google.com", "session": "own"})
+    assert own.json()["settings"]["chrome_session"] == "own"
+    closed = demo.post("/api/setup/chrome/test").json()
+    assert closed["ok"] is False and "abre sozinho" in closed["detail"]
+    assert demo.post("/api/setup/chrome", {"allowlist": "x.com", "session": "outro"}).status_code == 422
 
 
 def test_unauthorized_tool_is_blocked_by_policy(demo: Demo) -> None:

@@ -9,7 +9,7 @@ a one-off run.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 DEMO_DIR = Path(__file__).resolve().parent
@@ -29,6 +29,15 @@ SYMGATEWAY_DEFAULT_URL = "https://symgateway.symlabs.ai"
 # DEMO_SEARCH_OBJECTIVE names another one; "none" falls back to the gateway's
 # Brave proxy (/proxy/brave/web-search).
 SEARCH_OBJECTIVE_DEFAULT = "web_seek"
+# Sol's own browser (symbiote.browser.register_user_browser). DEMO_CHROME_SESSION
+# "open" (default): the Chrome the person already has open and logged in, once
+# they allow remote debugging in it; "own": a Chrome with a profile of its own,
+# opened the first time Sol needs it. Either way only DEMO_CHROME_ALLOWLIST
+# (comma-separated domains, subdomains included).
+CHROME_SESSIONS = ("open", "own")
+CHROME_PORT = 9222
+CHROME_PROFILE = Path.home() / ".config" / "symbiote-demo-chrome"
+CHROME_ALLOWLIST_DEFAULT = ("calendar.google.com", "accounts.google.com", "console.cloud.google.com")
 # Shown as the server in use when no {PROVIDER}_BASE_URL overrides it.
 PROVIDER_SERVERS = {
     "anthropic": "API da Anthropic (endpoint padrão)",
@@ -55,6 +64,8 @@ class Settings:
     symgateway_base_url: str = ""
     symgateway_project: str = ""
     search_objective: str = SEARCH_OBJECTIVE_DEFAULT  # "" = the Brave proxy
+    chrome_allowlist: list[str] = field(default_factory=lambda: list(CHROME_ALLOWLIST_DEFAULT))
+    chrome_session: str = "open"
 
     @property
     def complete(self) -> bool:
@@ -107,6 +118,8 @@ class Settings:
             "search_via": self.search_via,
             "gateway_url": self.gateway_url if self.provider == "symgateway" else "",
             "gateway_project": self.symgateway_project,
+            "chrome_allowlist": self.chrome_allowlist,
+            "chrome_session": self.chrome_session,
         }
 
 
@@ -145,6 +158,7 @@ def load(path: Path = ENV_PATH) -> Settings:
     main, aux = DEFAULT_MODELS.get(provider, ("", ""))
     model = get("DEMO_MODEL", main)
     objective = get("DEMO_SEARCH_OBJECTIVE", SEARCH_OBJECTIVE_DEFAULT).strip()
+    allowlist = parse_allowlist(get("DEMO_CHROME_ALLOWLIST")) or list(CHROME_ALLOWLIST_DEFAULT)
     try:
         port = int(get("DEMO_PORT", "8010"))
     except ValueError:
@@ -160,7 +174,20 @@ def load(path: Path = ENV_PATH) -> Settings:
         symgateway_base_url=get("SYMGATEWAY_BASE_URL"),
         symgateway_project=get("SYMGATEWAY_PROJECT_SLUG"),
         search_objective="" if objective.lower() == "none" else objective,
+        chrome_allowlist=allowlist,
+        chrome_session=session if (session := get("DEMO_CHROME_SESSION", "open").strip().lower())
+        in CHROME_SESSIONS else "open",
     )
+
+
+def parse_allowlist(text: str) -> list[str]:
+    """``"a.com, b.com\nc.com"`` → ``["a.com", "b.com", "c.com"]`` (no scheme, no path)."""
+    out: list[str] = []
+    for raw in text.replace("\n", ",").split(","):
+        host = raw.strip().lower().removeprefix("https://").removeprefix("http://").split("/")[0]
+        if host and host not in out:
+            out.append(host)
+    return out
 
 
 def save(updates: dict[str, str], path: Path = ENV_PATH) -> None:

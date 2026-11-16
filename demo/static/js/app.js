@@ -21,11 +21,21 @@ const PAGE_LOADED = Date.now() / 1000;
 const state = {
   status: null,
   symbiote: 'sol',
-  tab: 'live',
+  tab: 'chat',
+  liveOpen: true,
   lastSeq: 0,
   longrun: { plan: null, blocks: [] },
   lastClose: null,
 };
+
+const APPROVAL_MODES = [
+  ['low', 'Perguntar em tudo'],
+  ['medium', 'Perguntar em médio e alto'],
+  ['high', 'Perguntar só em alto risco'],
+  ['none', 'Só Chrome pede confirmação'],
+  ['allow_all', 'Permitir tudo (inclusive Chrome)'],
+];
+const STEP_LIMITS = [4, 8, 12, 20, 30, 50];
 
 const panes = {};       // tab id → container element
 const dirty = new Set();
@@ -70,6 +80,46 @@ function updateSessionInfo() {
 // The LLM settings dialog. First run (`cancellable` false): the page cannot
 // start without a key. Later, from the gear in the top bar: shows what is in
 // use, lets every value be changed and tested before it is saved.
+// Sol's own Chrome: the sites it may open. It opens by itself when Sol needs it.
+function setupChrome(visible, status) {
+  const section = document.getElementById('setup-chrome');
+  section.hidden = !visible;
+  if (!visible) return;
+  const allow = document.getElementById('chrome-allowlist');
+  const out = document.getElementById('chrome-result');
+  allow.value = (status.settings?.chrome_allowlist || []).join('\n');
+  const session = status.settings?.chrome_session === 'own' ? 'own' : 'open';
+  document.getElementById(session === 'own' ? 'chrome-own' : 'chrome-open').checked = true;
+  const chosen = () => (document.getElementById('chrome-own').checked ? 'own' : 'open');
+  document.getElementById('chrome-status').textContent = status.chrome_error
+    ? `Indisponível: ${status.chrome_error}`
+    : `Tools: ${(status.chrome_tools || []).join(', ')}`;
+  out.hidden = true;
+  const show = (ok, ...children) => {
+    out.className = `test-result ${ok ? 'ok' : 'fail'}`;
+    mount(out, ...children);
+    out.hidden = false;
+    out.scrollIntoView({ block: 'nearest' });
+  };
+  document.getElementById('chrome-test').onclick = (e) => act(e.currentTarget, async () => {
+    const r = await api.post('/api/setup/chrome/test');
+    show(r.ok, h('div.small', h('b', r.ok ? 'Pronto' : 'Ainda não')), h('div.small.dim', r.detail));
+  });
+  document.getElementById('chrome-apply').onclick = (e) => act(e.currentTarget, async () => {
+    try {
+      const r = await api.post('/api/setup/chrome', { allowlist: allow.value, session: chosen() });
+      if (r.chrome_error) {
+        show(false, h('span.error', r.chrome_error));
+        return;
+      }
+      toast(`Chrome do Sol: ${r.settings.chrome_allowlist.join(', ')}`);
+      location.reload();  // the kernel restarted with the new list
+    } catch (ex) {
+      show(false, h('span.error', ex.message));
+    }
+  });
+}
+
 function showSetup(cancellable = false) {
   const s = state.status || {};
   const box = document.getElementById('setup');
@@ -108,9 +158,11 @@ function showSetup(cancellable = false) {
       ['Chave', saved.api_key],
       saved.gateway_project ? ['Projeto', saved.gateway_project] : null,
       saved.search_via ? ['Busca na web', saved.search_via] : null,
+      s.chrome_tools?.length ? ['Chrome do Sol', `${saved.chrome_session === 'own' ? 'separado' : 'o seu, já aberto'} · sites: ${(saved.chrome_allowlist || []).join(', ')}`] : null,
     ].filter(Boolean);
     current.replaceChildren(...rows.flatMap(([k, v]) => [h('dt', k), h('dd', v || '—')]));
   }
+  setupChrome(cancellable && s.ready, s);
 
   const hasSavedKey = () => saved.provider === provider.value && !!saved.api_key;
   // Fill both selects; keep the current choice when it is still allowed.
@@ -132,6 +184,7 @@ function showSetup(cancellable = false) {
     }
     delete body.gw_model;
     delete body.gw_aux_model;
+    delete body.chrome_session_;  // Sol's Chrome has its own endpoint
     return body;
   };
   const loadModels = async () => {
@@ -245,6 +298,68 @@ const SUGGESTIONS = {
   ],
 };
 
+function buildChatControls(which) {
+  const approval = h('select', { 'aria-label': 'Aprovação humana' },
+    APPROVAL_MODES.map(([value, label]) => h('option', { value }, label)));
+  approval.value = state.status?.approval_mode || (state.status?.approvals_enabled ? 'high' : 'none');
+  const steps = h('select', { 'aria-label': 'Máximo de turnos por pedido', title: 'Iterações com tools em cada mensagem' },
+    STEP_LIMITS.map((value) => h('option', { value }, String(value))));
+  steps.disabled = true;
+  const note = h('span.control-note', { 'aria-live': 'polite' }, 'Vale na próxima mensagem');
+  if (approval.value === 'allow_all') note.textContent = 'Inclui ações no seu Chrome';
+  const bar = h('div.chat-controls',
+    h('label', 'Aprovação', approval),
+    h('label', 'Máx. turnos', steps), note);
+
+  approval.onchange = async () => {
+    const previous = state.status?.approval_mode || 'high';
+    approval.disabled = true;
+    try {
+      const result = await api.post('/api/approvals/mode', { mode: approval.value });
+      state.status.approval_mode = result.mode;
+      state.status.approvals_enabled = result.enabled;
+      note.textContent = result.mode === 'allow_all' ? 'Inclui ações no seu Chrome' : 'Vale na próxima mensagem';
+      dirty.add('tools');
+      toast('Aprovação atualizada');
+    } catch (error) {
+      approval.value = previous;
+      toast(error.message, 'err');
+    } finally {
+      approval.disabled = false;
+    }
+  };
+
+  steps.onchange = async () => {
+    const previous = steps.dataset.saved;
+    steps.disabled = true;
+    try {
+      const result = await api.post('/api/config', {
+        symbiote: which, fields: { max_tool_iterations: Number(steps.value) },
+      });
+      steps.dataset.saved = String(result.config.max_tool_iterations);
+      dirty.add('execution');
+      toast('Limite atualizado para a próxima mensagem');
+    } catch (error) {
+      steps.value = previous;
+      toast(error.message, 'err');
+    } finally {
+      steps.disabled = false;
+    }
+  };
+
+  api.get(`/api/config?symbiote=${which}`).then(({ config }) => {
+    if (!bar.isConnected || state.symbiote !== which) return;
+    const value = String(config.max_tool_iterations);
+    if (![...steps.options].some((option) => option.value === value)) {
+      steps.append(h('option', { value }, value));
+    }
+    steps.value = value;
+    steps.dataset.saved = value;
+    steps.disabled = false;
+  }).catch((error) => { note.textContent = `Limite indisponível: ${error.message}`; });
+  return bar;
+}
+
 function buildChat() {
   const col = document.getElementById('chat-col');
   const sym = state.status?.symbiotes?.[state.symbiote];
@@ -279,7 +394,7 @@ function buildChat() {
     },
     loadingContent: () => '<span class="symbiote-spinner"></span> pensando… (acompanhe em <b>Ao vivo</b>)',
   };
-  col.replaceChildren(el);
+  col.replaceChildren(el, buildChatControls(state.symbiote));
   // After connecting: the setter renders into the shadow DOM built on connect.
   el.initialSuggestions = SUGGESTIONS[state.symbiote] || [];
 }
@@ -321,22 +436,43 @@ async function closeSession(button) {
 function buildTabs() {
   const nav = document.getElementById('tabs');
   const body = document.getElementById('tab-body');
+  nav.append(h('button', { role: 'tab', 'data-tab': 'chat', onclick: () => openTab('chat') }, 'Chat'));
   for (const tab of TABS) {
-    nav.append(h('button', { role: 'tab', 'data-tab': tab.id, onclick: () => openTab(tab.id) }, tab.title));
+    if (tab.id !== 'live') nav.append(h('button', { role: 'tab', 'data-tab': tab.id, onclick: () => openTab(tab.id) }, tab.title));
     panes[tab.id] = h('div', { hidden: true, 'data-pane': tab.id });
-    body.append(panes[tab.id]);
+    (tab.id === 'live' ? document.getElementById('live-body') : body).append(panes[tab.id]);
   }
 }
 
+function setLiveOpen(open) {
+  state.liveOpen = open;
+  document.getElementById('live-col').hidden = !open;
+  panes.live.hidden = !open;
+  const button = document.getElementById('live-toggle');
+  button.setAttribute('aria-expanded', String(open));
+  button.classList.toggle('active', open);
+  button.textContent = open ? 'Ocultar Ao vivo' : 'Mostrar Ao vivo';
+  if (open && (!rendered.has('live') || dirty.has('live'))) renderTab('live');
+}
+
 function openTab(id) {
+  if (id === 'live') {
+    setLiveOpen(true);
+    id = 'chat';
+  }
   state.tab = id;
   document.querySelectorAll('#tabs button').forEach((b) => {
     const active = b.dataset.tab === id;
     b.classList.toggle('active', active);
+    b.setAttribute('aria-selected', String(active));
     if (active) b.querySelector('.dot')?.remove();
   });
-  for (const [tid, pane] of Object.entries(panes)) pane.hidden = tid !== id;
-  if (!rendered.has(id) || dirty.has(id)) renderTab(id);
+  document.getElementById('chat-col').hidden = id !== 'chat';
+  document.getElementById('panel-col').hidden = id === 'chat';
+  for (const [tid, pane] of Object.entries(panes)) {
+    if (tid !== 'live') pane.hidden = tid !== id;
+  }
+  if (id !== 'chat' && (!rendered.has(id) || dirty.has(id))) renderTab(id);
 }
 
 async function renderTab(id) {
@@ -494,9 +630,12 @@ async function boot() {
     buildChat();
   };
   document.getElementById('btn-close-session').onclick = (e) => closeSession(e.currentTarget);
+  document.getElementById('live-toggle').onclick = () => setLiveOpen(!state.liveOpen);
+  document.getElementById('live-close').onclick = () => setLiveOpen(false);
   initTour(ctx);
   buildChat();
-  openTab('live');
+  setLiveOpen(true);
+  openTab('chat');
   if (state.status.mcp_error) toast(`Servidor MCP indisponível: ${short(state.status.mcp_error, 120)}`, 'warn');
   if (state.status.web_error) toast(`Tools web indisponíveis: ${short(state.status.web_error, 120)}`, 'warn');
 }

@@ -210,7 +210,7 @@ const SYMBIOTE_STYLES = `
   height: 44px;
   padding: 0 1rem 0 0.75rem;
   background: var(--symbiote-primary, var(--primary, #3B82F6));
-  color: white;
+  color: var(--symbiote-on-primary, white);
   border: none;
   border-radius: 22px;
   cursor: pointer;
@@ -267,7 +267,7 @@ const SYMBIOTE_STYLES = `
   align-items: center;
   justify-content: center;
   background: var(--symbiote-primary, var(--primary, #3B82F6));
-  color: white;
+  color: var(--symbiote-on-primary, white);
   font-weight: 700;
   border-radius: 50%;
 }
@@ -398,7 +398,7 @@ const SYMBIOTE_STYLES = `
 .symbiote-suggestion:hover {
   background: var(--symbiote-primary, var(--primary, #3B82F6));
   border-color: var(--symbiote-primary, var(--primary, #3B82F6));
-  color: white;
+  color: var(--symbiote-on-primary, white);
 }
 
 /* ── Message bubbles ── */
@@ -413,7 +413,7 @@ const SYMBIOTE_STYLES = `
 
 .symbiote-msg.user {
   background: var(--symbiote-primary, var(--primary, #3B82F6));
-  color: white;
+  color: var(--symbiote-on-primary, white);
   align-self: flex-end;
   border-bottom-right-radius: 0.25rem;
 }
@@ -644,7 +644,7 @@ const SYMBIOTE_STYLES = `
 .symbiote-followup:hover {
   background: var(--symbiote-primary, var(--primary, #3B82F6));
   border-color: var(--symbiote-primary, var(--primary, #3B82F6));
-  color: white;
+  color: var(--symbiote-on-primary, white);
 }
 
 /* ── Input ── */
@@ -681,7 +681,7 @@ const SYMBIOTE_STYLES = `
   background: var(--symbiote-primary, var(--primary, #3B82F6));
   border: none;
   border-radius: 0.5rem;
-  color: white;
+  color: var(--symbiote-on-primary, white);
   cursor: pointer;
   display: flex;
   align-items: center;

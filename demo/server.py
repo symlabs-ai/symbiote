@@ -8,12 +8,13 @@ another page open in the same browser cannot drive the assistant.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import (
@@ -91,9 +92,12 @@ def status(request: Request) -> dict:
                 for key, sid in rt.symbiote_ids().items()
             },
             approvals_enabled=rt.approvals_enabled,
+            approval_mode=rt.approval_mode,
             native_tools=rt.native_tools,
             web_tools=rt.web_tools,
             web_error=rt.web_error,
+            chrome_tools=rt.chrome_tools,
+            chrome_error=rt.chrome_error,
             mcp_tools=rt.mcp_tools,
             mcp_error=rt.mcp_error,
             pending_approvals=rt.broker.pending(),
@@ -183,6 +187,31 @@ async def setup(body: SetupBody, request: Request) -> dict:
     settings_mod.save(updates)
     await rt.reconfigure(candidate)
     return {"ok": True, "settings": candidate.public()}
+
+
+class ChromeBody(BaseModel):
+    allowlist: str = ""  # comma- or line-separated domains
+    session: str = "open"  # "open" (the Chrome already open) or "own"
+
+
+@core.post("/setup/chrome/test")
+async def setup_chrome_test(request: Request) -> dict:
+    """Can Sol reach its Chrome? Nothing is saved, opened or connected."""
+    return await asyncio.to_thread(get_runtime(request).chrome_status)
+
+
+@core.post("/setup/chrome")
+async def setup_chrome(body: ChromeBody, request: Request, _k: Any = Depends(get_kernel)) -> dict:
+    """Change the sites Sol's Chrome may open (restarts the demo's kernel)."""
+    rt = get_runtime(request)
+    allowlist = settings_mod.parse_allowlist(body.allowlist)
+    if not allowlist:
+        raise HTTPException(422, "Diga ao menos um site que o Chrome do Sol pode abrir.")
+    if body.session not in settings_mod.CHROME_SESSIONS:
+        raise HTTPException(422, "Escolha o Chrome já aberto (open) ou um separado (own).")
+    settings_mod.save({"DEMO_CHROME_ALLOWLIST": ",".join(allowlist), "DEMO_CHROME_SESSION": body.session})
+    await rt.reconfigure(dataclasses.replace(rt.settings, chrome_allowlist=allowlist, chrome_session=body.session))
+    return {"ok": True, "settings": rt.settings.public(), "chrome_error": rt.chrome_error}
 
 
 @core.post("/reset")
@@ -328,6 +357,17 @@ def feedback(body: FeedbackBody, kernel: Any = Depends(get_kernel)) -> dict:
 
 class ToggleBody(BaseModel):
     enabled: bool
+
+
+class ApprovalModeBody(BaseModel):
+    mode: Literal["low", "medium", "high", "none", "allow_all"]
+
+
+@core.post("/approvals/mode")
+def approvals_mode(body: ApprovalModeBody, request: Request, _k: Any = Depends(get_kernel)) -> dict:
+    rt = get_runtime(request)
+    rt.set_approval_mode(body.mode)
+    return {"mode": rt.approval_mode, "enabled": rt.approvals_enabled}
 
 
 # Declared before /approvals/{request_id}: routes match in order, and that

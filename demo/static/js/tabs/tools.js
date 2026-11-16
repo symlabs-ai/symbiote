@@ -6,6 +6,7 @@ import { h, mount, badge, riskBadge, empty, act, fmtTime, pre, fold, short, sele
 const SOURCE = {
   builtin: ['builtin', ''], python: ['handler Python', 'blue'], http: ['HTTP declarativa', 'purple'],
   descoberta: ['descoberta (OpenAPI)', 'green'], mcp: ['MCP', 'amber'], web: ['web/browser', 'blue'],
+  'meu chrome': ['Chrome do Sol', 'amber'],
 };
 let sourceFilter = 'all';
 
@@ -158,18 +159,19 @@ function otherSources(data) {
 }
 
 function approvals(ctx, data) {
+  const modes = {
+    low: 'todas as tools', medium: 'risco médio e alto', high: 'risco alto',
+    none: 'só ações no Chrome', allow_all: 'permitir tudo',
+  };
+  const mode = data.approval_mode || (data.approvals_enabled ? 'high' : 'none');
   return h('div.card',
-    h('div.card-title', h('h3', 'Aprovação humana'),
-      h('label.switch', h('input', {
-        type: 'checkbox', checked: data.approvals_enabled,
-        onchange: (e) => act(null, async () => {
-          await ctx.api.post('/api/approvals/toggle', { enabled: e.target.checked });
-          await ctx.reloadStatus();
-          ctx.refresh('tools');
-        }, e.target.checked ? 'Gate de aprovação ligado' : 'Gate desligado: tools de alto risco rodam sem perguntar'),
-      }), data.approvals_enabled ? 'ligada' : 'desligada')),
-    h('p.dim.small', 'Tools de risco ', h('b', 'alto'), ' (apagar tarefa, enviar e-mail, bash) pausam o loop até alguém decidir. ',
-      'Desligado é o padrão do kernel: sem callback, elas executam direto.'));
+    h('div.card-title', h('h3', 'Aprovação humana'), badge(modes[mode] || mode, mode === 'allow_all' ? 'amber' : 'blue')),
+    h('p.dim.small', mode === 'allow_all'
+      ? 'Todas as tools executam sem pedir confirmação, inclusive cliques e preenchimentos no seu Chrome.'
+      : mode === 'none'
+        ? 'Só cliques e preenchimentos no seu Chrome pedem confirmação.'
+        : `Pede confirmação para ${modes[mode]}; ações no seu Chrome também pedem confirmação.`),
+    h('button.btn.sm', { type: 'button', onclick: () => ctx.openTab('chat') }, 'Alterar ao lado do chat'));
 }
 
 function audit(data) {

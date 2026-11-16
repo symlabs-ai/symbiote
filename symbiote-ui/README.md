@@ -104,6 +104,7 @@ The component inherits CSS custom properties from the host page. Set these on `:
 :root {
   --symbiote-primary: #3B82F6;
   --symbiote-primary-hover: #2563eb;
+  --symbiote-on-primary: #fff;
   --symbiote-bg: #18181b;
   --symbiote-bg-secondary: #27272a;
   --symbiote-border: #3f3f46;
@@ -117,6 +118,7 @@ The component inherits CSS custom properties from the host page. Set these on `:
 ```
 
 The component also falls back to generic variable names (`--primary`, `--bg`, etc.) so it works out of the box with common dark themes.
+Use a dark `--symbiote-on-primary` when the primary color is light, so text and icons remain readable.
 
 ## Tool Result Badges
 

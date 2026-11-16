@@ -199,6 +199,8 @@ def _source(tool_id: str, descriptor: Any, rt: Any, discovered: set[str]) -> str
         return "mcp"
     if tool_id in rt.web_tools:
         return "web"
+    if tool_id in rt.chrome_tools:
+        return "meu chrome"
     if tool_id in discovered:
         return "descoberta"
     if tool_id in CUSTOM_IDS:
@@ -243,6 +245,9 @@ def tools(request: Request, symbiote: str = "sol", kernel: Any = Depends(get_ker
                           for e in HTTP_EXAMPLES],
         "audit": kernel.inspector.audit_log(sid, limit=60),
         "approvals_enabled": rt.approvals_enabled,
+        "approval_mode": rt.approval_mode,
+        "chrome_tools": rt.chrome_tools,
+        "chrome_error": rt.chrome_error,
         "pending_approvals": rt.broker.pending(),
         "mcp_error": rt.mcp_error,
         "web_error": rt.web_error,

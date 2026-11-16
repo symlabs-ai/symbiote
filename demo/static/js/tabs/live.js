@@ -10,21 +10,40 @@ const bgBox = h('div.bg-feed');
 const turns = new Map();   // turn_id → {el, steps, streams}
 const calls = new Map();   // call_id → {el, stream}
 let built = false;
+let pane = null;
+let scrollArea = null;
+let latest = null;
+let following = true;
+
+// New turns are prepended, but new steps grow at the bottom of that turn.
+function latestIsVisible() {
+  if (!latest?.isConnected || !scrollArea) return true;
+  const item = latest.getBoundingClientRect();
+  const area = scrollArea.getBoundingClientRect();
+  return item.bottom >= area.top && item.bottom <= area.bottom + 48;
+}
+
+function onScroll() {
+  if (pane && !pane.hidden) following = latestIsVisible();
+}
+
+function revealLatest(node) {
+  latest = node;
+  if (following && scrollArea && pane && !pane.hidden && node?.isConnected) {
+    node.scrollIntoView({ block: 'nearest' });
+  }
+}
 
 function build() {
   if (built) return;
   built = true;
   root.append(
-    h('p.tab-intro', 'Cada turno do chat aparece aqui enquanto acontece: o ',
-      h('b', 'contexto'), ' que o kernel montou, cada ', h('b', 'chamada ao modelo'),
-      ' (com o texto bruto que ele devolveu), cada ', h('b', 'tool'),
-      ' executada ou bloqueada, os pedidos de ', h('b', 'aprovação'), ' e o motivo de parada do loop. ',
-      'O chat só mostra a resposta final, validada pelo kernel.'),
-    h('div.grid2', { style: { gridTemplateColumns: 'minmax(0, 2fr) minmax(260px, 1fr)' } },
+    h('p.tab-intro', 'Acompanhe o contexto, as chamadas ao modelo, as tools e as aprovações de cada turno.'),
+    h('div.live-stack',
       h('div', h('h4', 'Turnos'), turnsBox),
-      h('div', h('h4', 'Fora do turno'), h('div.card.tight', bgBox),
+      h('details.live-background', h('summary', 'Fora do turno'), h('div.card.tight', bgBox),
         h('p.faint.small', { style: { marginTop: '8px' } },
-          'Chamadas do modelo auxiliar (reflexão, dream, review de skills, tags semânticas) e ações da página.'))),
+          'Modelo auxiliar, reflexão, dream e ações da página.'))),
   );
   turnsBox.append(h('div.empty#live-empty', 'Mande uma mensagem no chat para ver o turno por dentro.'));
   bgBox.append(h('div.faint.small#bg-empty', 'Nada ainda.'));
@@ -60,6 +79,7 @@ function addBg(node) {
   bgBox.querySelector('#bg-empty')?.remove();
   bgBox.prepend(node);
   while (bgBox.children.length > 60) bgBox.lastChild.remove();
+  if (!turns.size) revealLatest(node);
 }
 
 function llmBody(ev) {
@@ -227,6 +247,10 @@ function onEvent(ev) {
     default:
       break;
   }
+  if (t) revealLatest(t.foot);
+  else if (!turns.size && bgBox.children.length) {
+    revealLatest(ev.type === 'context' ? bgBox.lastElementChild : bgBox.firstElementChild);
+  }
 }
 
 export default {
@@ -235,6 +259,16 @@ export default {
   render(el) {
     build();
     if (!el.contains(root)) el.replaceChildren(root);
+    if (pane !== el) {
+      scrollArea?.removeEventListener('scroll', onScroll);
+      pane = el;
+      scrollArea = el.parentElement;
+      scrollArea?.addEventListener('scroll', onScroll, { passive: true });
+      new MutationObserver(() => {
+        if (!pane.hidden && latest) revealLatest(latest);
+      }).observe(el, { attributes: true, attributeFilter: ['hidden'] });
+    }
+    if (latest) revealLatest(latest);
   },
   onEvent,
 };

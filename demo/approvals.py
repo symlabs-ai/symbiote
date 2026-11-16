@@ -1,6 +1,7 @@
 """ApprovalBroker — the human-in-the-loop gate, answered from the browser.
 
-The kernel calls ``callback(tool_id, params, risk)`` for high-risk tools and
+The kernel calls ``callback(tool_id, params, risk)`` for tools selected by the
+host's approval threshold and
 waits for a bool. Here the call publishes an ``approval_request`` event and
 blocks its (worker) thread until the page answers through ``decide`` or the
 timeout expires, which counts as a denial.

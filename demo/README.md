@@ -1,6 +1,8 @@
 # Symbiote demo
 
-Um chat com um assistente pessoal (o **Sol**) e dez abas que mostram, enquanto acontece, o que o kernel faz por dentro: contexto montado, chamadas ao modelo, tools, aprovações, memória, aprendizado, skills, harness e web. Roda só na sua máquina e conversa com um LLM de verdade (Anthropic, OpenAI ou pelo SymGateway).
+Um chat com um assistente pessoal (o **Sol**), abas na navegação superior e um painel **Ao vivo** recolhível à direita. Eles mostram, enquanto acontece, o que o kernel faz por dentro: contexto montado, chamadas ao modelo, tools, aprovações, memória, aprendizado, skills, harness e web. Roda só na sua máquina e conversa com um LLM de verdade (Anthropic, OpenAI ou pelo SymGateway).
+
+Junto ao campo de mensagem há dois seletores que valem para o próximo pedido: **Aprovação** (perguntar para todos os riscos, médio e alto, só alto, só Chrome, ou **Permitir tudo**) e **Máx. turnos** (iterações com tools por mensagem). **Permitir tudo** também dispensa a confirmação para cliques e preenchimentos no Chrome do Sol. Os detalhes de execução continuam na aba **Execução**.
 
 O código do demo também é um exemplo de integração: `runtime.py` monta um `SymbioteKernel` embutido do jeito que um host deveria (LLM, tools de todo tipo, gate de aprovação, hooks, histórico injetado a cada turno, encerramento de sessão).
 
@@ -17,15 +19,29 @@ Na primeira abertura a página pede o provider e a chave. Ela é validada com um
 
 Opcional, com qualquer provider: `SYMGATEWAY_API_KEY` e `SYMGATEWAY_BASE_URL` no `demo.env` habilitam a tool `web_search`. Ela não fala com um buscador direto: invoca o serviço `websearch` do Objective `web_seek` do gateway (`POST /v1/objectives/invoke`), e o gateway escolhe a conta, a credencial e os fallbacks. A chave precisa de `objectives.use` e `external_services.invoke`, que `gateway.llm.invoke` não inclui; sem elas a tool falha com o motivo dado pelo gateway e o Pesquisador cai para `web_extract` e o navegador. `DEMO_SEARCH_OBJECTIVE` no `demo.env` troca o Objective; `none` volta ao proxy Brave (`/proxy/brave/web-search`). As configurações do LLM mostram o caminho em uso na linha "Busca na web".
 
-## O que tem em cada aba
+### Chrome do Sol
+
+Para agir onde você tem conta (criar um evento no Google Agenda, por exemplo), basta pedir ao Sol. Ele usa as tools `meu_chrome_*`, registradas com `symbiote.browser.register_user_browser`, e trabalha numa aba própria do **Chrome que você já tem aberto**, com os seus logins:
+
+- Uma vez, no seu Chrome (versão 144 ou mais nova), abra `chrome://inspect/#remote-debugging` e ligue a depuração remota. Se você não tiver feito isso, o Sol explica o passo quando precisar.
+- Na primeira vez que o Sol se conectar, o Chrome mostra um diálogo pedindo que você permita. Ele espera até 2 minutos pela sua resposta.
+- Ele só abre os sites da lista. Por padrão são `calendar.google.com`, `accounts.google.com` e `console.cloud.google.com`; a engrenagem, em "Chrome do Sol", muda a lista.
+- Cada clique e cada campo preenchido pede a sua aprovação, mesmo com a chave de aprovação desligada: ali ele age como você.
+- Ao terminar, ele fecha só a aba dele. Enquanto a depuração remota estiver ligada, qualquer programa da sua máquina pode controlar o seu Chrome; desligue em `chrome://inspect/#remote-debugging` quando não quiser mais.
+
+Na engrenagem também dá para escolher "um Chrome separado do Sol": um Chrome com perfil só dele (`~/.config/symbiote-demo-chrome`), aberto sozinho quando o Sol precisar, em que você faz login uma vez. O Pesquisador continua com o navegador isolado, sem login, para pesquisa.
+
+## Navegação e painel Ao vivo
+
+O painel **Ao vivo** fica à direita do chat, pode ser recolhido pelo botão no topo e mostra a linha do tempo de cada turno: contexto, chamadas ao modelo, tools com parâmetros e resultado, aprovações, iterações e motivo de parada. **Fora do turno** fica numa seção expansível dentro dele.
 
 | Aba | Mostra |
 |---|---|
-| Ao vivo | Linha do tempo de cada turno: contexto, chamadas ao modelo (texto bruto), tools com parâmetros e resultado, bloqueios da política, aprovações, iterações e motivo de parada. Ao lado, o que roda fora do turno |
+| Chat | Conversa com Sol ou Pesquisador e seletores rápidos de aprovação e limite de iterações |
 | Contexto | O que o modelo viu no último turno: persona, memórias e knowledge injetados, histórico, tools visíveis × autorizadas, orçamento de tokens e as mensagens exatas enviadas |
 | Memória | Memórias de longo prazo por categoria, ensinar um fato, testar o recall e o isolamento entre symbiotes |
 | Aprendizado | O que encerrar a sessão produziu (score, memórias, reflexão), modos de reflexão e dream, relatórios de dream, histórico de scores, feedback 👍/👎 |
-| Tools | Descoberta via OpenAPI com aprovação, tools HTTP declarativas, handlers Python, MCP, builtins, matriz registrada/visível/autorizada, tags, gate de aprovação, audit log, dados da API pessoal |
+| Tools | Descoberta via OpenAPI com aprovação, tools HTTP declarativas, handlers Python, MCP, builtins, matriz registrada/visível/autorizada, tags, estado da aprovação, audit log, dados da API pessoal |
 | Execução | Modos `instant`/`brief`/`long_run`/`auto`, carga `full`/`index`/`semantic`, `packed`/`on_demand`, limites, long-run com planejador e avaliador, traces, process engine |
 | Skills | Review em segundo plano, quarentena e promoção, conteúdo dos `SKILL.md` |
 | Harness | Prontidão para evoluir, ParameterTuner, versões das instruções com evolução e rollback, aprendizado entre symbiotes |

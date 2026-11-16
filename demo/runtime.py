@@ -18,6 +18,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from demo import seed as seed_mod
 from demo import settings as settings_mod
 from demo.approvals import ApprovalBroker
@@ -181,6 +183,22 @@ def check_connection(settings: settings_mod.Settings) -> dict:
     }
 
 
+def check_browser(cdp_url: str) -> dict:
+    """Is a browser listening at ``cdp_url``? What it is and how many tabs."""
+    base = cdp_url.rstrip("/")
+    try:
+        with httpx.Client(timeout=3.0) as client:
+            version = client.get(f"{base}/json/version").raise_for_status().json()
+            tabs = client.get(f"{base}/json/list").raise_for_status().json()
+    except (httpx.HTTPError, ValueError) as exc:
+        return {"ok": False, "detail": (
+            f"O Chrome do Sol não está aberto em {base} ({type(exc).__name__}). "
+            "Ele abre sozinho na primeira vez que o Sol precisar dele."
+        )}
+    pages = [t for t in tabs if t.get("type") == "page"]
+    return {"ok": True, "detail": f"{version.get('Browser', 'navegador')} · {len(pages)} aba(s) aberta(s)"}
+
+
 class DemoRuntime:
     def __init__(self, bus: EventBus, *, data_dir: Path = settings_mod.DATA_DIR, base_url: str) -> None:
         self.bus = bus
@@ -193,12 +211,15 @@ class DemoRuntime:
         self.hook: DemoHook | None = None
         self.broker = ApprovalBroker(bus)
         self.approvals_enabled = True
+        self.approval_mode = "high"
         self.native_tools = True
         self.sol_id = ""
         self.researcher_id = ""
         self.mcp_tools: list[str] = []
         self.web_tools: list[str] = []
         self.web_error: str | None = None
+        self.chrome_tools: list[str] = []  # Sol's own Chrome (meu_chrome_*)
+        self.chrome_error: str | None = None
         self.mcp_error: str | None = None
         self._mcp_task: asyncio.Task | None = None
         self._mcp_stop = asyncio.Event()
@@ -263,6 +284,7 @@ class DemoRuntime:
         for descriptor, handler in CUSTOM_TOOLS:
             kernel.tool_gateway.register_descriptor(descriptor, handler)
         self._register_web(kernel)
+        self._register_chrome(kernel)
         self.kernel = kernel
         await self._load_mcp(kernel)
 
@@ -273,6 +295,8 @@ class DemoRuntime:
             researcher_tools=["agora", *self.web_tools],
             prompt_caching=s.provider == "anthropic",
         )
+        if self.chrome_tools:  # also for a Sol seeded before they existed
+            kernel.environment.add_tools(self.sol_id, self.chrome_tools)
         # Tools the presenter discovered and approved earlier come back on restart.
         loaded = kernel.load_discovered_tools(self.sol_id, base_url=self.base_url)
         self.bus.publish("runtime", state="ready", discovered_loaded=len(loaded))
@@ -308,12 +332,28 @@ class DemoRuntime:
     # ── wiring helpers ─────────────────────────────────────────────────
 
     def _apply_approvals(self, kernel: SymbioteKernel) -> None:
-        kernel.set_approval_callback(self.broker.callback if self.approvals_enabled else None)
+        # Always installed: with the switch off, tools that require a person
+        # (clicking and typing in Sol's Chrome) still ask; the rest run.
+        threshold = self.approval_mode if self.approval_mode in ("low", "medium", "high") else "high"
+        kernel.set_approval_callback(self._approval, risk_threshold=threshold)
+
+    def _approval(self, tool_id: str, params: dict, risk: str) -> bool:
+        if self.approval_mode == "allow_all":
+            return True
+        if self.approval_mode == "none" and not self.require().tool_gateway.requires_approval(tool_id):
+            return True
+        return self.broker.callback(tool_id, params, risk)
 
     def set_approvals(self, enabled: bool) -> None:
-        self.approvals_enabled = enabled
+        self.set_approval_mode("high" if enabled else "none")
+
+    def set_approval_mode(self, mode: str) -> None:
+        if mode not in ("low", "medium", "high", "none", "allow_all"):
+            raise ValueError(f"Unknown approval mode: {mode}")
+        self.approval_mode = mode
+        self.approvals_enabled = mode in ("low", "medium", "high")
         self._apply_approvals(self.require())
-        if not enabled:
+        if mode in ("none", "allow_all"):
             self.broker.deny_all()
 
     def set_native_tools(self, enabled: bool) -> None:
@@ -350,6 +390,58 @@ class DemoRuntime:
             t for t in kernel.tool_gateway.list_tools()
             if t.startswith(("web_", "browser_"))
         ]
+
+    def _register_chrome(self, kernel: SymbioteKernel) -> None:
+        """Sol's own browser: the person's Chrome, with their logins.
+
+        Nothing opens now: the first meu_chrome_* call opens Chrome on this
+        machine's screen with a profile of its own; the person logs in there
+        once. Clicking and typing always need their yes.
+        """
+        from symbiote.browser import register_user_browser
+
+        try:
+            own = self.settings.chrome_session == "own"
+            self.chrome_tools = register_user_browser(
+                kernel,
+                prefix="meu_chrome",
+                session="own" if own else "open",
+                allowlist=self.settings.chrome_allowlist,
+                port=settings_mod.CHROME_PORT,
+                # "open": the everyday profile, found per system.
+                profile_dir=settings_mod.CHROME_PROFILE if own else None,
+            )
+        except Exception as exc:  # no Chrome installed, or no Playwright
+            self.chrome_tools = []
+            self.chrome_error = f"{type(exc).__name__}: {exc}"
+            logger.warning("Sol's Chrome unavailable: %s", self.chrome_error)
+            return
+        self.chrome_error = None
+
+    def chrome_status(self) -> dict:
+        """Can Sol reach its Chrome now? Nothing is opened or connected."""
+        if self.chrome_error:
+            return {"ok": False, "detail": f"O Sol está sem Chrome: {self.chrome_error}"}
+        if self.settings.chrome_session == "own":
+            status = check_browser(f"http://127.0.0.1:{settings_mod.CHROME_PORT}")
+            if not status["ok"]:
+                status["detail"] = "O Chrome separado do Sol está fechado; ele abre sozinho quando o Sol precisar."
+            return status
+        from symbiote.browser import default_chrome_profile
+
+        profile = default_chrome_profile()
+        if profile is None:
+            return {"ok": False, "detail": "Não achei o perfil do seu Chrome nesta máquina."}
+        if (profile / "DevToolsActivePort").exists():
+            return {"ok": True, "detail": (
+                "O seu Chrome está aberto e aceita conexão. Na primeira vez que o Sol usar, "
+                "o Chrome pede que você permita."
+            )}
+        return {"ok": False, "detail": (
+            "O seu Chrome ainda não aceita conexão. Nele, abra chrome://inspect/#remote-debugging "
+            "e ligue a depuração remota (Chrome 144 ou mais novo). O Sol também explica isso "
+            "quando precisar."
+        )}
 
     async def _load_mcp(self, kernel: SymbioteKernel) -> None:
         """Start the example MCP server and register its tools.
