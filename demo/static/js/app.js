@@ -518,9 +518,6 @@ function handleEvent(ev) {
     reloadAfterRestart('O demo foi zerado. Recarregando a página…');
   }
   if (ev.type === 'session' || ev.type === 'turn_end' || ev.type === 'learned') reloadStatus();
-  // Only a reset that happens after this page loaded: the event stays in the
-  // replay buffer, and reacting to the old one would reload forever.
-  if (ev.type === 'runtime' && ev.state === 'reset' && ev.ts > PAGE_LOADED) location.reload();
   for (const tab of TABS) {
     if (tab.onEvent) tab.onEvent(ev, ctx, panes[tab.id]);
     if (tab.watch && tab.watch.includes(ev.type) && rendered.has(tab.id)) markDirty(tab);

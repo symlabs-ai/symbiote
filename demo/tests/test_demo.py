@@ -381,6 +381,31 @@ def test_state_changes_need_the_token_and_a_local_host(demo: Demo) -> None:
 # ── chat turn and live events ──────────────────────────────────────────
 
 
+def test_a_chat_stream_follows_only_its_own_turn(demo: Demo, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Another turn of the same symbiote (a second tab) that starts first
+    must not leak its text or tool badges into this stream."""
+    from demo.events import TURN, Turn
+
+    real_run_turn = demo.runtime.run_turn
+
+    async def other_tab_first(sid: str, message: str, **kwargs: Any) -> dict:
+        token = TURN.set(Turn("other-tab", "s-other", sid))
+        try:
+            demo.app.state.bus.publish("turn_start", symbiote_id=sid, message="outra aba")
+            demo.app.state.bus.publish("tool_start", tool_id="agora", params={})
+            demo.app.state.bus.publish("answer_delta", text="resposta da outra aba")
+        finally:
+            TURN.reset(token)
+        return await real_run_turn(sid, message, **kwargs)
+
+    monkeypatch.setattr(demo.runtime, "run_turn", other_tab_first)
+    events = demo.chat("oi")
+
+    assert events[-1][1]["text"] == "ok, anotado"
+    assert [d["text"] for e, d in events if e == "text_delta"] == ["ok, anotado"]
+    assert [e for e, _ in events if e in ("tool_start", "tool_done")] == []
+
+
 def test_a_turn_with_a_tool_streams_badges_and_publishes_the_timeline(demo: Demo) -> None:
     events = demo.chat("que horas são?")
 

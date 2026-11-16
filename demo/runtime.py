@@ -529,17 +529,18 @@ class DemoRuntime:
             lines.append(f"{label}: {m['content']}")
         return "\n".join(lines)
 
-    async def run_turn(self, symbiote_id: str, message: str) -> dict:
+    async def run_turn(self, symbiote_id: str, message: str, turn_id: str | None = None) -> dict:
+        """Run one chat turn. ``turn_id`` lets the caller pick the id its
+        events will carry, so it can follow this turn and no other."""
         kernel = self.require()
         session_id = self.current_session(symbiote_id)
         history = self.history(session_id)
-        turn = Turn(uuid.uuid4().hex[:10], session_id, symbiote_id)
+        turn = Turn(turn_id or uuid.uuid4().hex[:10], session_id, symbiote_id)
         token = TURN.set(turn)
-        traces_before = {t["id"] for t in kernel.inspector.list_traces(session_id=session_id, limit=5)}
         self.bus.publish("turn_start", symbiote_id=symbiote_id, message=message,
                          history_messages=history.count("\n") + 1 if history else 0)
         try:
-            response = await kernel.message_async(
+            outcome = await kernel.turn_async(
                 session_id,
                 message,
                 extra_context={"conversation_history": history} if history else None,
@@ -551,21 +552,19 @@ class DemoRuntime:
         finally:
             TURN.reset(token)
 
-        text = response.get("text", "") if isinstance(response, dict) else str(response)
-        tool_results = response.get("tool_results", []) if isinstance(response, dict) else []
-        traces = kernel.inspector.list_traces(session_id=session_id, limit=1)
-        trace = traces[0] if traces and traces[0]["id"] not in traces_before else None
         summary = {
             "turn_id": turn.turn_id,
             "session_id": session_id,
-            "text": text,
+            "text": outcome.text,
             "tool_results": [
-                {k: r.get(k) for k in ("tool_id", "success", "error")} for r in tool_results
+                {"tool_id": r.tool_id, "success": r.success, "error": r.error}
+                for r in outcome.tool_results
             ],
-            "stop_reason": trace["stop_reason"] if trace else "end_turn",
-            "iterations": trace["total_iterations"] if trace else 1,
-            "tool_calls": trace["total_tool_calls"] if trace else 0,
-            "elapsed_ms": trace["total_elapsed_ms"] if trace else None,
+            "stop_reason": outcome.stop_reason,
+            # A turn without tools is still one model call.
+            "iterations": outcome.iterations or 1,
+            "tool_calls": outcome.tool_calls,
+            "elapsed_ms": outcome.elapsed_ms or None,
         }
         self.bus.publish("turn_end", ok=True, session_id=session_id, turn_id=turn.turn_id,
                          **{k: v for k, v in summary.items() if k not in ("session_id", "turn_id")})

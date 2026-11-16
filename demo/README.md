@@ -63,7 +63,7 @@ servidor (FastAPI, 127.0.0.1)
 ```
 
 - **Dois symbiotes.** O Sol tem as tools pessoais; o Pesquisador tem as tools web e só enxerga as tags `web`/`browser`/`utilidades`. O Sol delega a ele com `spawn`.
-- **Streaming.** O kernel valida a resposta antes de liberar o texto, então o chat recebe a resposta pronta. O texto bruto de cada chamada ao modelo aparece na aba Ao vivo.
+- **Streaming.** O demo liga `set_token_streaming("live")`: o texto chega ao chat enquanto o modelo escreve, inclusive a narração antes de uma chamada de tool, sem a marcação das tools (o servidor repassa cada `answer_delta` como `text_delta`). Ao fim do turno, a resposta validada substitui o que foi transmitido. O texto bruto de cada chamada ao modelo aparece na aba Ao vivo.
 - **Segurança local.** Bind em `127.0.0.1`, checagem do `Host`, e um token por execução exigido em toda chamada que muda estado. `fs_*` e `bash` ficam presos a `demo/data/sandbox`; `bash` e as tools de risco alto pedem aprovação.
 - **Links e miniaturas.** Endereços na resposta viram links que abrem em outra aba, e os primeiros seis ganham um cartão com miniatura, título e site. Quem busca a página é o servidor do demo (`previews.py`, `POST /api/preview`): lê as tags Open Graph, baixa a imagem e a serve de `demo/data/previews/`, então o navegador não fala com o site citado. Cada endereço, redirecionamento e imagem passa pela mesma proteção do `web_extract` contra endereços internos; só entram imagens raster de até 3 MB. Página sem `og:image` fica sem cartão.
 - **Dados.** Tudo fica em `demo/data/`. "Zerar demo" (aba Sistema) apaga e recria.

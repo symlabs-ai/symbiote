@@ -12,6 +12,8 @@ import dataclasses
 import json
 import logging
 import secrets
+import uuid
+from collections import Counter
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
@@ -256,19 +258,20 @@ async def chat_stream(body: ChatBody, request: Request, kernel: Any = Depends(ge
     sid = symbiote_id(rt, body.symbiote)
     bus: EventBus = request.app.state.bus
     out: asyncio.Queue[tuple[str, Any] | None] = asyncio.Queue()
-    turn_ids: set[str] = set()
-    awaiting: set[str] = set()  # tools whose badge the approval request already created
+    # This request's own turn id: another turn of the same symbiote running
+    # at the same time (a second tab) never leaks into this stream.
+    turn_id = uuid.uuid4().hex[:10]
+    # Badges already created by an approval request, counted per tool: two
+    # parallel calls of the same tool each wait for their own answer.
+    awaiting: Counter[str] = Counter()
 
     async def relay() -> None:
         async for event in bus.subscribe(since=bus.recent(limit=1)[-1]["seq"] if bus.recent(limit=1) else 0):
-            if event["type"] == "turn_start" and event.get("symbiote_id") == sid and not turn_ids:
-                turn_ids.add(event["turn_id"])
-                continue
-            if event.get("turn_id") not in turn_ids:
+            if event.get("turn_id") != turn_id or event["type"] == "turn_start":
                 continue
             if event["type"] == "tool_start":
-                if event["tool_id"] in awaiting:
-                    awaiting.discard(event["tool_id"])
+                if awaiting[event["tool_id"]] > 0:
+                    awaiting[event["tool_id"]] -= 1
                     continue
                 out.put_nowait(("tool_start", {"tool_id": event["tool_id"], "name": event["tool_id"],
                                                "detail": json.dumps(event.get("params"), ensure_ascii=False)[:300]}))
@@ -276,13 +279,14 @@ async def chat_stream(body: ChatBody, request: Request, kernel: Any = Depends(ge
                 out.put_nowait(("tool_done", {"tool_id": event["tool_id"], "name": event["tool_id"],
                                               "success": event["success"], "error": event.get("error")}))
             elif event["type"] == "approval_request":
-                awaiting.add(event["tool_id"])
+                awaiting[event["tool_id"]] += 1
                 out.put_nowait(("tool_start", {"tool_id": event["tool_id"], "name": f"{event['tool_id']} ⏳ aprovação",
                                                "detail": "aguardando aprovação"}))
             elif event["type"] == "answer_delta":
                 out.put_nowait(("text_delta", {"text": event["text"]}))
             elif event["type"] == "approval_result" and not event["approved"]:
-                awaiting.discard(event["tool_id"])
+                if awaiting[event["tool_id"]] > 0:
+                    awaiting[event["tool_id"]] -= 1
                 # A denied call never reaches the gateway, so no tool_end follows.
                 out.put_nowait(("tool_done", {"tool_id": event["tool_id"], "name": f"{event['tool_id']} (negada)",
                                               "success": False, "error": "negada na aprovação"}))
@@ -291,7 +295,7 @@ async def chat_stream(body: ChatBody, request: Request, kernel: Any = Depends(ge
         relay_task = asyncio.create_task(relay())
         await asyncio.sleep(0)  # let the relay subscribe before the turn starts
         try:
-            summary = await rt.run_turn(sid, body.message)
+            summary = await rt.run_turn(sid, body.message, turn_id=turn_id)
             await asyncio.sleep(0.05)  # flush tool events published from threads
             out.put_nowait(("response_done", {"text": summary["text"], "tool_results": summary["tool_results"],
                                               "turn_id": summary["turn_id"]}))
