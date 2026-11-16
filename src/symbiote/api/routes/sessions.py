@@ -229,7 +229,10 @@ def chat(
         # Per-call LLM overrides (e.g. temperature), as the SDK sends them.
         llm_config=body.generation_settings,
     )
-    return ChatResponse(response=response, session_id=session_id)
+    return ChatResponse(
+        response=response if isinstance(response, str) else dict(response),
+        session_id=session_id,
+    )
 
 
 def _require_llm(kernel: SymbioteKernel) -> None:

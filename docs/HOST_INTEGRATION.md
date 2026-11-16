@@ -692,6 +692,55 @@ failed is a retry, which a user may ask for ("try again if it fails") and a
 transient error may need; those repeats are stopped by the circuit breaker
 at the third consecutive failure of the tool.
 
+### What a turn returns, and why it stopped
+
+`message()` and `message_async()` return the reply text (`str`) for a turn
+that called no tool, and a `TurnReply` dict for one that did:
+
+```python
+from symbiote.core.turn_result import TurnReply
+
+reply = kernel.message(session.id, "Rotate the key")
+if isinstance(reply, dict):          # TurnReply
+    text, results = reply["text"], reply["tool_results"]   # results: list of dicts
+else:
+    text, results = reply, []
+```
+
+`turn()` and `turn_async()` take the same arguments and always return a
+`TurnOutcome`, which also says why the tool loop stopped, so the host does
+not have to read `execution_traces`:
+
+```python
+outcome = kernel.turn(session.id, "Rotate the key", host_context={"user": uid})
+outcome.text            # the reply
+outcome.tool_results    # list[ToolCallResult], every call the loop made
+outcome.stop_reason     # see the table below
+outcome.stopped_early   # True when a limit ended the loop, not the model
+outcome.iterations, outcome.tool_calls, outcome.elapsed_ms, outcome.tool_mode
+
+outcome = await kernel.turn_async(session.id, text, on_token=send)
+```
+
+| `stop_reason` | The loop ended because |
+| --- | --- |
+| `end_turn` | the model answered without asking for more tools (also a turn with no tool at all) |
+| `max_iterations` | the turn reached `max_tool_iterations` |
+| `stagnation` | the same successful call was repeated |
+| `circuit_breaker` | a tool failed three times in a row |
+| `timeout` | the loop ran past its time limit |
+| `on_after_tool_result` | the host's `on_after_tool_result` hook ended the turn |
+| `block_failure` | a `long_run` project ended with blocks not completed |
+
+For `max_iterations`, `stagnation` and `circuit_breaker` the text is the
+forced final answer described above; for `on_after_tool_result`, what the
+hook returned; for `timeout`, whatever text the model had written before the
+limit (it may be empty); for `block_failure`, the reply composed from the
+blocks that completed. The same reason is
+stored in `execution_traces.stop_reason`. A turn that does not return raises
+as `message()` does (`TurnCancelledError`, `SessionLockLostError`,
+`CapabilityError` when the run failed).
+
 ---
 
 ## Context Injection

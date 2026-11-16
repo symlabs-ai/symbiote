@@ -59,6 +59,7 @@ from symbiote.core.turn_control import (
     reset_turn_control,
 )
 from symbiote.core.turn_record import TurnRecord, close_turn_record, open_turn_record
+from symbiote.core.turn_result import TurnOutcome, TurnReply, turn_outcome
 from symbiote.discovery.loader import DiscoveredToolLoader
 from symbiote.discovery.repository import DiscoveredToolRepository
 from symbiote.dream.engine import DreamEngine
@@ -800,8 +801,13 @@ class SymbioteKernel:
         llm_config: dict | None = None,
         *,
         host_context: Mapping[str, Any] | None = None,
-    ) -> str:
+    ) -> str | TurnReply:
         """Add user message, run chat capability, add assistant message, return response.
+
+        Returns the reply text, or a :class:`TurnReply` dict (``text`` and
+        ``tool_results``) when the turn called tools. ``turn()`` takes the
+        same arguments and always returns a :class:`TurnOutcome`, which also
+        says why the tool loop stopped.
 
         Uses per-session locking: concurrent requests on the same session are
         serialized, while different sessions process in parallel.
@@ -822,6 +828,42 @@ class SymbioteKernel:
                 ``current_host_context()``. Concurrent turns never see each
                 other's.
         """
+        return self._message_locked(
+            session_id, content, extra_context, llm_config, host_context
+        )[0]
+
+    def turn(
+        self,
+        session_id: str,
+        content: str,
+        extra_context: dict | None = None,
+        llm_config: dict | None = None,
+        *,
+        host_context: Mapping[str, Any] | None = None,
+    ) -> TurnOutcome:
+        """Run a turn exactly like ``message()`` and return a :class:`TurnOutcome`.
+
+        Besides the reply text and the tool results, it says why the tool
+        loop stopped (``stop_reason``, one of
+        ``symbiote.core.turn_result.STOP_REASONS``; ``stopped_early`` is True
+        when a limit ended it rather than the model) and how many iterations
+        and tool calls it took. Raises what ``message()`` raises.
+        """
+        return turn_outcome(
+            *self._message_locked(
+                session_id, content, extra_context, llm_config, host_context
+            )
+        )
+
+    def _message_locked(
+        self,
+        session_id: str,
+        content: str,
+        extra_context: dict | None,
+        llm_config: dict | None,
+        host_context: Mapping[str, Any] | None,
+    ) -> tuple[str | TurnReply, LoopTrace | None]:
+        """One turn under the session lock: the reply and its loop trace."""
         host_token = bind_host_context(host_context)
         try:
             ttl, wait = self._lock_ttl(), self._config.session_lock_wait
@@ -919,7 +961,7 @@ class SymbioteKernel:
         content: str,
         extra_context: dict | None = None,
         llm_config: dict | None = None,
-    ) -> str:
+    ) -> tuple[str | TurnReply, LoopTrace | None]:
         row = self._storage.fetch_one(
             "SELECT symbiote_id FROM sessions WHERE id = ?", (session_id,)
         )
@@ -968,7 +1010,7 @@ class SymbioteKernel:
                 self._tool_gateway.run_coroutine_sync(
                     self._hooks.after_turn(turn_messages, _response_text(response))
                 )
-            return response
+            return response, result.loop_trace
         finally:
             close_turn_record(record_token)
             self._persist_turn_context(record)
@@ -983,8 +1025,12 @@ class SymbioteKernel:
         llm_config: dict | None = None,
         *,
         host_context: Mapping[str, Any] | None = None,
-    ) -> str:
+    ) -> str | TurnReply:
         """Async variant of message() — supports async tool handlers and on_token streaming.
+
+        Returns what ``message()`` returns: the reply text, or a
+        :class:`TurnReply` dict when the turn called tools. ``turn_async()``
+        returns a :class:`TurnOutcome` instead.
 
         Uses per-session async locking: concurrent requests on the same session
         are serialized, while different sessions process in parallel.
@@ -992,6 +1038,39 @@ class SymbioteKernel:
         ``llm_config`` and ``host_context`` mirror the sync ``message()``
         semantics.
         """
+        reply, _trace = await self._message_async_locked(
+            session_id, content, extra_context, on_token, llm_config, host_context
+        )
+        return reply
+
+    async def turn_async(
+        self,
+        session_id: str,
+        content: str,
+        extra_context: dict | None = None,
+        on_token: Callable[[str], None] | None = None,
+        llm_config: dict | None = None,
+        *,
+        host_context: Mapping[str, Any] | None = None,
+    ) -> TurnOutcome:
+        """Async variant of ``turn()``: runs like ``message_async()`` and
+        returns a :class:`TurnOutcome`."""
+        return turn_outcome(
+            *await self._message_async_locked(
+                session_id, content, extra_context, on_token, llm_config, host_context
+            )
+        )
+
+    async def _message_async_locked(
+        self,
+        session_id: str,
+        content: str,
+        extra_context: dict | None,
+        on_token: Callable[[str], None] | None,
+        llm_config: dict | None,
+        host_context: Mapping[str, Any] | None,
+    ) -> tuple[str | TurnReply, LoopTrace | None]:
+        """One async turn under the session lock: the reply and its trace."""
         host_token = bind_host_context(host_context)
         try:
             lock = self._session_lock
@@ -1034,7 +1113,7 @@ class SymbioteKernel:
         extra_context: dict | None = None,
         on_token: Callable[[str], None] | None = None,
         llm_config: dict | None = None,
-    ) -> str:
+    ) -> tuple[str | TurnReply, LoopTrace | None]:
         row = self._storage.fetch_one(
             "SELECT symbiote_id FROM sessions WHERE id = ?", (session_id,)
         )
@@ -1073,7 +1152,7 @@ class SymbioteKernel:
                 self._sessions.delete_message(user_message.id)
                 raise
             await self._hooks.after_turn(turn_messages, _response_text(response))
-            return response
+            return response, result.loop_trace
         finally:
             close_turn_record(record_token)
             self._persist_turn_context(record)
