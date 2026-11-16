@@ -685,6 +685,13 @@ name]`), never as structured tool-call blocks: providers such as Anthropic
 and Bedrock refuse a history with tool blocks when the request declares no
 tool.
 
+What counts as stagnating: the same tool with the same parameters twice in a
+row **after the first call worked** (the second can only get the same answer
+again), or five calls cycling over two signatures. Repeating a call that
+failed is a retry, which a user may ask for ("try again if it fails") and a
+transient error may need; those repeats are stopped by the circuit breaker
+at the third consecutive failure of the tool.
+
 ---
 
 ## Context Injection

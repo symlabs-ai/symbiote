@@ -11,7 +11,9 @@ class LoopController:
 
     Detects four stop conditions:
     1. Max iterations reached
-    2. Stagnation — same tool_id + same params called 2+ times consecutively
+    2. Stagnation — same tool_id + same params called 2+ times consecutively,
+       the first of them successful (repeating a failure is a retry, left
+       to the circuit breaker)
     3. Stagnation (ping-pong) — last ``_PING_PONG_WINDOW`` calls alternate
        across at most 2 distinct (tool_id, params) keys. Catches the
        A,B,A,B,A pattern that condition 2 misses by definition (the
@@ -88,7 +90,8 @@ class LoopController:
 
         Stop conditions:
         1. Max iterations reached
-        2. Duplicate detection: same tool_id + same params called 2+ times consecutively
+        2. Duplicate detection: same tool_id + same params called 2+ times
+           consecutively after a success
         3. Ping-pong: last ``_PING_PONG_WINDOW`` calls cycle across ≤ 2 distinct keys
         4. Circuit breaker: same tool_id failed 3+ times consecutively
         """
@@ -100,11 +103,15 @@ class LoopController:
             if count >= 3:
                 return True, "circuit_breaker"
 
-        # Duplicate detection: last two calls are identical (same tool_id + params)
+        # Duplicate detection: the last two calls are identical (same tool_id
+        # + params) and the first one worked, so the second can only get the
+        # same answer again. Retrying a call that failed is what a user asks
+        # for ("tente de novo se falhar") and what a transient error needs;
+        # those repeats stop at the circuit breaker above, three in a row.
         if len(self._history) >= 2:
-            prev_tool, prev_params, _ = self._history[-2]
+            prev_tool, prev_params, prev_ok = self._history[-2]
             curr_tool, curr_params, _ = self._history[-1]
-            if prev_tool == curr_tool and prev_params == curr_params:
+            if prev_ok and prev_tool == curr_tool and prev_params == curr_params:
                 return True, "stagnation"
 
         # Ping-pong detection: trailing window with very low call diversity.

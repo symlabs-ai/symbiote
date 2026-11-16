@@ -113,6 +113,24 @@ class TestDuplicateDetection:
         should_stop, _ = ctrl.should_stop()
         assert should_stop is False
 
+    def test_retrying_a_failed_call_is_not_stagnation(self) -> None:
+        """A failed call repeated as is: a retry, which the user may have
+        asked for. The circuit breaker stops it at the third failure."""
+        ctrl = LoopController(max_iterations=10)
+        ctrl.record("quote", {"currency": "USD"}, False)
+        ctrl.record("quote", {"currency": "USD"}, False)
+        assert ctrl.should_stop() == (False, "")
+        ctrl.record("quote", {"currency": "USD"}, False)
+        assert ctrl.should_stop() == (True, "circuit_breaker")
+
+    def test_repeating_a_call_that_worked_is_stagnation(self) -> None:
+        ctrl = LoopController(max_iterations=10)
+        ctrl.record("quote", {"currency": "USD"}, False)
+        ctrl.record("quote", {"currency": "USD"}, True)
+        assert ctrl.should_stop() == (False, "")
+        ctrl.record("quote", {"currency": "USD"}, True)
+        assert ctrl.should_stop() == (True, "stagnation")
+
     def test_params_order_independent(self) -> None:
         """json.dumps(sort_keys=True) makes param order irrelevant."""
         ctrl = LoopController(max_iterations=10)

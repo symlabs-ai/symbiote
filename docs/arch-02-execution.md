@@ -76,7 +76,7 @@ sequenceDiagram
         CR->>LC: record(tool_id, params, success)
         CR->>LC: should_stop()
 
-        alt stagnation (mesma tool+params 2x)
+        alt stagnation (mesma tool+params 2x, a primeira com sucesso)
             LC-->>CR: true, stagnation
             CR->>LLM: complete(messages + injection_msg)
             Note over CR: Tenta corrigir com mensagem de injecao
