@@ -1,11 +1,30 @@
 // "Roteiro": a guided path through every feature, for presenting.
 
-import { h, mount, act, toast } from './lib.js';
+import { h, mount, act, toast, confirmDialog } from './lib.js';
 
 const KEY = 'demo-tour-done';
 
 const post = (ctx, path, body) => ctx.api.post(path, { symbiote: 'sol', ...body });
 const setConfig = (ctx, fields) => post(ctx, '/api/config', { fields });
+
+// Step 4: the personal API's tools (tasks, calendar, notes, expenses) are
+// discovered from its OpenAPI and loaded. Steps marked `needsPa` use them.
+async function loadPersonalApi(ctx) {
+  const r = await post(ctx, '/api/discovery/run');
+  for (const id of r.found) await post(ctx, '/api/discovery/status', { tool_id: id, status: 'approved' });
+  const l = await post(ctx, '/api/discovery/load');
+  toast(`${l.loaded.length} tools carregadas e autorizadas para o Sol.`);
+}
+
+async function personalApiLoaded(ctx) {
+  const data = await ctx.api.get('/api/tools?symbiote=sol');
+  return data.tools.some((t) => t.source === 'descoberta' && t.authorized);
+}
+
+// Each step's progress lives in this browser; resetting the demo clears it.
+export function resetTourProgress() {
+  try { localStorage.removeItem(KEY); } catch { /* private mode */ }
+}
 
 const STEPS = [
   {
@@ -35,20 +54,13 @@ const STEPS = [
   {
     title: 'Descobrir tools a partir de um OpenAPI',
     why: 'Nenhuma linha de código por tool: o kernel lê /pa/openapi.json, cria tools pendentes e só carrega o que for aprovado.',
-    actions: [{
-      label: 'Descobrir, aprovar tudo e carregar',
-      run: async (ctx) => {
-        const r = await post(ctx, '/api/discovery/run');
-        for (const id of r.found) await post(ctx, '/api/discovery/status', { tool_id: id, status: 'approved' });
-        const l = await post(ctx, '/api/discovery/load');
-        toast(`${l.loaded.length} tools carregadas e autorizadas para o Sol.`);
-      },
-    }],
+    actions: [{ label: 'Descobrir, aprovar tudo e carregar', run: loadPersonalApi }],
     look: 'Tools: a seção de descoberta e a matriz (origem “descoberta”, risco vindo de x-risk-level).',
     tab: 'tools',
   },
   {
     title: 'Uma tarefa de vários passos',
+    needsPa: true,
     why: 'No modo brief o kernel faz um loop: chama o modelo, executa tools (em paralelo quando dá), devolve os resultados e repete.',
     actions: [{ label: 'Enviar no chat', prompt: 'O que tenho para fazer esta semana? Junte tarefas e agenda e me diga o que é mais urgente.' }],
     look: 'Ao vivo: as iterações, cada tool com parâmetros e resultado, e o motivo de parada.',
@@ -56,6 +68,7 @@ const STEPS = [
   },
   {
     title: 'Aprovação humana',
+    needsPa: true,
     why: 'Tools de risco alto pausam o loop. Negue a primeira vez e veja o modelo lidar com a recusa; depois permita.',
     actions: [
       { label: '1. Pedir para apagar', prompt: 'Apague a tarefa “Organizar fotos da viagem”.' },
@@ -73,6 +86,7 @@ const STEPS = [
   },
   {
     title: 'Carga de tools em índice e memória sob demanda',
+    needsPa: true,
     why: 'Com muitas tools, “index” manda só um catálogo e o modelo busca o schema que precisar. “on_demand” tira memórias do prompt e dá ferramentas de busca.',
     actions: [
       { label: '1. Ligar index + on_demand', run: (ctx) => setConfig(ctx, { tool_loading: 'index', context_mode: 'on_demand' }).then(() => toast('index + on_demand')) },
@@ -84,6 +98,7 @@ const STEPS = [
   },
   {
     title: 'Long-run: planejador, blocos e avaliador',
+    needsPa: true,
     why: 'Para pedidos grandes: um planejador quebra em blocos, cada bloco roda um loop e um avaliador dá nota e pede retrabalho. O avaliador recebe a lista das tools que o bloco executou, e um retrabalho é avisado do que já foi feito.',
     actions: [
       {
@@ -120,6 +135,7 @@ const STEPS = [
   },
   {
     title: 'Skills que o agente escreve',
+    needsPa: true,
     why: 'Com o review ligado, o modelo auxiliar transforma o que funcionou num SKILL.md, que nasce em quarentena.',
     actions: [
       { label: '1. Ligar review e injeção', run: (ctx) => post(ctx, '/api/skills/config', { fields: { skill_review_enabled: true, skill_injection_enabled: true } }).then(() => toast('review de skills ligado')) },
@@ -171,8 +187,17 @@ export function initTour(ctx) {
         h('div.n', `${String(i + 1).padStart(2, '0')}${done.has(i) ? ' ✓' : ''}`),
         h('h3', s.title),
         h('p.dim.small', s.why),
+        s.needsPa ? h('p.faint.small', 'Usa as tools do passo 4 (tarefas, agenda, notas, despesas).') : '',
         h('div.row', s.actions.map((a) => h('button.btn.sm', {
           onclick: (e) => act(e.currentTarget, async () => {
+            if (s.needsPa && !(await personalApiLoaded(ctx))) {
+              const ok = await confirmDialog('Falta o passo 4',
+                'Este passo usa as tools de tarefas, agenda, notas e despesas, que vêm da API pessoal. '
+                + 'Sem elas o Sol não tem como responder. Carregar agora (passo 4) e seguir?');
+              if (!ok) return;
+              await loadPersonalApi(ctx);
+              done.add(STEPS.findIndex((x) => x.actions.some((y) => y.run === loadPersonalApi)));
+            }
             if (a.prompt) {
               ctx.sendPrompt(a.prompt, 'sol');
               ctx.openTab(s.tab);

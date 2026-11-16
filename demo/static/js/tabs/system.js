@@ -2,6 +2,7 @@
 // checks, retention, the CLI/Console on the same database, and settings.
 
 import { h, mount, badge, empty, act, fmtTime, pre, fold, short, select, toast, confirmDialog, score } from '../lib.js';
+import { resetTourProgress } from '../tour.js';
 
 async function sessionsCard(ctx) {
   const sessions = await ctx.api.get(`/api/sessions?symbiote=${ctx.symbiote}`);
@@ -144,6 +145,7 @@ export default {
               const ok = await confirmDialog('Zerar o demo?', 'Apaga memórias, sessões, skills, tools descobertas e os dados da API pessoal, e começa do zero. A chave continua salva.');
               if (!ok) return;
               await act(e.currentTarget, () => ctx.api.post('/api/reset'));
+              resetTourProgress(); // the ✓ of steps whose results were just deleted
               toast('Demo zerado.');
               location.reload();
             },

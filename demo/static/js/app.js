@@ -11,7 +11,9 @@ import skills from './tabs/skills.js';
 import harness from './tabs/harness.js';
 import web from './tabs/web.js';
 import system from './tabs/system.js';
-import { initTour } from './tour.js';
+import { initTour, resetTourProgress } from './tour.js';
+
+const PAGE_LOADED_AT = Date.now();
 
 const TABS = [live, context, memory, learning, tools, execution, skills, harness, web, system];
 const PAGE_LOADED = Date.now() / 1000;
@@ -373,6 +375,12 @@ function handleEvent(ev) {
   // approval_result, when it already came, follows in the replay and closes it.
   if (ev.type === 'approval_request' && ev.ts + (ev.timeout_s || 180) > Date.now() / 1000) queueApproval(ev);
   if (ev.type === 'approval_result') resolveApproval(ev.id, ev);
+  // The demo was reset (here or from elsewhere): the tour marks and what this
+  // page shows belong to data that is gone. Replayed resets predate the page.
+  if (ev.type === 'runtime' && ev.state === 'reset' && ev.ts * 1000 > PAGE_LOADED_AT) {
+    resetTourProgress();
+    reloadAfterRestart('O demo foi zerado. Recarregando a página…');
+  }
   if (ev.type === 'session' || ev.type === 'turn_end' || ev.type === 'learned') reloadStatus();
   // Only a reset that happens after this page loaded: the event stays in the
   // replay buffer, and reacting to the old one would reload forever.

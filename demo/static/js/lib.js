@@ -16,10 +16,10 @@ export async function serverRestarted() {
 }
 
 let reloading = false;
-export function reloadAfterRestart() {
+export function reloadAfterRestart(message = 'O servidor do demo reiniciou. Recarregando a página…') {
   if (reloading) return;
   reloading = true;
-  toast('O servidor do demo reiniciou. Recarregando a página…', 'warn');
+  toast(message, 'warn');
   setTimeout(() => window.location.reload(), 1500);
 }
 
