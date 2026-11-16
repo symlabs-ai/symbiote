@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.9] - 2026-11-16
+
 Memória por usuário final: um symbiote que conversa com várias pessoas passa a guardar uma partição de memória por pessoa (B-79, pedido pelo estúdio de symbiotas).
 
 **Mudança de comportamento para hosts:** nenhuma para quem não usa `subject_key`. As sessões e memórias existentes ficam na partição compartilhada, que é o comportamento anterior. O banco ganha a migração 12 no SQLite e a 6 no PostgreSQL, aplicadas na inicialização.
