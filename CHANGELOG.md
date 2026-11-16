@@ -5,6 +5,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.8] - 2026-11-16
+
+Os dois pontos que o protótipo do SymGateway deixou em aberto na v0.8.7: saber pelo próprio turno por que o loop de tools parou, e o tipo do que `message()` devolve.
+
+### Novas funcionalidades
+
+- feat(kernel): `kernel.turn()` e `kernel.turn_async()` recebem os mesmos argumentos de `message()` e devolvem um `TurnOutcome`: a resposta, os resultados das tools (`ToolCallResult`), o `stop_reason` (`end_turn`, `max_iterations`, `stagnation`, `circuit_breaker`, `timeout`, `on_after_tool_result` ou `block_failure`, listados em `symbiote.core.turn_result.STOP_REASONS`), `stopped_early`, iterações, chamadas de tool, tempo e modo. O host deixa de precisar ler `execution_traces` para isso.
+
+### Correções
+
+- fix(kernel): `message()` e `message_async()` passam a declarar `str | TurnReply`, o dicionário (`text`, `tool_results`) que já devolviam quando o turno chamava tools; antes estavam anotados como `str`. O comportamento não muda.
+- fix(demo): o chat segue só o próprio turno (antes adotava o primeiro turno do Symbiota e podia misturar o texto e as ferramentas de outra aba); pedidos de aprovação contados por tool; o evento de reset deixa de ser tratado duas vezes; o README descreve o streaming ao vivo; `run_turn` usa `turn_async()`.
+
+### Outros
+
+- docs(approval): `risk_threshold` documentado na seção "Human-in-the-Loop" do guia, com os níveis, o alcance (kernel inteiro: chat, `instant` e blocos de `long_run`) e como variar por usuário com `pass_context=True`.
+
 ## [v0.8.7] - 2026-11-16
 
 O agente pode trabalhar no Chrome que a pessoa já usa, com os logins dela, sem configuração de arquivo; o host escolhe a partir de que risco uma tool pede aprovação.
