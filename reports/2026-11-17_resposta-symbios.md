@@ -132,7 +132,7 @@ report_usage(usage=usage_from_provider(resposta.usage), provider="anthropic", mo
 
 Os dois adapters que vêm com a engine preenchem os campos:
 
-- **`ForgeLLMAdapter`.** O `forge_llm` reduzia o uso do provedor a três contadores, então o cache não chegava e a entrada da Anthropic vinha sem a parte do cache. Corrigimos no `forge_llm` (v0.7.17) e a engine já usa essa versão. Vale para Anthropic e OpenAI, em respostas de texto, com ferramentas e em streaming.
+- **`ForgeLLMAdapter`.** O `forge_llm` reduzia o uso do provedor a três contadores, então o cache não chegava e a entrada da Anthropic vinha sem a parte do cache. Corrigimos no `forge_llm` (a partir da v0.7.17; a engine usa a v0.7.18). Vale para Anthropic e OpenAI, em respostas de texto, com ferramentas e em streaming.
 - **`SymGatewayLLMAdapter`.** Ele procurava `prompt_tokens` e `completion_tokens`, e o gateway responde `input_tokens` e `output_tokens`, então entrada e saída vinham vazias. Corrigimos, e ele preenche também os campos de cache.
 
 Um adapter próprio, como o de vocês para as chaves diretas, preenche tudo com `usage_from_provider`. No streaming da OpenAI é preciso pedir o uso ao provedor (`stream_options.include_usage`), como vocês já apontaram.
@@ -297,6 +297,7 @@ Toda opção nova nasce com o comportamento anterior. O banco ganha as migraçõ
 - **`prune()`.** Devolve mais uma chave, `llm_usage`.
 - **Busca na web.** O mecanismo deixou de ser fixo. Os nomes que existiam (`brave`, `symgateway_objective`, `firecrawl`) continuam valendo; agora dá para passar um provedor próprio ou usar `brave_api` e `searxng`, que não passam pelo SymGateway.
 - **Persona.** A forma como a engine lê a persona não mudou, então o embrulho atual de vocês continua funcionando até migrarem.
+- **Tokens de entrada com a Anthropic.** `prompt_tokens` passa a ser a entrada inteira, com o cache, em todo registro. Pelo `ForgeLLMAdapter` a parte do cache ficava de fora, então o número sobe para quem usa cache. Se vocês calculam custo a partir de `prompt_tokens`, descontem `cache_read_tokens` e `cache_write_tokens` antes de aplicar o preço comum.
 
 ## 5. O que achamos no caminho
 

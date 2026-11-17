@@ -434,6 +434,13 @@ may notice:
   `NotImplementedError`.
 - **`ForgeLLMAdapter`** no longer sends `project_slug` to providers other than
   `symgateway`.
+- **Input tokens with Anthropic:** `prompt_tokens` is now the whole input,
+  prompt cache included, on every usage record. Through `ForgeLLMAdapter` the
+  cached part used to be left out, so for hosts that use prompt caching the
+  input count (and `total_tokens`) goes up. A host that prices from
+  `prompt_tokens` must take the cache out: the input at the ordinary rate is
+  `prompt_tokens - cache_read_tokens - cache_write_tokens`. OpenAI is
+  unchanged. `ForgeLLMAdapter` also asks every streamed call for its usage.
 - **Private attributes:** `kernel._llm` and `kernel._evolver_llm` are now a
   metering wrapper around the adapter you passed (`.wrapped` is your adapter,
   and its attributes stay reachable through the wrapper). `current_spawn()`
@@ -1446,8 +1453,8 @@ added to it. An adapter may also pass the counters one by one:
 `report_usage(1200, 80, cache_read_tokens=1024)`.
 
 Both bundled adapters fill these counters. `ForgeLLMAdapter` reads the
-provider's own usage, which `forge_llm` hands over from version 0.7.17 (the
-one this release pins): for OpenAI and Anthropic, in plain and tool answers
+provider's own usage, which `forge_llm` hands over from version 0.7.17 (this
+release pins 0.7.18): for OpenAI and Anthropic, in plain and tool answers
 and in streams (it asks the stream for its usage). `SymGatewayLLMAdapter`
 reads the gateway's usage.
 

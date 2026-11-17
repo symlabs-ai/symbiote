@@ -14,7 +14,9 @@ Pedidos de hosts atendidos na engine (B-36, B-80 a B-93; vieram da equipe do Sym
 - `prune()` devolve mais uma chave, `llm_usage`; as linhas de `inspector.list_turn_contexts` trazem `llm_calls` e os tokens do turno;
 - `register(search_routing=...)` sem provedor para `web_search` agora dá `ValueError` (antes caía no Brave pelo SymGateway); nome de backend desconhecido dá `ValueError` em vez de `NotImplementedError`;
 - `ForgeLLMAdapter` só envia `project_slug` quando o provider é `symgateway`;
-- `kernel._llm` e `kernel._evolver_llm` (atributos privados) passam a ser um medidor em volta do adapter recebido; `.wrapped` devolve o adapter.
+- `kernel._llm` e `kernel._evolver_llm` (atributos privados) passam a ser um medidor em volta do adapter recebido; `.wrapped` devolve o adapter;
+- **tokens de entrada com a Anthropic:** em todo registro de uso (`LLMResponse.usage` do `ForgeLLMAdapter`, `llm_usage`, `TurnOutcome.usage`), `prompt_tokens` passa a ser a entrada inteira, com a parte lida e a parte escrita no cache. Antes, pelo `ForgeLLMAdapter` com a Anthropic, essa parte ficava de fora. Para quem usa prompt cache o número de entrada sobe, e `total_tokens` junto. Quem calcula custo a partir de `prompt_tokens` precisa descontar o cache: a entrada cobrada pelo preço comum é `prompt_tokens - cache_read_tokens - cache_write_tokens`. Com a OpenAI nada muda, porque ela já contava o cache dentro da entrada;
+- o `ForgeLLMAdapter` passa a pedir o uso em toda chamada com streaming (`include_usage`): com provedores no formato da OpenAI a requisição leva `stream_options.include_usage`.
 
 ### Novas funcionalidades
 
@@ -37,7 +39,7 @@ Pedidos de hosts atendidos na engine (B-36, B-80 a B-93; vieram da equipe do Sym
 - fix(ui): no modo inline, o `<symbiote-chat>` marcava o histórico como carregado ainda com o `NoopAdapter`, e um adapter definido depois nunca o carregava (B-82).
 - fix(llm): `ForgeLLMAdapter` enviava `project_slug="symbiote"` a qualquer provedor; agora só ao `symgateway`, e o host pode trocar ou tirar com `project_slug=` (B-92).
 - fix(usage): os adapters `ForgeLLMAdapter` e `SymGatewayLLMAdapter` perdiam os tokens das respostas em texto puro; agora informam ao kernel.
-- fix(llm): `forge-llm` atualizado para a v0.7.17 (`62f5939`), que repassa o uso do provedor como veio. Com isso o `ForgeLLMAdapter` preenche os tokens de cache da Anthropic e da OpenAI, com e sem streaming (ele passa a pedir o uso do stream), e a entrada da Anthropic deixa de vir sem a parte do cache (B-94).
+- fix(llm): `forge-llm` atualizado para a v0.7.18 (`b26b5e3`). A v0.7.17 passou a repassar o uso do provedor como veio; a v0.7.18 só acrescenta as notas de atualização dela. Com isso o `ForgeLLMAdapter` preenche os tokens de cache da Anthropic e da OpenAI, com e sem streaming (ele passa a pedir o uso do stream), e a entrada da Anthropic deixa de vir sem a parte do cache (B-94).
 - fix(symgateway): o `SymGatewayLLMAdapter` lia `usage.prompt_tokens` / `completion_tokens`, mas o gateway responde `input_tokens` / `output_tokens`; os tokens de entrada e de saída vinham vazios. Agora lê os campos do gateway, inclusive os de cache.
 
 ### Outros
