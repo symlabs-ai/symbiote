@@ -686,7 +686,7 @@ def test_database_from_before_subjects_opens_and_behaves_as_before(tmp_path: Pat
         "ALTER TABLE memory_entries DROP COLUMN subject_key;"
         "ALTER TABLE sessions DROP COLUMN subject_key;"
         "ALTER TABLE environment_configs DROP COLUMN learn_from_subject_sessions;"
-        f"PRAGMA user_version = {SCHEMA_VERSION - 1};"
+        "PRAGMA user_version = 11;"  # the migration before ``subject_key``
     )
     conn.close()
 

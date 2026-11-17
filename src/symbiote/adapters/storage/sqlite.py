@@ -185,6 +185,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "_migrate_cancel_relay",
     "_migrate_tool_visibility",
     "_migrate_subject_key",
+    "_migrate_host_options",
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -626,6 +627,23 @@ class SQLiteAdapter:
             "ON sessions(symbiote_id, subject_key)",
         ):
             self._conn.execute(stmt)
+        self._conn.commit()
+
+    def _migrate_host_options(self) -> None:
+        """13: per-symbiote options asked by hosts (trial skills listed, the
+        dream's model, the session summary mode), knowledge kept out of the
+        automatic recall, and whether a score row was already computed by a
+        session close."""
+        for stmt in (
+            "ALTER TABLE environment_configs ADD COLUMN skill_trial_listing INTEGER DEFAULT 0",
+            "ALTER TABLE environment_configs ADD COLUMN dream_llm TEXT DEFAULT 'aux'",
+            "ALTER TABLE environment_configs "
+            "ADD COLUMN session_summary_mode TEXT DEFAULT 'concat'",
+            "ALTER TABLE knowledge_entries ADD COLUMN auto_recall INTEGER DEFAULT 1",
+            "ALTER TABLE session_scores ADD COLUMN scored_at_close INTEGER DEFAULT 1",
+        ):
+            with contextlib.suppress(sqlite3.OperationalError):  # column already exists
+                self._conn.execute(stmt)
         self._conn.commit()
 
     def execute(self, sql: str, params: tuple | None = None) -> sqlite3.Cursor:

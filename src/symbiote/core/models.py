@@ -200,6 +200,10 @@ class EnvironmentConfig(BaseModel):
     dream_mode: Literal["off", "light", "full"] = "off"
     dream_max_llm_calls: int = Field(default=10, ge=1, le=50)
     dream_min_sessions: int = Field(default=5, ge=1, le=100)
+    # Which model the dream's phases call: ``aux`` is the auxiliary model
+    # (``set_evolver_llm``; the main one when none was set), ``main`` is
+    # always the main model.
+    dream_llm: Literal["aux", "main"] = "aux"
     # Reflection mode configuration
     #   keyword  — legacy heuristic (no LLM); default for backward compat
     #   llm      — LLM-based via _evolver_llm (cheap aux model required)
@@ -212,6 +216,12 @@ class EnvironmentConfig(BaseModel):
     # memory_entries (reflection, failure memory, handoff, dream, ``learn``)
     # and nothing is recalled into the context or by ``search_memories``.
     memory_enabled: bool = True
+    # The summary stored when a session closes:
+    #   concat — the non-noise messages joined into one paragraph (no LLM)
+    #   llm    — written by the auxiliary model; falls back to ``concat``
+    #            when there is no model or the call fails
+    #   off    — no summary
+    session_summary_mode: Literal["concat", "llm", "off"] = "concat"
     # Whether the sessions of end users (sessions with a ``subject_key``)
     # feed what is learned for the symbiote as a whole: the parameter tuner,
     # the harness evolver and its per-version scores, the dream's ``mine``
@@ -238,6 +248,13 @@ class EnvironmentConfig(BaseModel):
     #           demand via the skill_view tool (progressive disclosure). Pair
     #           with tools=[..., 'skill_view']. Mirrors tool_loading=full|index.
     skill_injection_mode: Literal["full", "index"] = "full"
+    # Whether skills on trial (status ``quarantine``, written by the agent
+    # and not yet promoted) are shown to the model. False (default): only
+    # active skills are listed and ``skill_view`` refuses the others, so a
+    # trial skill is promoted only by the host. True: trial skills are
+    # listed, marked as on trial, ``skill_view`` reads them and each read
+    # counts towards ``skill_auto_promote_threshold``.
+    skill_trial_listing: bool = False
     # Skill review quality criteria (S5). ``skill_review_strict`` prepends a
     # stricter "do NOT capture" block to the evolver prompt (reject persona
     # re-documentation, task-scoped names, etc.). ``skill_review_extra_criteria``

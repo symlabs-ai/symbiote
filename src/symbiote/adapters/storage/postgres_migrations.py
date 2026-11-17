@@ -419,6 +419,18 @@ CREATE INDEX idx_memory_symbiote_subject ON memory_entries(symbiote_id, subject_
 CREATE INDEX idx_sessions_symbiote_subject ON sessions(symbiote_id, subject_key);
 """
 
+_V7_HOST_OPTIONS = """
+ALTER TABLE environment_configs ADD COLUMN skill_trial_listing INTEGER DEFAULT 0;
+
+ALTER TABLE environment_configs ADD COLUMN dream_llm TEXT DEFAULT 'aux';
+
+ALTER TABLE environment_configs ADD COLUMN session_summary_mode TEXT DEFAULT 'concat';
+
+ALTER TABLE knowledge_entries ADD COLUMN auto_recall INTEGER DEFAULT 1;
+
+ALTER TABLE session_scores ADD COLUMN scored_at_close INTEGER DEFAULT 1;
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "baseline", _V1_BASELINE),
     (2, "session_locks", _V2_SESSION_LOCKS),
@@ -426,6 +438,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (4, "cancel_relay", _V4_CANCEL_RELAY),
     (5, "tool_visibility", _V5_TOOL_VISIBILITY),
     (6, "subject_key", _V6_SUBJECT_KEY),
+    (7, "host_options", _V7_HOST_OPTIONS),
 )
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

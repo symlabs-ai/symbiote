@@ -157,6 +157,9 @@ class ConfigRequest(BaseModel):
     prompt_caching: bool | None = None
     # Whether sessions of end users (subject_key) feed harness, dream and skills
     learn_from_subject_sessions: bool | None = None
+    skill_trial_listing: bool | None = None  # trial skills listed to the model
+    dream_llm: str | None = None  # "aux" | "main"
+    session_summary_mode: str | None = None  # "concat" | "llm" | "off"
     # Long-run mode
     planner_prompt: str | None = None
     evaluator_prompt: str | None = None
@@ -182,6 +185,9 @@ class ConfigResponse(BaseModel):
     context_mode: str = "packed"
     prompt_caching: bool = False
     learn_from_subject_sessions: bool = False
+    skill_trial_listing: bool = False
+    dream_llm: str = "aux"
+    session_summary_mode: str = "concat"
     planner_prompt: str | None = None
     evaluator_prompt: str | None = None
     evaluator_criteria: list[dict] | None = None
