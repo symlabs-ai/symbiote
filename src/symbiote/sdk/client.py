@@ -241,6 +241,32 @@ class SymbioteClient:
         """List tools available to a Symbiota."""
         return self._get(f"/symbiotes/{symbiote_id}/tools")
 
+    # ── Approvals that wait for a person ──────────────────────────────────
+
+    def list_approvals(
+        self,
+        symbiote_id: str,
+        *,
+        status: str = "pending",
+        subject_key: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Tool calls of a Symbiota deferred by the host's approval callback.
+        ``status="all"`` lists every state."""
+        params: dict[str, Any] = {"status": status, "limit": limit}
+        if subject_key:
+            params["subject_key"] = subject_key
+        return self._get(f"/symbiotes/{symbiote_id}/approvals", params=params)
+
+    def resolve_approval(
+        self, approval_id: str, approved: bool, *, note: str | None = None
+    ) -> dict:
+        """Approve (the call runs now) or deny a deferred tool call."""
+        body: dict[str, Any] = {"approved": approved}
+        if note is not None:
+            body["note"] = note
+        return self._post(f"/approvals/{approval_id}/resolve", body)
+
     # ── Internal ──────────────────────────────────────────────────────────
 
     def _get(self, path: str, params: dict | None = None) -> Any:

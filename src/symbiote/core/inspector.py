@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from symbiote.core.approvals import PENDING, PendingApprovalStore
 from symbiote.core.ports import StoragePort
 from symbiote.core.subjects import ANY_SUBJECT, AnySubject
 
@@ -321,6 +322,40 @@ class KernelInspector:
         params.append(limit)
         rows = self._storage.fetch_all(sql, tuple(params))
         return [_decode(r, "ops_json") for r in rows]
+
+    # ── approvals that wait for a person ───────────────────────────────
+
+    def list_pending(
+        self,
+        symbiote_id: str | None = None,
+        *,
+        status: str | None = PENDING,
+        session_id: str | None = None,
+        subject_key: str | None | AnySubject = ANY_SUBJECT,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Tool calls deferred by the approval callback, newest first.
+
+        By default the ones still waiting; ``status`` picks another state
+        (``approved``, ``denied``, ``expired``, ``executed``, ``failed``) and
+        ``status=None`` every state. A request past its time is listed as
+        ``expired``. ``params`` are the call's parameters with the known
+        secrets removed; ``result`` / ``error`` are the outcome of an approved
+        call. Decide one with ``kernel.resolve_pending(id, approved)``.
+        """
+        found = PendingApprovalStore(self._storage).find(
+            symbiote_id,
+            status=status,
+            session_id=session_id,
+            subject_key=subject_key,
+            limit=limit,
+        )
+        return [approval.model_dump() for approval in found]
+
+    def get_pending(self, approval_id: str) -> dict | None:
+        """One deferred tool call by id (``None`` when unknown)."""
+        found = PendingApprovalStore(self._storage).get(approval_id)
+        return found.model_dump() if found is not None else None
 
     # ── model usage ────────────────────────────────────────────────────
 

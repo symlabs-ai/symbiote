@@ -122,6 +122,13 @@ class ChatResponse(BaseModel):
     session_id: str
 
 
+class ResolveApprovalRequest(BaseModel):
+    """Decide a tool call that waited for approval."""
+
+    approved: bool
+    note: str | None = None
+
+
 class ToolExecRequest(BaseModel):
     params: dict[str, Any] = {}
 

@@ -31,6 +31,7 @@ from symbiote.api.schemas import (
     CreateSessionRequest,
     MemoryEntryResponse,
     MessageResponse,
+    ResolveApprovalRequest,
     SessionResponse,
 )
 from symbiote.core.exceptions import (
@@ -250,6 +251,51 @@ def chat(
         response=response if isinstance(response, str) else dict(response),
         session_id=session_id,
     )
+
+
+# ── Approvals that wait for a person ─────────────────────────────────────
+
+
+@router.get("/symbiotes/{symbiote_id}/approvals")
+def list_approvals(
+    symbiote_id: str,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
+    status: str | None = Query(default="pending"),
+    subject_key: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[dict]:
+    """Tool calls of a symbiote deferred by the approval callback: the ones
+    still waiting, or the ones in another ``status`` (``all`` for every state)."""
+    _require_symbiote_access(kernel._storage, symbiote_id, auth)
+    filters: dict[str, Any] = {"status": None if status == "all" else status, "limit": limit}
+    if subject_key is not None:
+        filters["subject_key"] = subject_key
+    return kernel.inspector.list_pending(symbiote_id, **filters)
+
+
+@router.post("/approvals/{approval_id}/resolve")
+def resolve_approval(
+    approval_id: str,
+    body: ResolveApprovalRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
+) -> dict:
+    """Approve (the call runs now) or deny a tool call that waited for
+    approval; returns the request in its new state."""
+    found = kernel.inspector.get_pending(approval_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Pending approval not found")
+    _require_symbiote_access(kernel._storage, found["symbiote_id"], auth)
+    try:
+        resolved = kernel.resolve_pending(
+            approval_id, body.approved, note=body.note, resolved_by=auth.id
+        )
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return resolved.model_dump()
 
 
 def _require_llm(kernel: SymbioteKernel) -> None:

@@ -187,6 +187,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "_migrate_subject_key",
     "_migrate_host_options",
     "_migrate_llm_usage",
+    "_migrate_pending_approvals",
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -683,6 +684,46 @@ class SQLiteAdapter:
         ):
             with contextlib.suppress(sqlite3.OperationalError):  # column already exists
                 self._conn.execute(stmt)
+        self._conn.commit()
+
+    def _migrate_pending_approvals(self) -> None:
+        """15: tool calls that wait for a person's approval, and the link
+        from the audit row of their execution back to the request."""
+        self._conn.execute(
+            """CREATE TABLE IF NOT EXISTS pending_approvals (
+                id TEXT PRIMARY KEY,
+                symbiote_id TEXT NOT NULL,
+                session_id TEXT,
+                root_session_id TEXT,
+                root_symbiote_id TEXT,
+                subject_key TEXT,
+                tool_id TEXT NOT NULL,
+                params_json TEXT,
+                params_preview_json TEXT,
+                risk_level TEXT,
+                reason TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                expires_at TEXT,
+                resolved_at TEXT,
+                resolved_by TEXT,
+                note TEXT,
+                result_json TEXT,
+                error TEXT,
+                delivered_at TEXT
+            )"""
+        )
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS idx_pending_approvals_symbiote "
+            "ON pending_approvals(symbiote_id, status, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_pending_approvals_session "
+            "ON pending_approvals(session_id)",
+            "CREATE INDEX IF NOT EXISTS idx_pending_approvals_subject "
+            "ON pending_approvals(symbiote_id, subject_key)",
+        ):
+            self._conn.execute(stmt)
+        with contextlib.suppress(sqlite3.OperationalError):  # column already exists
+            self._conn.execute("ALTER TABLE audit_log ADD COLUMN approval_id TEXT")
         self._conn.commit()
 
     def execute(self, sql: str, params: tuple | None = None) -> sqlite3.Cursor:

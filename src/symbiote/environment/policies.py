@@ -19,6 +19,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 from symbiote.core.ports import StoragePort
+from symbiote.environment.exec_context import current_tool_context
 from symbiote.environment.manager import EnvironmentManager
 
 logger = logging.getLogger(__name__)
@@ -101,6 +102,55 @@ class ToolDecision:
     @classmethod
     def deny(cls, reason: str) -> ToolDecision:
         return cls(allowed=False, reason=reason)
+
+
+@dataclass(frozen=True)
+class ApprovalDecision:
+    """Answer of the approval callback (``kernel.set_approval_callback``).
+
+    The callback may still return ``True`` / ``False``; this type adds a
+    third answer, ``defer``: nobody can decide now. The call is not executed,
+    the kernel records it as a pending approval, the model is told that it
+    is waiting, and the turn ends normally. The host decides later with
+    ``kernel.resolve_pending(...)``.
+
+    ``reason`` is recorded with the request (why it needs a person).
+    ``message`` replaces the text the model is given for a deferred call.
+    ``expires_in`` (seconds) replaces the kernel's default time to live.
+    """
+
+    outcome: str  # "approve" | "deny" | "defer"
+    reason: str = ""
+    message: str | None = None
+    expires_in: float | None = None
+
+    @classmethod
+    def approve(cls) -> ApprovalDecision:
+        return cls(outcome="approve")
+
+    @classmethod
+    def deny(cls, reason: str = "") -> ApprovalDecision:
+        return cls(outcome="deny", reason=reason)
+
+    @classmethod
+    def defer(
+        cls,
+        reason: str = "",
+        *,
+        message: str | None = None,
+        expires_in: float | None = None,
+    ) -> ApprovalDecision:
+        return cls(outcome="defer", reason=reason, message=message, expires_in=expires_in)
+
+
+def as_approval_decision(value: Any) -> ApprovalDecision:
+    """Normalize what an approval callback returned: an ``ApprovalDecision``
+    as it is, anything else by truthiness (``True`` approves)."""
+    if isinstance(value, ApprovalDecision):
+        if value.outcome not in ("approve", "deny", "defer"):
+            return ApprovalDecision.deny(f"unknown approval outcome {value.outcome!r}")
+        return value
+    return ApprovalDecision.approve() if value else ApprovalDecision.deny()
 
 
 # ── PolicyGate ────────────────────────────────────────────────────────────────
@@ -331,10 +381,12 @@ class PolicyGate:
     ) -> None:
         if self.params_filter is not None:
             params = self.params_filter(tool_id, params)
+        # The execution of a call that waited for approval names its request.
+        caller = current_tool_context()
         self._storage.execute(
             "INSERT INTO audit_log "
-            "(id, symbiote_id, session_id, tool_id, action, params_json, result, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, symbiote_id, session_id, tool_id, action, params_json, result, created_at, "
+            "approval_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 str(uuid4()),
                 symbiote_id,
@@ -344,5 +396,6 @@ class PolicyGate:
                 json.dumps(params),
                 result,
                 datetime.now(tz=UTC).isoformat(),
+                caller.approval_id if caller is not None else None,
             ),
         )

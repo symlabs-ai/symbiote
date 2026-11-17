@@ -21,6 +21,11 @@ from symbiote.agent_protocols import (
     create_default_protocol_registry,
 )
 from symbiote.config.models import KernelConfig
+from symbiote.core.approvals import (
+    PendingApproval,
+    PendingApprovalStore,
+    render_outcomes,
+)
 from symbiote.core.background_review import BackgroundReviewEngine
 from symbiote.core.capabilities import CapabilityError, CapabilitySurface
 from symbiote.core.context import ContextAssembler
@@ -80,12 +85,13 @@ from symbiote.dream.models import DreamReport
 from symbiote.environment.descriptors import HttpToolConfig, ToolDescriptor
 from symbiote.environment.exec_context import (
     bind_host_context,
+    current_spawn,
     current_tool_context,
     reset_host_context,
 )
 from symbiote.environment.http_tool_store import HttpToolRepository
 from symbiote.environment.manager import EnvironmentManager
-from symbiote.environment.policies import PolicyGate
+from symbiote.environment.policies import ApprovalDecision, PolicyGate
 from symbiote.environment.tools import ToolGateway, ToolGuard
 from symbiote.harness.versions import HarnessVersionRepository
 from symbiote.knowledge.service import KnowledgeService
@@ -326,6 +332,17 @@ class SymbioteKernel:
         self._tool_gateway.secrets_hook = self._learn_secret_params
         self._policy_gate.params_filter = self._mask_secret_params
 
+        # Tool calls that wait for a person (``ApprovalDecision.defer``).
+        self._approvals = PendingApprovalStore(
+            self._storage,
+            preview=self._mask_secret_params,
+            redact=self._redactor.redact_value,
+        )
+        for name in ("chat", "long_run"):
+            deferring = self._runner_registry.get(name)
+            if isinstance(deferring, ChatRunner | LongRunRunner):
+                deferring.set_deferral_handler(self._defer_tool_call)
+
         # Optional session recall (host provides implementation)
         self._session_recall: SessionRecallPort | None = None
 
@@ -539,7 +556,12 @@ class SymbioteKernel:
         high-risk tools execute unchecked.
 
         The callback receives ``(tool_id, params, risk_level)`` and returns
-        ``True`` to allow or ``False`` to deny. By default it is invoked for
+        ``True`` to allow or ``False`` to deny. It may also return an
+        ``ApprovalDecision`` (``symbiote.environment.policies``):
+        ``approve()``, ``deny(reason)`` or ``defer(reason)`` when nobody can
+        decide now. A deferred call is not executed: it is recorded as a
+        pending approval, the model is told that it is waiting and the turn
+        ends normally; decide later with ``resolve_pending``. By default it is invoked for
         high-risk tools; ``risk_threshold`` may be ``"medium"`` or ``"low"``
         to ask for those risks too. Tools whose descriptor sets
         ``requires_approval`` are always asked; those
@@ -1090,6 +1112,10 @@ class SymbioteKernel:
             extra_context = self._inject_handoff_if_resuming(
                 session_id, symbiote_id, extra_context
             )
+            # What became of the requests that waited for a person.
+            extra_context, told = self._with_approval_outcomes(
+                session_id, symbiote_id, extra_context
+            )
 
             user_message = self._sessions.add_message(session_id, "user", content)
 
@@ -1105,6 +1131,7 @@ class SymbioteKernel:
                     llm_config=llm_config,
                 )
                 response = self._finish_turn(session_id, symbiote_id, result)
+                self._approval_outcomes_told(told)
             except BaseException as exc:
                 if isinstance(exc, TurnStop) and exc.reason == CANCELLED:
                     # Cancelled by the host: the user message stays and the
@@ -1246,6 +1273,10 @@ class SymbioteKernel:
             extra_context = self._inject_handoff_if_resuming(
                 session_id, symbiote_id, extra_context
             )
+            # What became of the requests that waited for a person.
+            extra_context, told = self._with_approval_outcomes(
+                session_id, symbiote_id, extra_context
+            )
 
             user_message = self._sessions.add_message(session_id, "user", content)
 
@@ -1261,6 +1292,7 @@ class SymbioteKernel:
                     llm_config=llm_config,
                 )
                 response = self._finish_turn(session_id, symbiote_id, result)
+                self._approval_outcomes_told(told)
             except BaseException as exc:
                 if isinstance(exc, TurnStop) and exc.reason == CANCELLED:
                     self._record_cancelled_turn(session_id, symbiote_id, exc)
@@ -1364,6 +1396,156 @@ class SymbioteKernel:
         if not result.success:
             raise CapabilityError("chat", result.error or "Chat runner failed")
         return response
+
+    # ── approvals that wait for a person ────────────────────────────────
+
+    # Key of the context block that tells the model what was decided.
+    _APPROVAL_OUTCOMES_KEY = "Requests that waited for approval"
+
+    def _defer_tool_call(
+        self,
+        tool_id: str,
+        params: dict,
+        risk_level: str,
+        decision: ApprovalDecision,
+        symbiote_id: str,
+        session_id: str,
+    ) -> str:
+        """Record a call the approval callback deferred; returns its id."""
+        spawn = current_spawn()
+        delegated = spawn is not None and spawn.session_id == session_id
+        ttl_hours = self._config.pending_approval_ttl_hours
+        ttl = (
+            decision.expires_in
+            if decision.expires_in is not None
+            else (ttl_hours * 3600 if ttl_hours is not None else None)
+        )
+        approval = self._approvals.create(
+            symbiote_id=symbiote_id,
+            session_id=session_id,
+            root_session_id=(spawn.root_session_id if spawn and delegated else None)
+            or session_id,
+            root_symbiote_id=(spawn.root_symbiote_id if spawn and delegated else None)
+            or symbiote_id,
+            subject_key=subject_of_session(self._storage, session_id),
+            tool_id=tool_id,
+            params=params,
+            risk_level=risk_level,
+            reason=decision.reason or None,
+            ttl_seconds=ttl,
+        )
+        return approval.id
+
+    def resolve_pending(
+        self,
+        approval_id: str,
+        approved: bool,
+        *,
+        note: str | None = None,
+        resolved_by: str | None = None,
+        host_context: Mapping[str, Any] | None = None,
+    ) -> PendingApproval:
+        """Decide a tool call that waited for approval; returns the request
+        in its new state.
+
+        ``approved=False`` closes it as ``denied``: nothing runs. With
+        ``approved=True`` the call is executed now, as it was asked: same
+        symbiote, same session, same end user, same parameters. Policy and
+        the tool guard are checked again, because the symbiote's permissions
+        may have changed while it waited; the guard and the handler see the
+        request's id in ``current_tool_context().approval_id`` and the audit
+        row of the execution carries it. The request ends ``executed`` (with
+        the tool's ``result``) or ``failed`` (with ``error``).
+
+        ``note`` and ``resolved_by`` (an opaque id of whoever decided) are
+        recorded with it. ``host_context`` is bound for the execution, as in
+        ``message()``: the context of the turn that asked is not kept. The
+        model learns the outcome at the start of the next turn of that
+        conversation, or of that end user with the same symbiote.
+
+        A request is resolved once: a second call, or a call for a request
+        that expired, raises ``ValidationError``; an unknown id raises
+        ``EntityNotFoundError``. The execution blocks until the tool
+        returns.
+        """
+        self._approvals.expire_due()
+        claimed = self._approvals.claim(
+            approval_id, approved, resolved_by=resolved_by, note=note
+        )
+        if not approved:
+            return claimed
+        cfg = self._environment.get_config(claimed.symbiote_id)
+        host_token = bind_host_context(host_context)
+        try:
+            result = self._tool_gateway.execute(
+                claimed.symbiote_id,
+                claimed.session_id,
+                claimed.tool_id,
+                self._approvals.raw_params(approval_id),
+                timeout=cfg.tool_call_timeout if cfg else 30.0,
+                approval_id=approval_id,
+            )
+        except Exception as exc:
+            logging.getLogger(__name__).exception(
+                "approved call %s (%s) failed", approval_id, claimed.tool_id
+            )
+            return self._approvals.finish(
+                approval_id, executed=False, error=f"{type(exc).__name__}: {exc}"
+            )
+        finally:
+            reset_host_context(host_token)
+        if result.success:
+            return self._approvals.finish(approval_id, executed=True, result=result.output)
+        return self._approvals.finish(
+            approval_id, executed=False, error=result.error or "the tool failed"
+        )
+
+    def expire_pending(self) -> int:
+        """Close as ``expired`` the pending approvals past their time and
+        erase their parameters; returns how many. Runs by itself whenever a
+        request is resolved and at the start of a turn; call it from a
+        schedule to erase the parameters of abandoned requests on time."""
+        return self._approvals.expire_due()
+
+    def _with_approval_outcomes(
+        self, session_id: str, symbiote_id: str, extra_context: dict | None
+    ) -> tuple[dict | None, list[str]]:
+        """Add to the turn's context what became of the requests this
+        conversation (or this end user) left waiting; returns the context
+        and the ids told, to be marked once the turn has answered."""
+        if current_spawn() is not None:
+            return extra_context, []  # told to the conversation, not to a delegate
+        try:
+            self._approvals.expire_due()
+            outcomes = self._approvals.undelivered(
+                symbiote_id=symbiote_id,
+                session_id=session_id,
+                subject_key=subject_of_session(self._storage, session_id),
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "could not read the approval outcomes of session %s", session_id
+            )
+            return extra_context, []
+        if not outcomes:
+            return extra_context, []
+        text = render_outcomes(
+            outcomes, max_result_chars=self._config.tool_result_max_chars
+        )
+        return (
+            {**(extra_context or {}), self._APPROVAL_OUTCOMES_KEY: text},
+            [a.id for a in outcomes],
+        )
+
+    def _approval_outcomes_told(self, approval_ids: list[str]) -> None:
+        """The turn answered with the outcomes in its context: do not tell
+        them again. Never raises: the answer is already stored."""
+        if not approval_ids:
+            return
+        try:
+            self._approvals.mark_delivered(approval_ids)
+        except Exception:
+            logging.getLogger(__name__).exception("could not mark approval outcomes as told")
 
     def _persist_turn_context(self, record: TurnRecord) -> None:
         """Write what entered the context of a turn to ``turn_contexts``.
@@ -2273,6 +2455,7 @@ class SymbioteKernel:
         "session_locks",
     )
     _PURGE_BY_SYMBIOTE = (
+        "pending_approvals",
         "llm_usage",
         "turn_contexts",
         "execution_traces",
@@ -2432,6 +2615,11 @@ class SymbioteKernel:
         ]
         targets.append((
             "memory_entries",
+            f"symbiote_id = ? AND (subject_key = ? OR session_id IN ({sessions}))",
+            (*owner, *owner),
+        ))
+        targets.append((
+            "pending_approvals",
             f"symbiote_id = ? AND (subject_key = ? OR session_id IN ({sessions}))",
             (*owner, *owner),
         ))

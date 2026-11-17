@@ -464,6 +464,40 @@ ALTER TABLE turn_contexts ADD COLUMN completion_tokens INTEGER DEFAULT 0;
 ALTER TABLE turn_contexts ADD COLUMN total_tokens INTEGER DEFAULT 0;
 """
 
+_V9_PENDING_APPROVALS = """
+CREATE TABLE pending_approvals (
+    rowid BIGINT GENERATED ALWAYS AS IDENTITY,
+    id                  TEXT COLLATE "C" PRIMARY KEY,
+    symbiote_id         TEXT COLLATE "C" NOT NULL,
+    session_id          TEXT COLLATE "C",
+    root_session_id     TEXT COLLATE "C",
+    root_symbiote_id    TEXT COLLATE "C",
+    subject_key         TEXT COLLATE "C",
+    tool_id             TEXT COLLATE "C" NOT NULL,
+    params_json         TEXT COLLATE "C",
+    params_preview_json TEXT COLLATE "C",
+    risk_level          TEXT COLLATE "C",
+    reason              TEXT COLLATE "C",
+    status              TEXT COLLATE "C" NOT NULL DEFAULT 'pending',
+    created_at          TEXT COLLATE "C" NOT NULL,
+    expires_at          TEXT COLLATE "C",
+    resolved_at         TEXT COLLATE "C",
+    resolved_by         TEXT COLLATE "C",
+    note                TEXT COLLATE "C",
+    result_json         TEXT COLLATE "C",
+    error               TEXT COLLATE "C",
+    delivered_at        TEXT COLLATE "C"
+);
+
+CREATE INDEX idx_pending_approvals_symbiote ON pending_approvals(symbiote_id, status, created_at);
+
+CREATE INDEX idx_pending_approvals_session ON pending_approvals(session_id);
+
+CREATE INDEX idx_pending_approvals_subject ON pending_approvals(symbiote_id, subject_key);
+
+ALTER TABLE audit_log ADD COLUMN approval_id TEXT COLLATE "C";
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "baseline", _V1_BASELINE),
     (2, "session_locks", _V2_SESSION_LOCKS),
@@ -473,6 +507,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (6, "subject_key", _V6_SUBJECT_KEY),
     (7, "host_options", _V7_HOST_OPTIONS),
     (8, "llm_usage", _V8_LLM_USAGE),
+    (9, "pending_approvals", _V9_PENDING_APPROVALS),
 )
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

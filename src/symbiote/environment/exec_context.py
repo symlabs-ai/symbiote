@@ -44,11 +44,16 @@ class ToolExecContext:
     ``host`` is the read-only mapping given as ``host_context`` to
     ``kernel.message()`` / ``message_async()`` for the turn in progress
     (empty when the host gave none).
+
+    ``approval_id`` is set when the call is the execution of a request that
+    waited for approval (``kernel.resolve_pending``): a person already said
+    yes to exactly this call, outside any turn.
     """
 
     symbiote_id: str
     session_id: str | None = None
     host: Mapping[str, Any] = field(default=_EMPTY_HOST)
+    approval_id: str | None = None
 
 
 _current: contextvars.ContextVar[ToolExecContext | None] = contextvars.ContextVar(
@@ -129,10 +134,15 @@ def reset_host_context(token: contextvars.Token | None) -> None:
 
 
 @contextmanager
-def tool_exec_context(symbiote_id: str, session_id: str | None) -> Iterator[None]:
+def tool_exec_context(
+    symbiote_id: str, session_id: str | None, approval_id: str | None = None
+) -> Iterator[None]:
     token = _current.set(
         ToolExecContext(
-            symbiote_id=symbiote_id, session_id=session_id, host=_host.get()
+            symbiote_id=symbiote_id,
+            session_id=session_id,
+            host=_host.get(),
+            approval_id=approval_id,
         )
     )
     try:

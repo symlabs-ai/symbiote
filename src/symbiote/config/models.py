@@ -71,6 +71,10 @@ class KernelConfig(BaseModel):
     # Same for the record of model calls (``llm_usage``): ``kernel.prune()``
     # deletes the rows older than N days, whatever their session.
     usage_retention_days: int | None = Field(default=None, ge=0)
+    # How long a tool call deferred by the approval callback waits for a
+    # person before it expires (``ApprovalDecision.defer(expires_in=...)``
+    # replaces it for one request). ``None``: it waits for ever.
+    pending_approval_ttl_hours: float | None = Field(default=168.0, gt=0)
     # Preferences and constraints enter every turn's context (the most
     # important first, up to this many), whatever words the message uses:
     # "prefers short answers" applies to a question about the week too.

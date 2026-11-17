@@ -71,6 +71,13 @@ class TurnOutcome(BaseModel):
         """True when the loop was ended by a limit, not by the model."""
         return self.stop_reason != "end_turn"
 
+    @property
+    def pending_approvals(self) -> list[str]:
+        """Ids of the tool calls this turn left waiting for a person's
+        approval (``ApprovalDecision.defer``): see
+        ``kernel.inspector.get_pending`` and ``kernel.resolve_pending``."""
+        return [r.pending_approval_id for r in self.tool_results if r.pending_approval_id]
+
 
 def turn_outcome(
     response: str | TurnReply | Any,

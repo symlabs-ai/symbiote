@@ -108,6 +108,10 @@ class ToolCallResult(BaseModel):
     output: Any = None
     error: str | None = None
     risk_level: str | None = None
+    # Set when the call was not executed because it waits for a person's
+    # approval (``ApprovalDecision.defer``): the id to give
+    # ``kernel.resolve_pending``.
+    pending_approval_id: str | None = None
 
 
 # ── Native function calling models ──────────────────────────────────────────

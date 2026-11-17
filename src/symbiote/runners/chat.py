@@ -25,6 +25,7 @@ from symbiote.agent_protocols.base import (
     format_legacy_assistant,
     format_legacy_tool_results,
 )
+from symbiote.core.approvals import DEFAULT_PENDING_MESSAGE
 from symbiote.core.context import AssembledContext
 from symbiote.core.exceptions import ValidationError, is_transient_llm_error
 from symbiote.core.models import Message
@@ -33,7 +34,11 @@ from symbiote.core.turn_control import TurnStop, check_turn
 from symbiote.environment.descriptors import LLMResponse, ToolCall, ToolCallResult
 from symbiote.environment.exec_context import tool_exec_context
 from symbiote.environment.parser import parse_tool_calls
-from symbiote.environment.policies import error_with_hint
+from symbiote.environment.policies import (
+    ApprovalDecision,
+    as_approval_decision,
+    error_with_hint,
+)
 from symbiote.environment.runtime_context import inject_runtime_context
 from symbiote.memory.working import WorkingMemory
 from symbiote.runners.base import (
@@ -52,6 +57,11 @@ from symbiote.runners.response_validator import (
 from symbiote.runners.token_stream import TOKEN_STREAMING_MODES, TokenSink
 
 logger = logging.getLogger(__name__)
+
+# Records a call the approval callback deferred and returns the id of the
+# pending approval: (tool_id, params, risk_level, decision, symbiote_id,
+# session_id) -> approval id.
+DeferralHandler = Callable[[str, dict, str, ApprovalDecision, str, str], str]
 
 if TYPE_CHECKING:
     from symbiote.environment.tools import ToolGateway
@@ -200,10 +210,13 @@ class ChatRunner:
         native_tools: bool = False,
         context_budget: int = _DEFAULT_CONTEXT_BUDGET,
         tool_result_max_chars: int = _MICROCOMPACT_MAX_CHARS,
-        on_before_tool_call: Callable[[str, dict, str], bool] | None = None,
+        on_before_tool_call: Callable[[str, dict, str], bool | ApprovalDecision] | None = None,
         # Lowest risk that goes to ``on_before_tool_call`` ("low", "medium"
         # or "high"); tools with ``requires_approval`` are always asked.
         approval_risk_threshold: str = "high",
+        # Records a call the approval callback deferred and returns the id of
+        # the pending approval (see ``set_deferral_handler``).
+        on_defer_tool_call: DeferralHandler | None = None,
         on_after_tool_result: Callable[[list[ToolCall], list[ToolCallResult]], str | None] | None = None,
         on_progress: Callable[[str, int, int], None] | None = None,
         on_stream: Callable[[str, int], None] | None = None,
@@ -238,6 +251,7 @@ class ChatRunner:
         self._on_before_tool_call = on_before_tool_call
         self._approval_risk_threshold = "high"
         self.set_approval_callback(on_before_tool_call, risk_threshold=approval_risk_threshold)
+        self._on_defer_tool_call = on_defer_tool_call
         self._on_after_tool_result = on_after_tool_result
         self._on_progress = on_progress
         self._on_stream = on_stream
@@ -260,13 +274,30 @@ class ChatRunner:
         return self._agent_protocol.protocol_id
 
     def set_approval_callback(
-        self, callback: Callable[[str, dict, str], bool] | None, *, risk_threshold: str = "high"
+        self,
+        callback: Callable[[str, dict, str], bool | ApprovalDecision] | None,
+        *,
+        risk_threshold: str = "high",
     ) -> None:
-        """Gate tools at or above ``risk_threshold``; required tools always ask."""
+        """Gate tools at or above ``risk_threshold``; required tools always ask.
+
+        The callback answers ``True`` / ``False`` or an ``ApprovalDecision``
+        (approve, deny with a reason, or defer: see ``set_deferral_handler``).
+        """
         if risk_threshold not in ("low", "medium", "high"):
             raise ValueError(f"Unknown approval risk threshold: {risk_threshold}")
         self._on_before_tool_call = callback
         self._approval_risk_threshold = risk_threshold
+
+    def set_deferral_handler(self, handler: DeferralHandler | None) -> None:
+        """Install what records a call the approval callback deferred.
+
+        ``handler(tool_id, params, risk_level, decision, symbiote_id,
+        session_id)`` stores the request and returns its id. Without one, a
+        deferred call is refused like a denied one: the runner alone has
+        nowhere to keep it.
+        """
+        self._on_defer_tool_call = handler
 
     def set_progress_callbacks(
         self,
@@ -1146,21 +1177,67 @@ class ChatRunner:
                     continue
             if context is not None:
                 with tool_exec_context(context.symbiote_id, context.session_id):
-                    allowed = self._on_before_tool_call(call.tool_id, call.params, risk)
+                    answer = self._on_before_tool_call(call.tool_id, call.params, risk)
             else:
-                allowed = self._on_before_tool_call(call.tool_id, call.params, risk)
-            if not allowed:
+                answer = self._on_before_tool_call(call.tool_id, call.params, risk)
+            decision = as_approval_decision(answer)
+            if decision.outcome == "defer":
+                denied[idx] = self._deferred_result(call, risk, decision, context)
+                continue
+            if decision.outcome != "approve":
                 denied[idx] = ToolCallResult(
                     call_id=call.call_id,
                     tool_id=call.tool_id,
                     success=False,
-                    error="Tool call denied by approval callback",
+                    error=(
+                        f"Tool call denied: {decision.reason}"
+                        if decision.reason
+                        else "Tool call denied by approval callback"
+                    ),
                     risk_level=risk,
                 )
                 continue
             approved.append(call)
 
         return approved, denied
+
+    def _deferred_result(
+        self,
+        call: ToolCall,
+        risk: str,
+        decision: ApprovalDecision,
+        context: AssembledContext | None,
+    ) -> ToolCallResult:
+        """The result of a call that waits for a person: not executed, the
+        request recorded, the model told that it is pending."""
+        handler = self._on_defer_tool_call
+        approval_id: str | None = None
+        error: str | None = None
+        if handler is None or context is None:
+            error = (
+                "This tool needs a person's approval and nobody can give it "
+                "now: it was not executed."
+            )
+        else:
+            try:
+                approval_id = handler(
+                    call.tool_id, call.params, risk, decision,
+                    context.symbiote_id, context.session_id,
+                )
+            except Exception:
+                logger.exception("could not record the deferred call to %s", call.tool_id)
+                error = (
+                    "This tool needs a person's approval and the request could "
+                    "not be recorded: it was not executed."
+                )
+        return ToolCallResult(
+            call_id=call.call_id,
+            tool_id=call.tool_id,
+            success=False,
+            error=error or decision.message or DEFAULT_PENDING_MESSAGE,
+            risk_level=risk,
+            pending_approval_id=approval_id,
+        )
 
     # ── Loop summary for working memory ─────────────────────────────────
 

@@ -635,8 +635,14 @@ class ToolGateway:
         timeout: float = 30.0,
         *,
         _guard_checked: bool = False,
+        approval_id: str | None = None,
     ) -> ToolResult:
-        """Execute a tool through the policy gate."""
+        """Execute a tool through the policy gate.
+
+        ``approval_id`` marks the execution of a call that waited for
+        approval: the tool guard and the handler see it in
+        ``current_tool_context()`` and the audit row carries it.
+        """
         check_turn()  # no tool call starts once the turn has to stop
         if tool_id not in self._registry:
             return ToolResult(
@@ -646,7 +652,7 @@ class ToolGateway:
             )
 
         self._note_secrets(session_id, tool_id, params)
-        with tool_exec_context(symbiote_id, session_id):
+        with tool_exec_context(symbiote_id, session_id, approval_id):
             self._fire_hook_sync("before_tool", tool_id=tool_id, params=params)
             result = None
             if not _guard_checked and self._guard_applies(

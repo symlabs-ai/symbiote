@@ -179,6 +179,7 @@ class LongRunRunner:
         self._native_tools = native_tools
         self._context_budget = context_budget
         self._evaluator_llm = evaluator_llm or llm
+        self._on_defer_tool_call: Callable[..., str] | None = None
         self._on_progress = on_progress
         self._on_block_complete = on_block_complete
         self._on_plan = on_plan
@@ -215,6 +216,11 @@ class LongRunRunner:
             raise ValueError(f"Unknown approval risk threshold: {risk_threshold}")
         self._on_before_tool_call = callback
         self._approval_risk_threshold = risk_threshold
+
+    def set_deferral_handler(self, handler: Callable[..., str] | None) -> None:
+        """What records a call the approval callback deferred, inside every
+        block (see ``ChatRunner.set_deferral_handler``)."""
+        self._on_defer_tool_call = handler
 
     def set_progress_callbacks(
         self,
@@ -615,6 +621,7 @@ class LongRunRunner:
             # Tools inside a block use the same approval gate as a chat turn.
             on_before_tool_call=self._on_before_tool_call,
             approval_risk_threshold=self._approval_risk_threshold,
+            on_defer_tool_call=self._on_defer_tool_call,
             token_streaming=self._token_streaming,
             agent_protocol=self._agent_protocol,
             protocol_registry=self._protocol_registry,
