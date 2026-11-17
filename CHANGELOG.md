@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.10] - 2026-11-17
+
 Pedidos de hosts atendidos na engine (B-36, B-80 a B-93; vieram da equipe do SymbiOS e entraram no que serve a qualquer host), e a engine deixa de depender do SymGateway para buscar na web.
 
 **Mudança de comportamento para hosts:** toda opção nova nasce com o comportamento anterior. O banco ganha as migrações 13 a 15 (PostgreSQL 7 a 9), aplicadas ao subir. O que um host pode notar:

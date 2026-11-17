@@ -414,7 +414,7 @@ These changes are in `CHANGELOG.md` under `[Unreleased]`, each with a
   handler installed earlier is still called).
 - **CLI:** the default server is `http://localhost:8008`.
 
-### Upgrading to the release after 0.8.9
+### Upgrading to 0.8.10
 
 The database gains migrations 13 to 15 (PostgreSQL 7 to 9), applied when the
 kernel starts. Every new option defaults to the old behaviour. What a host

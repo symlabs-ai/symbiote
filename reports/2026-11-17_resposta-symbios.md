@@ -1,6 +1,6 @@
 # Resposta da equipe do Symbiote ao pedido do SymbiOS
 
-Data: 2026-11-17 · Base do pedido: Symbiote v0.8.9 (`268a3ce`) · Entrega: na release seguinte à v0.8.9
+Data: 2026-11-17 · Base do pedido: Symbiote v0.8.9 (`268a3ce`) · Entrega: Symbiote v0.8.10
 
 Dos 16 pedidos (os 15 originais e o adendo dos tokens de cache), 14 entraram na engine, inteiros ou em parte, e 2 ficaram de fora. O critério foi o mesmo para todos: a engine tem vários hosts em uso, então entra o mecanismo que serve a qualquer um deles, e a regra de um produto fica no host. Para cada item que ficou de fora há abaixo o motivo e o caminho para fazer do lado de vocês com a API pública.
 

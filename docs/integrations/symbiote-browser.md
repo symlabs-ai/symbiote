@@ -89,7 +89,7 @@ Tudo isso entregue como **tools registradas no `ToolGateway`** do Symbiote — n
 | `web_extract` | Extrai conteúdo de URLs específicas | `urls[]`, `format` (markdown/text) | 4 (planejado) |
 | `web_crawl` | Crawl com instrução natural | `domain`, `instruction`, `max_pages` | 4 (planejado) |
 
-> **Atualização (release posterior à 0.8.9):** o mecanismo de busca deixou de ser fixo. `search_backend` aceita um provedor do host ou um nome registrado; `brave_api` e `searxng` vão direto ao serviço, sem SymGateway. Veja "Mecanismo de busca" em `symbiote-browser-quickstart.md`. O texto abaixo descreve os provedores que passam pelo SymGateway.
+> **Atualização (v0.8.10):** o mecanismo de busca deixou de ser fixo. `search_backend` aceita um provedor do host ou um nome registrado; `brave_api` e `searxng` vão direto ao serviço, sem SymGateway. Veja "Mecanismo de busca" em `symbiote-browser-quickstart.md`. O texto abaixo descreve os provedores que passam pelo SymGateway.
 
 **Como funciona o `web_search` hoje:** `register(kernel, search_backend="brave")` ativa a tool. O handler faz `POST {SYMGATEWAY_BASE_URL_sem_v1}/proxy/brave/web-search` com o `SYMGATEWAY_API_KEY` do host. SymGateway repassa pra Brave Search API e devolve o JSON; nós normalizamos pra uma lista compacta de `{url, title, snippet}`.
 
