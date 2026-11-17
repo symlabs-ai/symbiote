@@ -168,4 +168,23 @@ Fase 1 não depende de nada e pode sair primeiro. A Fase 4 usa o `current_spawn(
 
 ## 9. Notas de execução
 
-(Preencher durante a execução: desvios, tarefas puladas e por quê.)
+Executado em 2026-11-17, em 17 commits locais sobre `268a3ce` (sem push e sem release). Todas as tarefas TK-00 a TK-52 foram feitas. Suíte: 2812 testes em SQLite; PostgreSQL e gate de qualidade em Docker registrados no relatório de entrega.
+
+Desvios do que estava escrito acima:
+
+- **TK-04.** `reactivate` ficou só no `MemoryStore`: não existe rota nem comando de desativar para acompanhar.
+- **TK-22.** Os totais de tokens por turno foram para `turn_contexts`, que já tinha uma linha por turno com ou sem ferramentas, e não para `execution_traces`. A nota automática do turno sem ferramentas não mudou.
+- **TK-34.** O resultado de um pedido resolvido chega ao modelo por um bloco de contexto no turno seguinte, não por mensagem gravada na sessão: assim o visitante que volta em outra sessão também é avisado.
+- **TK-40.** Sem mecanismo padrão: `search_routing` sem provedor para `web_search` passou a ser erro (antes caía no Brave pelo SymGateway).
+- **TK-41.** O `project_slug` continua `"symbiote"` por padrão quando o provider é `symgateway`, para não mudar o roteamento de quem já usa; deixou de ser enviado aos outros provedores e ganhou parâmetro.
+- **Medição (TK-21).** `kernel._llm` e `kernel._evolver_llm` passaram a ser um medidor em volta do adapter; `.wrapped` devolve o adapter.
+
+Feito além do plano, por ter aparecido no caminho:
+
+- a sessão avaliada pelo host antes de encerrar nunca contava para o score da versão do harness (corrigido junto com o B-80);
+- `ForgeLLMAdapter` e `SymGatewayLLMAdapter` perdiam os tokens das respostas em texto puro;
+- duas colunas de texto da migração 7 do PostgreSQL estavam sem `COLLATE "C"` (corrigido antes de qualquer release).
+
+Adendo de 2026-11-17 (pedido 16, tokens de cache), avaliado como genérico e feito na mesma migração do `llm_usage`: `cache_read_tokens`, `cache_write_tokens`, `cache_write_5m_tokens`, `cache_write_1h_tokens` e `reasoning_tokens` no registro, na tabela, no `report_usage()` e nas somas do inspector; convenção única (`prompt_tokens` é a entrada inteira, com o cache) e `usage_from_provider()` para converter o que cada provedor devolve. O `SymGatewayLLMAdapter` preenche tudo, e nele foi corrigida a leitura de `input_tokens` / `output_tokens`. O `ForgeLLMAdapter` só preenche o que o `forge_llm` repassa, e hoje ele não repassa o cache: virou o B-94, de outro repositório.
+
+Em aberto: o "budget máximo por request" do B-36 e o B-94. O relatório para o SymbiOS está em `reports/2026-11-17_resposta-symbios.md`.
