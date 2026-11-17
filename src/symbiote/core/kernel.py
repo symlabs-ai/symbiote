@@ -1904,7 +1904,7 @@ class SymbioteKernel:
             self._storage.execute(
                 "INSERT INTO session_scores "
                 "(id, session_id, symbiote_id, auto_score, user_score, final_score, "
-                "computed_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "computed_at, scored_at_close) VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
                 (_uuid(), session_id, symbiote_id, 0.8, score, final,
                  _utcnow().isoformat()),
             )
@@ -2480,46 +2480,52 @@ class SymbioteKernel:
         tool_mode = trace.tool_mode if trace else "brief"
         has_tools = bool(self._tool_gateway and self._tool_gateway.list_tools())
         auto = compute_auto_score(trace, tool_mode=tool_mode, has_tools=has_tools)
-        final = compute_final_score(auto)
-        values = (
-            auto,
-            final,
+        facts = (
             trace.stop_reason if trace else None,
             trace.total_iterations if trace else 0,
             trace.total_tool_calls if trace else 0,
             datetime.now(tz=UTC).isoformat(),
         )
         with self._storage.transaction():
-            self._write_score(session_id, symbiote_id, values, final)
+            self._write_score(session_id, symbiote_id, auto, facts)
 
     def _write_score(
-        self, session_id: str, symbiote_id: str, values: tuple, final: float
+        self, session_id: str, symbiote_id: str, auto: float, facts: tuple
     ) -> None:
         from uuid import uuid4
 
         existing = self._storage.fetch_one(
-            "SELECT id FROM session_scores WHERE session_id = ?", (session_id,)
+            "SELECT id, user_score, scored_at_close FROM session_scores "
+            "WHERE session_id = ?",
+            (session_id,),
+        )
+        # The host's own score (``report_feedback``) given before the close
+        # stays part of the final score.
+        final = compute_final_score(
+            auto, existing["user_score"] if existing is not None else None
         )
         if existing is not None:
-            # A reopened session closed again: one score per session, updated.
+            # A reopened session closed again, or a session the host scored
+            # before it was closed: one score per session, updated.
             self._storage.execute(
                 "UPDATE session_scores SET auto_score = ?, final_score = ?, "
                 "stop_reason = ?, total_iterations = ?, total_tool_calls = ?, "
-                "computed_at = ? WHERE id = ?",
-                (*values, existing["id"]),
+                "computed_at = ?, scored_at_close = 1 WHERE id = ?",
+                (auto, final, *facts, existing["id"]),
             )
-            return
-
-        self._storage.execute(
-            "INSERT INTO session_scores "
-            "(id, session_id, symbiote_id, auto_score, final_score, "
-            "stop_reason, total_iterations, total_tool_calls, computed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (str(uuid4()), session_id, symbiote_id, *values),
-        )
+            if existing["scored_at_close"] is None or existing["scored_at_close"]:
+                return
+        else:
+            self._storage.execute(
+                "INSERT INTO session_scores "
+                "(id, session_id, symbiote_id, auto_score, final_score, "
+                "stop_reason, total_iterations, total_tool_calls, computed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (str(uuid4()), session_id, symbiote_id, auto, final, *facts),
+            )
 
         # Track score per active harness version (for evolution rollback).
-        # Only on the session's first score, so re-closing does not count it twice.
+        # Only on the session's first close, so re-closing does not count it twice.
         # The session of an end user counts only when the symbiote learns
         # from those sessions.
         if not self._session_feeds_learning(session_id, symbiote_id):
