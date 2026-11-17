@@ -252,7 +252,14 @@ class ContextAssembler:
         # 4. Relevant knowledge (skipped in on_demand mode)
         knowledge_dicts: list[dict] = []
         if context_mode != "on_demand":
-            raw_knowledge = self._knowledge.query(symbiote_id, user_input)
+            # Entries kept for search only (``auto_recall=False``) are not
+            # packed; a knowledge port without that notion is asked as before.
+            packed_only: dict[str, Any] = (
+                {"auto_recall_only": True}
+                if getattr(self._knowledge, "supports_auto_recall", False)
+                else {}
+            )
+            raw_knowledge = self._knowledge.query(symbiote_id, user_input, **packed_only)
             knowledge_dicts = [
                 {"name": k.name, "content": k.content or ""}
                 for k in raw_knowledge

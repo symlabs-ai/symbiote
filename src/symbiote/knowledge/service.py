@@ -18,6 +18,9 @@ _TERM_CANDIDATES = 500
 class KnowledgeService:
     """Manages knowledge entry CRUD and search."""
 
+    # ``query`` accepts ``auto_recall_only`` (see ``KnowledgeEntry.auto_recall``).
+    supports_auto_recall = True
+
     def __init__(self, storage: StoragePort) -> None:
         self._storage = storage
 
@@ -31,8 +34,13 @@ class KnowledgeService:
         content: str | None = None,
         entry_type: str = "document",
         tags: list[str] | None = None,
+        auto_recall: bool = True,
     ) -> KnowledgeEntry:
-        """Create and persist a knowledge entry."""
+        """Create and persist a knowledge entry.
+
+        ``auto_recall=False`` keeps it out of the knowledge packed into the
+        prompt: the model reaches it only through ``search_knowledge``.
+        """
         entry = KnowledgeEntry(
             symbiote_id=symbiote_id,
             name=name,
@@ -40,11 +48,12 @@ class KnowledgeService:
             content=content,
             type=entry_type,  # type: ignore[arg-type]
             tags=tags or [],
+            auto_recall=auto_recall,
         )
         self._storage.execute(
             "INSERT INTO knowledge_entries "
-            "(id, symbiote_id, name, source_path, content, type, tags_json, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, symbiote_id, name, source_path, content, type, tags_json, created_at, "
+            "auto_recall) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 entry.id,
                 entry.symbiote_id,
@@ -54,9 +63,21 @@ class KnowledgeService:
                 entry.type,
                 json.dumps(entry.tags),
                 entry.created_at.isoformat(),
+                int(entry.auto_recall),
             ),
         )
         return entry
+
+    def set_auto_recall(self, entry_id: str, auto_recall: bool) -> None:
+        """Change whether an entry is packed into the prompt (``True``) or
+        only found by ``search_knowledge`` (``False``). Raises
+        EntityNotFoundError if not found."""
+        if self.get(entry_id) is None:
+            raise EntityNotFoundError("KnowledgeEntry", entry_id)
+        self._storage.execute(
+            "UPDATE knowledge_entries SET auto_recall = ? WHERE id = ?",
+            (int(auto_recall), entry_id),
+        )
 
     def get(self, entry_id: str) -> KnowledgeEntry | None:
         """Fetch a knowledge entry by ID, returning None if not found."""
@@ -68,9 +89,17 @@ class KnowledgeService:
         return self._row_to_entry(row)
 
     def query(
-        self, symbiote_id: str, theme: str, limit: int = 10
+        self,
+        symbiote_id: str,
+        theme: str,
+        limit: int = 10,
+        *,
+        auto_recall_only: bool = False,
     ) -> list[KnowledgeEntry]:
         """One symbiote's entries related to ``theme``.
+
+        ``auto_recall_only`` leaves out the entries kept for search only
+        (``auto_recall=False``): it is how the context of a turn is packed.
 
         Entries whose name or content contains ``theme`` come first (newest
         first). The remaining slots go to entries sharing terms with it —
@@ -80,9 +109,12 @@ class KnowledgeService:
         literal substring of it.
         """
         pattern = like_contains(theme)
+        # Rows from before the column existed count as packed (NULL).
+        recall = " AND COALESCE(auto_recall, 1) = 1" if auto_recall_only else ""
         rows = self._storage.fetch_all(
             "SELECT * FROM knowledge_entries "
-            f"WHERE symbiote_id = ? AND ({contains('name')} OR {contains('content')}) "
+            f"WHERE symbiote_id = ? AND ({contains('name')} OR {contains('content')})"
+            f"{recall} "
             "ORDER BY created_at DESC LIMIT ?",
             (symbiote_id, pattern, pattern, limit),
         )
@@ -95,7 +127,7 @@ class KnowledgeService:
             return results
         seen = {e.id for e in results}
         candidates = self._storage.fetch_all(
-            "SELECT * FROM knowledge_entries WHERE symbiote_id = ? "
+            f"SELECT * FROM knowledge_entries WHERE symbiote_id = ?{recall} "
             "ORDER BY created_at DESC LIMIT ?",
             (symbiote_id, _TERM_CANDIDATES),
         )
@@ -150,5 +182,6 @@ class KnowledgeService:
             content=row.get("content"),
             type=row.get("type", "document"),
             tags=tags,
+            auto_recall=bool(row["auto_recall"]) if row.get("auto_recall") is not None else True,
             created_at=created,
         )

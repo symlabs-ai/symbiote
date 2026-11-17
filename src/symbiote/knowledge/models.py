@@ -17,4 +17,7 @@ class KnowledgeEntry(BaseModel):
     content: str | None = None
     type: Literal["document", "note", "reference", "repository"] = "document"
     tags: list[str] = Field(default_factory=list)
+    # False: the entry is left out of the knowledge packed into the prompt
+    # and is found only when the model looks for it (``search_knowledge``).
+    auto_recall: bool = True
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
