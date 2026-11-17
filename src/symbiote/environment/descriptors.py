@@ -147,11 +147,27 @@ class LLMModelIdentity(BaseModel):
 
 
 class LLMTokenUsage(BaseModel):
-    """Canonical token accounting with room for provider-specific counters."""
+    """Canonical token accounting with room for provider-specific counters.
+
+    One convention for every provider: ``prompt_tokens`` is the whole input,
+    cache included, and ``cache_read_tokens`` / ``cache_write_tokens`` are
+    parts of it (read from the provider's prompt cache, written to it).
+    ``cache_write_5m_tokens`` / ``cache_write_1h_tokens`` split the written
+    part by how long the provider keeps it, when it says so.
+    ``reasoning_tokens`` is information only: it is already inside
+    ``completion_tokens``. ``None`` means the provider did not report it.
+    ``symbiote.core.llm_usage.usage_from_provider`` builds one from what a
+    provider returned.
+    """
 
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    cache_write_5m_tokens: int | None = None
+    cache_write_1h_tokens: int | None = None
+    reasoning_tokens: int | None = None
     metadata: dict[str, Any] = Field(default_factory=dict, repr=False)
 
 

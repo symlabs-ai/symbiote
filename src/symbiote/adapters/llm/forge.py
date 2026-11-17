@@ -7,7 +7,7 @@ import os
 from typing import TYPE_CHECKING, Any
 
 from symbiote.core.exceptions import LLMError, is_transient_llm_error, llm_error_status
-from symbiote.core.llm_usage import report_usage
+from symbiote.core.llm_usage import report_usage, usage_from_provider
 from symbiote.environment.descriptors import (
     LLMModelIdentity,
     LLMResponse,
@@ -292,9 +292,7 @@ def _report(usage: LLMTokenUsage | None, identity: LLMModelIdentity | None) -> N
     if usage is None and identity is None:
         return
     report_usage(
-        usage.prompt_tokens if usage else None,
-        usage.completion_tokens if usage else None,
-        usage.total_tokens if usage else None,
+        usage=usage,
         provider=identity.provider if identity else None,
         model=identity.model if identity else None,
     )
@@ -313,48 +311,10 @@ def _extract_model_identity(response: Any) -> LLMModelIdentity | None:
 
 
 def _extract_usage(response: Any) -> LLMTokenUsage | None:
-    usage = _value(response, "token_usage", _value(response, "usage"))
-    if usage is None:
-        return None
-
-    prompt_tokens = _value(
-        usage,
-        "prompt_tokens",
-        _value(usage, "input_tokens"),
-    )
-    completion_tokens = _value(
-        usage,
-        "completion_tokens",
-        _value(usage, "output_tokens"),
-    )
-    total_tokens = _value(usage, "total_tokens")
-    if total_tokens is None and (
-        prompt_tokens is not None or completion_tokens is not None
-    ):
-        total_tokens = (prompt_tokens or 0) + (completion_tokens or 0)
-
-    known = {
-        "prompt_tokens",
-        "completion_tokens",
-        "total_tokens",
-        "input_tokens",
-        "output_tokens",
-    }
-    if isinstance(usage, dict):
-        extra = {key: value for key, value in usage.items() if key not in known}
-    else:
-        extra = {
-            key: value
-            for key, value in vars(usage).items()
-            if key not in known
-        } if hasattr(usage, "__dict__") else {}
-
-    return LLMTokenUsage(
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        total_tokens=total_tokens,
-        metadata=extra,
-    )
+    """What the call cost, in the kernel's convention (``prompt_tokens`` is
+    the whole input, cache included). Reads whatever forge_llm passed on of
+    the provider's usage; the cache counters appear only when it does."""
+    return usage_from_provider(_value(response, "token_usage", _value(response, "usage")))
 
 
 def _extract_opaque_metadata(response: Any) -> dict[str, Any]:

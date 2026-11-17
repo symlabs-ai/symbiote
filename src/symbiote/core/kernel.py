@@ -495,7 +495,9 @@ class SymbioteKernel:
         ``record`` is an ``LLMCallRecord`` (``symbiote.core.llm_usage``): the
         symbiote, the session, the purpose of the call (``turn``,
         ``subagent``, ``reflection``, ``dream:<phase>``...), provider, model
-        and token counts. The same record is stored in ``llm_usage``
+        and token counts (``prompt_tokens`` is the whole input, cache
+        included; ``cache_read_tokens`` / ``cache_write_tokens`` are parts of
+        it). The same record is stored in ``llm_usage``
         (``kernel.inspector.usage``). It runs in the thread that made the
         call, right after it; an exception it raises is logged and goes no
         further.
@@ -509,13 +511,21 @@ class SymbioteKernel:
 
         turn = current_turn_record()
         if turn is not None:
-            turn.add_usage(record.prompt_tokens, record.completion_tokens, record.total_tokens)
+            turn.add_usage(
+                record.prompt_tokens,
+                record.completion_tokens,
+                record.total_tokens,
+                record.cache_read_tokens,
+                record.cache_write_tokens,
+            )
         try:
             self._storage.execute(
                 "INSERT INTO llm_usage "
                 "(id, symbiote_id, session_id, root_session_id, purpose, provider, model, "
                 "prompt_tokens, completion_tokens, total_tokens, elapsed_ms, success, "
-                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "created_at, cache_read_tokens, cache_write_tokens, "
+                "cache_write_5m_tokens, cache_write_1h_tokens, reasoning_tokens) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     str(uuid4()),
                     record.symbiote_id,
@@ -530,6 +540,11 @@ class SymbioteKernel:
                     record.elapsed_ms,
                     int(record.success),
                     datetime.now(tz=UTC).isoformat(),
+                    record.cache_read_tokens,
+                    record.cache_write_tokens,
+                    record.cache_write_5m_tokens,
+                    record.cache_write_1h_tokens,
+                    record.reasoning_tokens,
                 ),
             )
         except Exception:
@@ -1565,8 +1580,9 @@ class SymbioteKernel:
                 "INSERT INTO turn_contexts "
                 "(id, session_id, symbiote_id, memories_json, knowledge_json, "
                 "skills_json, tokens_estimate, created_at, "
-                "llm_calls, prompt_tokens, completion_tokens, total_tokens) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "llm_calls, prompt_tokens, completion_tokens, total_tokens, "
+                "cache_read_tokens, cache_write_tokens) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     str(uuid4()),
                     record.session_id,
@@ -1580,6 +1596,8 @@ class SymbioteKernel:
                     record.prompt_tokens,
                     record.completion_tokens,
                     record.total_tokens,
+                    record.cache_read_tokens,
+                    record.cache_write_tokens,
                 ),
             )
         except Exception:

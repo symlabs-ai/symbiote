@@ -1412,20 +1412,50 @@ returned. An adapter that returns plain text, or that streams, reports them
 before it returns:
 
 ```python
+from symbiote.core.llm_usage import report_usage, usage_from_provider
+
 class MyAdapter:
     def complete(self, messages, config=None, tools=None) -> str:
         data = call_my_provider(messages)
-        report_usage(data.input_tokens, data.output_tokens, provider="acme", model=data.model)
+        report_usage(usage=usage_from_provider(data.usage), provider="acme", model=data.model)
         return data.text
 ```
 
 Without either, the call is recorded with no token counts. The bundled
 `ForgeLLMAdapter` and `SymGatewayLLMAdapter` report both ways.
 
+**Token convention.** Providers count the prompt cache differently, and the
+cache changes the price a lot, so every record follows one rule:
+
+| Counter | Meaning |
+| --- | --- |
+| `prompt_tokens` | the whole input, cache included |
+| `cache_read_tokens` | the part of the input read from the provider's cache |
+| `cache_write_tokens` | the part of the input written to the cache |
+| `cache_write_5m_tokens`, `cache_write_1h_tokens` | the written part, split by how long the provider keeps it (when it says so) |
+| `completion_tokens` | the output |
+| `reasoning_tokens` | information only: already inside `completion_tokens` |
+
+The input priced at the ordinary rate is `prompt_tokens - cache_read_tokens -
+cache_write_tokens`. `None` means the adapter did not report that counter
+(the sums treat it as 0). `usage_from_provider(raw)` turns what a provider
+returned into this convention: OpenAI's `prompt_tokens` already includes the
+cache (`prompt_tokens_details.cached_tokens`); Anthropic's `input_tokens`
+does not, so `cache_read_input_tokens` and `cache_creation_input_tokens` are
+added to it. An adapter may also pass the counters one by one:
+`report_usage(1200, 80, cache_read_tokens=1024)`.
+
+`ForgeLLMAdapter` passes on what `forge_llm` gives it: at the pinned version
+that is three counters, with nothing about the cache (and, for Anthropic, an
+input that leaves the cached part out). `SymGatewayLLMAdapter` fills every
+counter. A host that needs exact cache accounting with a direct provider key
+uses its own adapter until `forge_llm` passes the provider's usage through.
+
 ```python
 outcome = kernel.turn(session.id, text)
-outcome.usage        # llm_calls, prompt_tokens, completion_tokens, total_tokens
-                     # of this turn, what it delegated included
+outcome.usage        # llm_calls, prompt_tokens, completion_tokens, total_tokens,
+                     # cache_read_tokens, cache_write_tokens of this turn,
+                     # what it delegated included
 
 ins = kernel.inspector
 ins.usage_totals(sym.id, since="2026-11-01T00:00:00+00:00")

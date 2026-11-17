@@ -43,13 +43,17 @@ class TurnUsage(BaseModel):
     Counts every call of the turn, the ones of a symbiote it delegated to
     (``spawn``) included. Token counts are sums of what the LLM adapter
     reported: they stay at 0 for an adapter that reports none, while
-    ``llm_calls`` is always counted.
+    ``llm_calls`` is always counted. ``prompt_tokens`` is the whole input;
+    ``cache_read_tokens`` and ``cache_write_tokens`` are the parts of it read
+    from and written to the provider's prompt cache.
     """
 
     llm_calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
 
 
 class TurnOutcome(BaseModel):

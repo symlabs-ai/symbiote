@@ -39,11 +39,10 @@ import httpx
 
 from symbiote.adapters.llm.forge import _extract_tool_calls
 from symbiote.core.exceptions import LLMError
-from symbiote.core.llm_usage import report_usage
+from symbiote.core.llm_usage import report_usage, usage_from_provider
 from symbiote.environment.descriptors import (
     LLMModelIdentity,
     LLMResponse,
-    LLMTokenUsage,
 )
 
 DEFAULT_BASE_URL = "https://symgateway.symlabs.ai"
@@ -289,27 +288,19 @@ def _parse_completion(data: dict[str, Any], session_uid: str) -> str | LLMRespon
     choice = choices[0]
     message = choice.get("message") or {}
     tool_calls = _extract_tool_calls(message)
-    usage = data.get("usage") or {}
+    # The gateway reports ``input_tokens`` / ``output_tokens`` (cache already
+    # inside the input) with ``cached_input_tokens`` and ``cache_write_*``.
+    usage = usage_from_provider(data.get("usage") or None)
     if not tool_calls:
         # Plain text carries no usage: hand it to the kernel directly.
-        report_usage(
-            usage.get("prompt_tokens"),
-            usage.get("completion_tokens"),
-            usage.get("total_tokens"),
-            provider="symgateway",
-            model=data.get("model"),
-        )
+        report_usage(usage=usage, provider="symgateway", model=data.get("model"))
         return message.get("content") or ""
     return LLMResponse(
         content=message.get("content") or "",
         tool_calls=tool_calls,
         finish_reason=choice.get("finish_reason"),
         model_identity=LLMModelIdentity(provider="symgateway", model=data.get("model")),
-        usage=LLMTokenUsage(
-            prompt_tokens=usage.get("prompt_tokens"),
-            completion_tokens=usage.get("completion_tokens"),
-            total_tokens=usage.get("total_tokens"),
-        ) if usage else None,
+        usage=usage,
         metadata={
             "id": data.get("id"),
             "work_session": session_uid,

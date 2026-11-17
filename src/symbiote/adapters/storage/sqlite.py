@@ -663,6 +663,11 @@ class SQLiteAdapter:
                 prompt_tokens INTEGER,
                 completion_tokens INTEGER,
                 total_tokens INTEGER,
+                cache_read_tokens INTEGER,
+                cache_write_tokens INTEGER,
+                cache_write_5m_tokens INTEGER,
+                cache_write_1h_tokens INTEGER,
+                reasoning_tokens INTEGER,
                 elapsed_ms INTEGER DEFAULT 0,
                 success INTEGER DEFAULT 1,
                 created_at TEXT NOT NULL
@@ -681,6 +686,8 @@ class SQLiteAdapter:
             "ALTER TABLE turn_contexts ADD COLUMN prompt_tokens INTEGER DEFAULT 0",
             "ALTER TABLE turn_contexts ADD COLUMN completion_tokens INTEGER DEFAULT 0",
             "ALTER TABLE turn_contexts ADD COLUMN total_tokens INTEGER DEFAULT 0",
+            "ALTER TABLE turn_contexts ADD COLUMN cache_read_tokens INTEGER DEFAULT 0",
+            "ALTER TABLE turn_contexts ADD COLUMN cache_write_tokens INTEGER DEFAULT 0",
         ):
             with contextlib.suppress(sqlite3.OperationalError):  # column already exists
                 self._conn.execute(stmt)

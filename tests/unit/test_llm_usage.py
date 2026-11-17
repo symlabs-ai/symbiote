@@ -22,6 +22,7 @@ from symbiote.core.llm_usage import (
     MeteredLLM,
     current_llm_call,
     report_usage,
+    usage_from_provider,
 )
 from symbiote.core.models import MemoryEntry
 from symbiote.environment.descriptors import (
@@ -398,6 +399,7 @@ def test_turn_outcome_and_turn_context_carry_the_totals(shop) -> None:
 
     assert outcome.usage.model_dump() == {
         "llm_calls": 2, "prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30,
+        "cache_read_tokens": 0, "cache_write_tokens": 0,
     }
     (context,) = kernel.inspector.list_turn_contexts(session_id=session.id)
     assert (context["llm_calls"], context["total_tokens"]) == (2, 30)
@@ -485,8 +487,9 @@ def test_the_record_holds_no_conversation_text(shop) -> None:
     (row,) = kernel._storage.fetch_all("SELECT * FROM llm_usage")
     assert set(row) == {
         "id", "symbiote_id", "session_id", "root_session_id", "purpose", "provider",
-        "model", "prompt_tokens", "completion_tokens", "total_tokens", "elapsed_ms",
-        "success", "created_at",
+        "model", "prompt_tokens", "completion_tokens", "total_tokens",
+        "cache_read_tokens", "cache_write_tokens", "cache_write_5m_tokens",
+        "cache_write_1h_tokens", "reasoning_tokens", "elapsed_ms", "success", "created_at",
     }
     assert "4111" not in json.dumps(row)
 
@@ -522,3 +525,203 @@ def test_prune_removes_old_usage_only_when_asked(shop) -> None:
     assert kernel.inspector.usage_totals(sym.id)["llm_calls"] == 1
     assert kernel.prune(usage_days=30)["llm_usage"] == 1
     assert kernel.inspector.usage_totals(sym.id)["llm_calls"] == 0
+
+
+# ── cache tokens: one convention for every provider ─────────────────────
+
+
+def test_openai_usage_keeps_its_prompt_and_names_the_cached_part() -> None:
+    usage = usage_from_provider({
+        "prompt_tokens": 1200, "completion_tokens": 80, "total_tokens": 1280,
+        "prompt_tokens_details": {"cached_tokens": 1024},
+        "completion_tokens_details": {"reasoning_tokens": 30},
+    })
+
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (1200, 80, 1280)
+    assert (usage.cache_read_tokens, usage.cache_write_tokens) == (1024, None)
+    assert usage.reasoning_tokens == 30
+
+
+def test_anthropic_usage_gets_the_cache_added_to_its_input() -> None:
+    """Anthropic reports ``input_tokens`` without the cache: the convention
+    needs the whole input, so the two cache counters are added."""
+    from types import SimpleNamespace
+
+    raw = SimpleNamespace(
+        input_tokens=100, output_tokens=50,
+        cache_read_input_tokens=2000, cache_creation_input_tokens=300,
+        cache_creation=SimpleNamespace(
+            ephemeral_5m_input_tokens=200, ephemeral_1h_input_tokens=100
+        ),
+    )
+
+    usage = usage_from_provider(raw)
+
+    assert usage.prompt_tokens == 2400
+    assert usage.completion_tokens == 50
+    assert usage.total_tokens == 2450
+    assert (usage.cache_read_tokens, usage.cache_write_tokens) == (2000, 300)
+    assert (usage.cache_write_5m_tokens, usage.cache_write_1h_tokens) == (200, 100)
+
+
+def test_counters_already_in_the_convention_are_taken_as_they_are() -> None:
+    usage = usage_from_provider({
+        "input_tokens": 500, "output_tokens": 20, "total_tokens": 520,
+        "cached_input_tokens": 400, "cache_write_tokens": 60,
+        "cache_write_5m_tokens": 60, "pricing_context": {"tier": "batch"},
+    })
+
+    assert (usage.prompt_tokens, usage.total_tokens) == (500, 520)
+    assert (usage.cache_read_tokens, usage.cache_write_tokens) == (400, 60)
+    assert (usage.cache_write_5m_tokens, usage.cache_write_1h_tokens) == (60, None)
+    assert usage.metadata == {"pricing_context": {"tier": "batch"}}
+
+
+def test_usage_without_cache_information_leaves_those_counters_unknown() -> None:
+    usage = usage_from_provider({"prompt_tokens": 10, "completion_tokens": 5})
+
+    assert usage.total_tokens == 15
+    assert usage.cache_read_tokens is None
+    assert usage.cache_write_tokens is None
+    assert usage_from_provider(None) is None
+    assert usage_from_provider(usage) is usage
+
+
+def test_cache_tokens_reach_the_record_the_turn_and_the_sums(tmp_path: Path) -> None:
+    seen: list[LLMCallRecord] = []
+
+    class Cached(ScriptedLLM):
+        def complete(self, messages, config=None, tools=None):
+            raw = {
+                "input_tokens": 100, "output_tokens": 50,
+                "cache_read_input_tokens": 2000, "cache_creation_input_tokens": 300,
+                "cache_creation": {"ephemeral_5m_input_tokens": 300},
+            }
+            return LLMResponse(
+                content=super().complete(messages, config, tools),
+                usage=usage_from_provider(raw),
+                model_identity=LLMModelIdentity(provider="anthropic", model="claude-x"),
+            )
+
+    kernel = make_kernel(tmp_path, Cached("ok"))
+    try:
+        kernel.set_usage_callback(seen.append)
+        sym = kernel.create_symbiote(name="a", role="r")
+        session = kernel.start_session(sym.id)
+
+        outcome = kernel.turn(session.id, "hello")
+        kernel.turn(session.id, "again")
+
+        record = seen[0]
+        assert (record.prompt_tokens, record.cache_read_tokens, record.cache_write_tokens) == (
+            2400, 2000, 300,
+        )
+        assert (record.cache_write_5m_tokens, record.cache_write_1h_tokens) == (300, None)
+        assert outcome.usage.model_dump() == {
+            "llm_calls": 1, "prompt_tokens": 2400, "completion_tokens": 50,
+            "total_tokens": 2450, "cache_read_tokens": 2000, "cache_write_tokens": 300,
+        }
+        row = kernel.inspector.list_llm_calls(sym.id)[0]
+        assert (row["cache_read_tokens"], row["cache_write_5m_tokens"]) == (2000, 300)
+        assert row["cache_write_1h_tokens"] is None
+        totals = kernel.inspector.usage_totals(sym.id)
+        assert totals["prompt_tokens"] == 4800
+        assert (totals["cache_read_tokens"], totals["cache_write_tokens"]) == (4000, 600)
+        assert (totals["cache_write_5m_tokens"], totals["cache_write_1h_tokens"]) == (600, 0)
+        # What a host prices as ordinary input: the whole input less the cache.
+        assert totals["prompt_tokens"] - totals["cache_read_tokens"] - totals[
+            "cache_write_tokens"
+        ] == 200
+        (by_day,) = kernel.inspector.usage_by("day", sym.id)
+        assert by_day["cache_read_tokens"] == 4000
+        context = kernel.inspector.list_turn_contexts(session_id=session.id)[0]
+        assert (context["cache_read_tokens"], context["cache_write_tokens"]) == (2000, 300)
+    finally:
+        kernel.shutdown()
+
+
+def test_report_usage_takes_the_cache_counters_too(tmp_path: Path) -> None:
+    class Reporting(ScriptedLLM):
+        def complete(self, messages, config=None, tools=None):
+            report_usage(1200, 80, cache_read_tokens=1024, reasoning_tokens=30)
+            return super().complete(messages, config, tools)
+
+    kernel = make_kernel(tmp_path, Reporting("ok"))
+    try:
+        sym = kernel.create_symbiote(name="a", role="r")
+        kernel.message(kernel.start_session(sym.id).id, "hello")
+
+        (row,) = _rows(kernel, symbiote_id=sym.id)
+        assert (row["prompt_tokens"], row["total_tokens"]) == (1200, 1280)
+        assert (row["cache_read_tokens"], row["cache_write_tokens"]) == (1024, None)
+        assert row["reasoning_tokens"] == 30
+    finally:
+        kernel.shutdown()
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_symgateway_adapter_reads_the_gateways_own_usage_fields(native: bool) -> None:
+    """The gateway answers ``input_tokens`` / ``output_tokens``, not the
+    OpenAI names, with the cache already inside the input."""
+    message: dict = {"role": "assistant", "content": "olá"}
+    if native:
+        message = {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "agora", "arguments": "{}"}}
+        ]}
+
+    def gateway(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/_api/work-sessions":
+            return httpx.Response(201, json={"uid": "ws-1"})
+        return httpx.Response(200, json={
+            "model": "claude-x",
+            "choices": [{"message": message}],
+            "usage": {
+                "input_tokens": 2400, "output_tokens": 50, "total_tokens": 2450,
+                "cached_input_tokens": 2000, "cache_write_tokens": 300,
+                "cache_write_5m_tokens": 200, "cache_write_1h_tokens": 100,
+            },
+        })
+
+    adapter = SymGatewayLLMAdapter(
+        "sk-test", "claude-x", client=httpx.Client(transport=httpx.MockTransport(gateway))
+    )
+    records: list[LLMCallRecord] = []
+
+    MeteredLLM(adapter, records.append).complete([{"role": "user", "content": "oi"}])
+
+    (record,) = records
+    assert (record.prompt_tokens, record.completion_tokens, record.total_tokens) == (2400, 50, 2450)
+    assert (record.cache_read_tokens, record.cache_write_tokens) == (2000, 300)
+    assert (record.cache_write_5m_tokens, record.cache_write_1h_tokens) == (200, 100)
+
+
+def test_forge_adapter_passes_on_what_forge_llm_gives_it() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from symbiote.adapters.llm.forge import ForgeLLMAdapter
+
+    def answer(usage):
+        return SimpleNamespace(content="ok", tool_calls=None, token_usage=usage, metadata=None)
+
+    with patch("symbiote.adapters.llm.forge.ChatAgent") as agent_cls:
+        adapter = ForgeLLMAdapter(provider="openai", model="gpt-x", api_key="k")
+        records: list[LLMCallRecord] = []
+        llm = MeteredLLM(adapter, records.append)
+
+        # forge_llm's TokenUsage today: three counters, nothing about the cache.
+        agent_cls.return_value.chat.return_value = answer(
+            SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        )
+        llm.complete([{"role": "user", "content": "x"}])
+        # When the provider's own usage comes through, the cache is read from it.
+        agent_cls.return_value.chat.return_value = answer({
+            "prompt_tokens": 1200, "completion_tokens": 80, "total_tokens": 1280,
+            "prompt_tokens_details": {"cached_tokens": 1024},
+        })
+        llm.complete([{"role": "user", "content": "x"}])
+
+    plain, detailed = records
+    assert (plain.prompt_tokens, plain.cache_read_tokens) == (10, None)
+    assert (detailed.prompt_tokens, detailed.cache_read_tokens) == (1200, 1024)
+    assert (detailed.provider, detailed.model) == ("openai", "gpt-x")

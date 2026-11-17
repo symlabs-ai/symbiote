@@ -37,11 +37,19 @@ class TurnRecord:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    # Parts of ``prompt_tokens``: read from / written to the provider's cache.
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     parent: TurnRecord | None = field(default=None, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def add_usage(
-        self, prompt_tokens: int | None, completion_tokens: int | None, total_tokens: int | None
+        self,
+        prompt_tokens: int | None,
+        completion_tokens: int | None,
+        total_tokens: int | None,
+        cache_read_tokens: int | None = None,
+        cache_write_tokens: int | None = None,
     ) -> None:
         """Count one model call for this turn and for the turns above it."""
         record: TurnRecord | None = self
@@ -51,6 +59,8 @@ class TurnRecord:
                 record.prompt_tokens += prompt_tokens or 0
                 record.completion_tokens += completion_tokens or 0
                 record.total_tokens += total_tokens or 0
+                record.cache_read_tokens += cache_read_tokens or 0
+                record.cache_write_tokens += cache_write_tokens or 0
             record = record.parent
 
     def usage(self) -> dict[str, int]:
@@ -59,6 +69,8 @@ class TurnRecord:
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
         }
 
     def add_memories(self, ids: list[str], source: str) -> None:

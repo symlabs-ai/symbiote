@@ -255,7 +255,8 @@ class KernelInspector:
         rows = self._storage.fetch_all(
             "SELECT id, session_id, symbiote_id, memories_json, knowledge_json, "
             "skills_json, tokens_estimate, created_at, "
-            "llm_calls, prompt_tokens, completion_tokens, total_tokens "
+            "llm_calls, prompt_tokens, completion_tokens, total_tokens, "
+            "cache_read_tokens, cache_write_tokens "
             f"FROM turn_contexts WHERE {column} = ? "
             "ORDER BY created_at DESC, rowid DESC LIMIT ?",
             (value, limit),
@@ -378,7 +379,12 @@ class KernelInspector:
         "COALESCE(SUM(CASE WHEN u.success = 0 THEN 1 ELSE 0 END), 0) AS failed_calls, "
         "COALESCE(SUM(u.prompt_tokens), 0) AS prompt_tokens, "
         "COALESCE(SUM(u.completion_tokens), 0) AS completion_tokens, "
-        "COALESCE(SUM(u.total_tokens), 0) AS total_tokens"
+        "COALESCE(SUM(u.total_tokens), 0) AS total_tokens, "
+        "COALESCE(SUM(u.cache_read_tokens), 0) AS cache_read_tokens, "
+        "COALESCE(SUM(u.cache_write_tokens), 0) AS cache_write_tokens, "
+        "COALESCE(SUM(u.cache_write_5m_tokens), 0) AS cache_write_5m_tokens, "
+        "COALESCE(SUM(u.cache_write_1h_tokens), 0) AS cache_write_1h_tokens, "
+        "COALESCE(SUM(u.reasoning_tokens), 0) AS reasoning_tokens"
     )
     _USAGE_FROM = (
         " FROM llm_usage u LEFT JOIN sessions s "
@@ -438,6 +444,12 @@ class KernelInspector:
 
         ``llm_calls`` counts every call and ``failed_calls`` the ones that
         raised; the token sums cover the calls whose adapter reported them.
+        ``prompt_tokens`` is the whole input, cache included:
+        ``cache_read_tokens`` and ``cache_write_tokens`` are parts of it, and
+        ``cache_write_5m_tokens`` / ``cache_write_1h_tokens`` split the
+        written part by how long the provider keeps it. ``reasoning_tokens``
+        is already inside ``completion_tokens``. The kernel stores no price:
+        the uncached input is ``prompt - cache_read - cache_write``.
         ``purpose`` selects one purpose or a family (``"dream"`` covers every
         ``dream:<phase>``). ``since`` / ``until`` are ISO-8601 instants,
         ``until`` excluded. ``subject_key`` keeps the calls made for one end
@@ -507,6 +519,8 @@ class KernelInspector:
         rows = self._storage.fetch_all(
             "SELECT u.id, u.symbiote_id, u.session_id, u.root_session_id, u.purpose, "
             "u.provider, u.model, u.prompt_tokens, u.completion_tokens, u.total_tokens, "
+            "u.cache_read_tokens, u.cache_write_tokens, u.cache_write_5m_tokens, "
+            "u.cache_write_1h_tokens, u.reasoning_tokens, "
             f"u.elapsed_ms, u.success, u.created_at{self._USAGE_FROM}{where} "  # noqa: S608
             "ORDER BY u.created_at DESC, u.rowid DESC LIMIT ?",
             (*params, limit),
