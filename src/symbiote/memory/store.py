@@ -333,6 +333,32 @@ class MemoryStore:
             (memory_id,),
         )
 
+    def reactivate(
+        self,
+        memory_id: str,
+        *,
+        symbiote_id: str | None = None,
+        subject_key: str | None | AnySubject = ANY_SUBJECT,
+    ) -> None:
+        """Set is_active=True on an entry that was deactivated (by the host,
+        or by the dream's prune / reconcile). Raises EntityNotFoundError if not
+        found; an entry that is already active is left as it is.
+
+        ``symbiote_id`` and ``subject_key`` restrict the entry exactly as in
+        ``deactivate``: an entry of another symbiote or of another partition
+        is not found.
+        """
+        existing = self._fetch_row(memory_id, symbiote_id, subject_key)
+        if existing is None:
+            raise EntityNotFoundError("MemoryEntry", memory_id)
+        if existing["is_active"]:
+            return
+
+        self._storage.execute(
+            "UPDATE memory_entries SET is_active = 1, updated_at = ? WHERE id = ?",
+            (datetime.now(tz=UTC).isoformat(), memory_id),
+        )
+
     def update(
         self,
         memory_id: str,
