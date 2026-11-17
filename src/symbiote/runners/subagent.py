@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 
 from symbiote.environment.descriptors import ToolDescriptor
-from symbiote.environment.exec_context import current_tool_context
+from symbiote.environment.exec_context import (
+    SpawnContext,
+    bind_spawn,
+    current_spawn,
+    current_tool_context,
+    reset_spawn,
+)
 
 if TYPE_CHECKING:
     from symbiote.core.kernel import SymbioteKernel
@@ -76,7 +82,8 @@ _VALID_EFFORTS = frozenset({"normal", "high"})
 # Depth of the current delegation chain. A ContextVar, not a counter on the
 # manager: parallel spawns and other sessions are independent chains. Tool
 # handlers run with the caller's context copied in, so a spawn made inside a
-# sub-session sees its parent's depth.
+# sub-session sees its parent's depth. Hosts read ``current_spawn()``
+# (``symbiote.environment.exec_context``), not this variable.
 _spawn_depth: contextvars.ContextVar[int] = contextvars.ContextVar(
     "symbiote_spawn_depth", default=0
 )
@@ -205,6 +212,7 @@ class SubagentManager:
 
         # Create isolated session (with depth tracking)
         depth_token = _spawn_depth.set(depth + 1)
+        spawn_token = None
         session = None
         closed = False
         try:
@@ -212,6 +220,23 @@ class SubagentManager:
                 symbiote_id=target.id,
                 goal=f"[subagent] {task}",
                 subject_key=self._calling_subject(),
+            )
+            # From here on hooks, the LLM adapter and tools run for the
+            # delegated symbiote: say so (``current_spawn()``).
+            caller = current_tool_context()
+            outer = current_spawn()
+            parent_symbiote = caller.symbiote_id if caller is not None else None
+            parent_session = caller.session_id if caller is not None else None
+            spawn_token = bind_spawn(
+                SpawnContext(
+                    symbiote_id=target.id,
+                    session_id=session.id,
+                    parent_symbiote_id=parent_symbiote,
+                    parent_session_id=parent_session,
+                    root_symbiote_id=outer.root_symbiote_id if outer else parent_symbiote,
+                    root_session_id=outer.root_session_id if outer else parent_session,
+                    depth=depth + 1,
+                )
             )
 
             # Build per-call LLM overrides. Only carry ``mode`` when
@@ -263,6 +288,8 @@ class SubagentManager:
                 # The sub-run failed: do not leave the sub-session active.
                 with contextlib.suppress(Exception):
                     self._kernel.close_session(session.id)
+            if spawn_token is not None:
+                reset_spawn(spawn_token)
             _spawn_depth.reset(depth_token)
 
     def _calling_subject(self) -> str | None:
