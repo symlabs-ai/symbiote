@@ -26,6 +26,11 @@ except ImportError:  # pragma: no cover
     ChatMessage = None  # type: ignore[assignment, misc]
 
 
+# ``project_slug`` not given: the slug this adapter has always sent to the gateway.
+_DEFAULT_PROJECT_SLUG = "symbiote"
+_UNSET: Any = object()
+
+
 class ForgeLLMAdapter:
     """LLMPort implementation backed by forge_llm."""
 
@@ -37,12 +42,18 @@ class ForgeLLMAdapter:
         base_url: str | None = None,
         *,
         stream_tool_calls: bool = False,
+        project_slug: str | None = _UNSET,
     ) -> None:
         """``stream_tool_calls``: stream text token by token also when native
         tools are offered, collecting the tool calls from the stream. Off by
         default: not every provider assembles tool calls in a stream (Groq),
         and the stream carries no reasoning state, which protocols that
         replay it (e.g. ``poolside_laguna_v1``) need.
+
+        ``project_slug``: only for ``provider="symgateway"``, the project the
+        gateway routes the call to (its ``X-Project-Slug`` header). Not given,
+        it is ``"symbiote"``, as it always was; ``None`` sends no project.
+        Every other provider is called with no gateway field at all.
         """
         self._stream_tool_calls = stream_tool_calls
         # Read by the kernel's usage record when a response names neither.
@@ -69,8 +80,11 @@ class ForgeLLMAdapter:
                 kwargs["api_key"] = api_key
             if base_url is not None:
                 kwargs["base_url"] = base_url
-            # Inject project slug for symgateway routing
-            kwargs["extra"] = {"project_slug": "symbiote"}
+            # The gateway's project is a gateway matter: other providers
+            # get nothing that speaks of it.
+            slug = _DEFAULT_PROJECT_SLUG if project_slug is _UNSET else project_slug
+            if provider == "symgateway" and slug:
+                kwargs["extra"] = {"project_slug": slug}
             self._agent = ChatAgent(**kwargs)
         except Exception as exc:
             raise LLMError(str(exc)) from exc
