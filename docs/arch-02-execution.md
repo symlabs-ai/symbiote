@@ -192,6 +192,43 @@ flowchart LR
     FS --> FINAL
 ```
 
+Um turno que nao chama nenhuma tool nao gera `LoopTrace`: o `auto_score` dele e o valor neutro `0.8` (ou `0.7` em `instant` com tools disponiveis). O turno fica registrado em `turn_contexts`, com o que entrou no contexto e os tokens que custou. A nota do host (`report_feedback`) entra no `final_score` dada antes ou depois do `close_session`.
+
+## Aprovacao adiada
+
+O callback de aprovacao responde `True` / `False` ou um `ApprovalDecision` (`symbiote.environment.policies`): `approve()`, `deny(motivo)` ou `defer(motivo)`.
+
+```mermaid
+sequenceDiagram
+    participant Modelo
+    participant Runner as ChatRunner
+    participant Host
+    participant Kernel
+    participant Tool
+
+    Modelo->>Runner: tool_call cancel_order (risco alto)
+    Runner->>Host: callback(tool_id, params, risco)
+    Host-->>Runner: ApprovalDecision.defer("pedido de visitante")
+    Runner->>Kernel: grava em pending_approvals
+    Runner-->>Modelo: resultado: "aguarda aprovacao, nao executado"
+    Note over Modelo,Runner: o turno termina normalmente
+
+    Host->>Kernel: resolve_pending(id, True)
+    Kernel->>Kernel: politica e tool guard de novo
+    Kernel->>Tool: executa (mesma sessao, mesmo usuario final, approval_id)
+    Tool-->>Kernel: resultado
+    Kernel->>Kernel: status executed | failed, apaga os parametros
+
+    Note over Modelo,Kernel: proximo turno da conversa ou do usuario final
+    Kernel-->>Modelo: contexto: "Requests that waited for approval"
+```
+
+Estados: `pending` → `approved` → `executed` ou `failed`; `pending` → `denied`; `pending` → `expired` (`KernelConfig.pending_approval_ttl_hours`, padrao 168, ou `defer(expires_in=...)`). Um pedido e resolvido uma unica vez. Os parametros da chamada ficam guardados como vieram so enquanto o pedido esta pendente; o que `inspector.list_pending` mostra ja vem sem os segredos conhecidos. Um pedido feito por um symbiote delegado (`spawn`) e contado a conversa que delegou.
+
+## Uso por chamada ao modelo
+
+Todo modelo que o kernel chama passa por um medidor (`symbiote.core.llm_usage`). `current_llm_call()` diz ao adapter para quem e a chamada (symbiote, sessao, finalidade) e cada chamada vira uma linha em `llm_usage` com provedor, modelo e tokens. Finalidades: `turn`, `subagent`, `reflection`, `session_summary`, `skill_review`, `dream:<fase>`, `harness`, `memory_consolidation`, `tool_resolution`, `long_run:plan`, `long_run:evaluate`, `long_run:report`. Os tokens vem do `usage` do `LLMResponse` ou de `report_usage()`, chamado pelo adapter que devolve texto puro ou faz streaming. O kernel guarda tokens, nunca preco, e nada depende de gateway. `TurnOutcome.usage` e `turn_contexts` trazem o total do turno, incluindo o que ele delegou; `kernel.inspector.usage_totals` / `usage_by` somam por symbiote, sessao, usuario final, finalidade, modelo e dia.
+
 ## Notas
 
 - O modo `auto` e resolvido pelo `ContextAssembler._resolve_auto_mode()` a cada turno, nesta ordem: `long_run` se o symbiote tem `planner_prompt` configurado; `instant` se nenhuma tool esta autorizada para ele; `brief` nos demais casos. O texto do usuario nao entra na decisao: nao ha heuristica por palavra-chave ("pesquise", "abra"). Um host que queira escolher o modo pelo pedido define `tool_mode` explicitamente antes do turno.

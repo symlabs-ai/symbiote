@@ -11,6 +11,7 @@ O Dream Mode e controlado por symbiote via `EnvironmentConfig`:
 | `dream_mode` | `off / light / full` | `off` | Nivel de ativacao |
 | `dream_max_llm_calls` | `1-50` | `10` | Budget maximo de chamadas LLM por ciclo |
 | `dream_min_sessions` | `1-100` | `5` | Sessoes fechadas necessarias para disparar |
+| `dream_llm` | `aux / main` | `aux` | Modelo que as fases chamam: o auxiliar (`set_evolver_llm`; o principal quando nao ha) ou sempre o principal |
 
 - **off**: Nunca roda. Zero custo.
 - **light**: Apenas fases deterministas (Prune + Reconcile). Zero chamadas LLM.
@@ -271,4 +272,6 @@ sequenceDiagram
 - O Dream Mode **nunca bloqueia** uma sessao ativa — roda em daemon thread.
 - O `BudgetTracker` e a protecao contra custo descontrolado de API. Se o budget se esgota na Phase 3, as Phases 4 e 5 sao automaticamente puladas.
 - Memorias criadas pelo Dream Mode usam `source="inference"` — distinguindo-as de memorias de usuario (`source="user"`) ou sistema (`source="system"`).
+- **Fim do ciclo**: `kernel.set_dream_callback(fn)` chama `fn(symbiote_id, report, error)` ao fim de todo ciclo, automatico ou pedido por `kernel.dream()`; `report` e `None` quando o ciclo falhou. O callback de um ciclo automatico roda na propria thread do dream, antes de o ciclo contar como terminado. `kernel.wait_dream(symbiote_id, timeout)` espera o ciclo automatico em andamento, callback incluido, e devolve se terminou.
+- **Skills em teste**: a `PrunePhase` arquiva a skill em quarentena sem uso apos `skill_quarantine_timeout_days`. Ela so e usada num turno, e so pode ser promovida por uso, quando o symbiote tem `skill_trial_listing` ligado.
 - O `should_dream()` verifica 3 condicoes: (1) dream_mode != off, (2) nenhum dream ativo pro mesmo symbiote, (3) >= min_sessions desde o ultimo dream.

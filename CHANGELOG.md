@@ -5,6 +5,44 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+Pedidos de hosts atendidos na engine (B-36, B-80 a B-93; vieram da equipe do SymbiOS e entraram no que serve a qualquer host), e a engine deixa de depender do SymGateway para buscar na web.
+
+**Mudança de comportamento para hosts:** toda opção nova nasce com o comportamento anterior. O banco ganha as migrações 13 a 15 (PostgreSQL 7 a 9), aplicadas ao subir. O que um host pode notar:
+
+- a nota dada com `report_feedback` antes do `close_session` passa a valer no `final_score` (antes o encerramento a sobrescrevia);
+- `ToolCallResult` e os dicionários de `tool_results` de `message()` têm a chave nova `pending_approval_id` (`None`, salvo em chamada adiada);
+- `prune()` devolve mais uma chave, `llm_usage`; as linhas de `inspector.list_turn_contexts` trazem `llm_calls` e os tokens do turno;
+- `register(search_routing=...)` sem provedor para `web_search` agora dá `ValueError` (antes caía no Brave pelo SymGateway); nome de backend desconhecido dá `ValueError` em vez de `NotImplementedError`;
+- `ForgeLLMAdapter` só envia `project_slug` quando o provider é `symgateway`;
+- `kernel._llm` e `kernel._evolver_llm` (atributos privados) passam a ser um medidor em volta do adapter recebido; `.wrapped` devolve o adapter.
+
+### Novas funcionalidades
+
+- feat(approval): aprovação adiada (B-90). O callback de aprovação pode responder `ApprovalDecision.defer(motivo)` além de `True` / `False`: a chamada não roda, o pedido fica em `pending_approvals`, o modelo é avisado de que está aguardando e o turno termina normalmente. `kernel.resolve_pending(id, approved, note=, resolved_by=, host_context=)` decide depois; a chamada aprovada roda com a sessão, o symbiote, o usuário final e os parâmetros originais, passa de novo pela política e pelo tool guard (`current_tool_context().approval_id` identifica o pedido) e a linha de auditoria da execução leva o id. Um pedido é resolvido uma única vez, expira (`KernelConfig.pending_approval_ttl_hours`, padrão 168, ou `defer(expires_in=)`) e sobrevive a reinício. O turno seguinte da conversa, ou do mesmo usuário final com o mesmo symbiote, recebe o resultado no contexto, uma vez. `TurnOutcome.pending_approvals`, `inspector.list_pending` / `get_pending`, `GET /symbiotes/{id}/approvals`, `POST /approvals/{id}/resolve` e o SDK (`list_approvals`, `resolve_approval`). `ApprovalDecision.deny(motivo)` entrega o motivo ao modelo.
+- feat(usage): uso por chamada ao modelo (B-36). `current_llm_call()` (`symbiote.core.llm_usage`) diz ao adapter o symbiote, a sessão e a finalidade da chamada: `turn`, `subagent`, `reflection`, `session_summary`, `skill_review`, `dream:<fase>`, `harness`, `memory_consolidation`, `tool_resolution`, `long_run:plan` / `evaluate` / `report`. Cada chamada vira uma linha em `llm_usage` com provedor, modelo e tokens, sem texto da conversa e sem preço. Os tokens vêm do `usage` do `LLMResponse` ou de `report_usage()`, para o adapter que devolve texto puro ou faz streaming. `TurnOutcome.usage` e `turn_contexts` trazem o total do turno, incluindo o que ele delegou; `inspector.usage_totals` / `usage_by` / `list_llm_calls` leem por symbiote, sessão, usuário final, finalidade, modelo e dia; `kernel.set_usage_callback(fn)` entrega cada registro ao host; `prune(usage_days=)` e `KernelConfig.usage_retention_days` limitam a tabela. Funciona com chave direta de provedor: nada depende de gateway.
+- feat(browser): as tools de web deixam de ter mecanismo fixo (B-91). `search_backend`, `extract_backend` e `crawl_backend` aceitam um provedor do host ou o nome de um registrado (`register_search_provider`, `register_extract_provider`, `register_crawl_provider`). Entram `brave_api` (API do Brave com chave própria) e `searxng` (instância SearXNG), que falam direto com o serviço; `brave`, `symgateway_objective` e `firecrawl` continuam indo pelo SymGateway. `SearchOptions.provider_options` leva as opções de cada provedor.
+- feat(skills): `EnvironmentConfig.skill_trial_listing` (B-81). Ligado, as skills em teste aparecem ao modelo marcadas `status="trial"`, `skill_view` as lê e cada leitura conta para `skill_auto_promote_threshold`.
+- feat(spawn): `current_spawn()` em `symbiote.environment.exec_context` (B-84) diz a ganchos, adapter, tool guard e tools que o código roda para um symbiote delegado: o delegado e a subsessão, quem delegou, a raiz da cadeia e a profundidade.
+- feat(dream): `kernel.set_dream_callback(fn)` e `kernel.wait_dream(symbiote_id, timeout)` (B-85); `EnvironmentConfig.dream_llm` (`aux` padrão, `main`) escolhe o modelo do dream (B-86).
+- feat(session): `EnvironmentConfig.session_summary_mode` (B-87): `concat` (padrão, sem chamar modelo), `llm` (resumo escrito pelo modelo auxiliar, uma vez por encerramento) ou `off`.
+- feat(discovery): `kernel.discover_tools(symbiote_id, spec={...}, base_url=...)` grava as tools de uma descrição OpenAPI que o host já tem em mãos (B-88).
+- feat(knowledge): `register_source(..., auto_recall=False)` e `knowledge.set_auto_recall` deixam um item fora do conhecimento empacotado no prompt e alcançável por `search_knowledge` (B-89).
+- feat(memory): `MemoryStore.reactivate(memory_id, ...)` desfaz o `deactivate` (B-83).
+- feat(ui): `symbiote.ui.widget_path()` e `widget_version()` entregam o `<symbiote-chat>` de dentro do pacote instalado; `reload()` público no componente (B-82).
+- feat(symgateway): `SymGatewayLLMAdapter` aceita `objective=` no lugar de `model=`, lista os Objectives da chave (`list_objectives`) e informa qual roteou cada chamada (`on_routed`, `last_routing`, `LLMResponse.metadata`). Fica só no adapter (B-93).
+
+### Correções
+
+- fix(score): `close_session` recalculava o `final_score` só com a nota automática e apagava a nota do host dada antes do encerramento; a sessão pontuada antes de encerrar também nunca contava para o score da versão do harness (B-80).
+- fix(ui): no modo inline, o `<symbiote-chat>` marcava o histórico como carregado ainda com o `NoopAdapter`, e um adapter definido depois nunca o carregava (B-82).
+- fix(llm): `ForgeLLMAdapter` enviava `project_slug="symbiote"` a qualquer provedor; agora só ao `symgateway`, e o host pode trocar ou tirar com `project_slug=` (B-92).
+- fix(usage): os adapters `ForgeLLMAdapter` e `SymGatewayLLMAdapter` perdiam os tokens das respostas em texto puro; agora informam ao kernel.
+
+### Outros
+
+- test: o kernel, a API HTTP, as tools de web e o SDK importam sem carregar nenhum módulo do SymGateway, e um turno, um encerramento, um dream e uma busca na web rodam com o gateway fora de alcance (`tests/unit/test_no_gateway_dependency.py`).
+- docs: `docs/HOST_INTEGRATION.md` (aprovação adiada, uso por chamada, delegação, resumo, skills em teste, dream, conhecimento por item, SymGateway opcional), `docs/arch-02-execution.md`, `docs/arch-03-memory.md`, `docs/arch-04-dream-mode.md`, `docs/integrations/symbiote-browser-quickstart.md` e `symbiote-ui/README.md`.
+
 ## [v0.8.9] - 2026-11-16
 
 Memória por usuário final: um symbiote que conversa com várias pessoas passa a guardar uma partição de memória por pessoa (B-79, pedido pelo estúdio de symbiotas).

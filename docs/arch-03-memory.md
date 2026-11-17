@@ -253,9 +253,14 @@ O que acompanha a particao:
 
 `MemoryEntry.scope` continua sendo um rotulo (`global`, `user`, `session`...), sem efeito sobre quem le a memoria.
 
+## Resumo de sessao e conhecimento sob demanda
+
+- **Resumo ao encerrar** (`session_summary_mode`, por symbiote): `concat` (padrao) junta as ultimas mensagens, sem chamar modelo; `llm` pede o resumo ao modelo auxiliar uma vez por encerramento e usa o mesmo texto em `sessions.summary` e no `ReflectionResult`, caindo no `concat` se a chamada falhar; `off` nao grava resumo.
+- **Conhecimento item a item**: `context_mode` vale para o symbiote inteiro. Um item registrado com `auto_recall=False` (ou trocado com `knowledge.set_auto_recall`) fica fora do conhecimento empacotado no prompt e continua alcancavel por `search_knowledge`.
+
 ## Notas
 
-- **Memorias nunca sao deletadas** — usam soft-delete (`is_active=False`). O `DreamEngine.PrunePhase` e o unico mecanismo que desativa memorias obsoletas.
+- **Memorias nunca sao deletadas** — usam soft-delete (`is_active=False`). O `DreamEngine.PrunePhase` e o `ReconcilePhase` desativam memorias obsoletas, e o host pode desativar (`memory.deactivate`) e trazer de volta (`memory.reactivate`), dentro das mesmas regras de symbiote e de particao.
 - **last_used_at** e atualizado automaticamente pelo `SemanticRecallProvider` a cada recall — memorias usadas frequentemente resistem ao decay.
 - **Preferencias e restricoes** (`preference`, `constraint`) entram em todo turno, por importancia, ate `KernelConfig.standing_memory_limit` (padrao 5), mesmo sem termo em comum com a mensagem; isso tambem atualiza o `last_used_at` delas.
 - **Handoff de long-run** (categoria `handoff`) nunca entra no recall de um turno; so o planejador o le, e so quando o symbiote esta em `long_run` com blocos pendentes.

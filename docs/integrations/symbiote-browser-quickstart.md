@@ -99,7 +99,7 @@ from symbiote.config.models import KernelConfig
 from symbiote.browser import register
 
 kernel = SymbioteKernel(KernelConfig(db_path="data/db.sqlite"), llm=your_llm_adapter)
-register(kernel, search_backend="tavily")
+register(kernel, search_backend="brave_api")   # precisa de BRAVE_API_KEY; veja "Mecanismo de busca" abaixo
 
 bot = kernel.create_symbiote(name="Researcher", role="web researcher")
 session = kernel.start_session(bot.id, goal="research")
@@ -148,10 +148,13 @@ register(
     kernel,
 
     # ── Search ─────────────────────────────────────────────
-    search_backend="tavily",   # "tavily" | "exa" | "firecrawl" | "parallel" | None
+    search_backend="brave_api",  # nome registrado, objeto do host, ou None
     search_options={
         "max_results_default": 5,
         "compress_results": True,    # passa resultados pelo compressor LLM
+        "provider_options": {        # o que cada provedor precisa, por nome
+            "brave_api": {"api_key": "BSA..."},
+        },
     },
 
     # ── Browser ────────────────────────────────────────────
@@ -177,6 +180,39 @@ register(
 ```
 
 Qualquer parâmetro pode ser omitido — defaults sensatos. `search_backend=None` ou `browser_backend=None` desativa aquela família.
+
+### Mecanismo de busca
+
+Nenhum mecanismo de busca vem fixo: o host escolhe. `search_backend`, `extract_backend` e `crawl_backend` aceitam o nome de um provedor registrado ou um objeto do próprio host.
+
+| Nome | Ferramenta | Como chega ao serviço | O que precisa |
+|---|---|---|---|
+| `brave_api` | `web_search` | direto na API do Brave | `provider_options["brave_api"]["api_key"]` ou `BRAVE_API_KEY` |
+| `searxng` | `web_search` | direto numa instância SearXNG | `provider_options["searxng"]["base_url"]` ou `SEARXNG_URL` (saída JSON habilitada) |
+| `brave` | `web_search` | pelo SymGateway | `SYMGATEWAY_BASE_URL` e `SYMGATEWAY_API_KEY` |
+| `symgateway_objective` | `web_search` | pelo SymGateway | os dois acima e `search_options["symgateway_objective"]` |
+| `forge_scraper` | `web_extract` | local | extra `[extract]` |
+| `firecrawl` | `web_extract`, `web_crawl` | pelo SymGateway | `SYMGATEWAY_BASE_URL` e `SYMGATEWAY_API_KEY` |
+
+Para usar outro mecanismo (DuckDuckGo, Google, um índice interno), escreva um provedor com o método do protocolo em `symbiote.browser.search.providers.base` e passe o objeto, ou registre um nome:
+
+```python
+from symbiote.browser import register, register_search_provider
+
+class MinhaBusca:
+    name = "minha-busca"
+
+    async def search(self, query: str, *, limit: int = 5) -> list[dict]:
+        hits = await meu_indice.buscar(query, limit)
+        return [{"url": h.url, "title": h.titulo, "snippet": h.resumo} for h in hits]
+
+register(kernel, search_backend=MinhaBusca())                 # o objeto
+
+register_search_provider("minha-busca", lambda options: MinhaBusca())
+register(kernel, search_backend="minha-busca")                # ou o nome
+```
+
+A fábrica recebe o `SearchOptions` dado a `register`; `options.options_for("minha-busca")` devolve o que veio em `provider_options` para aquele nome. `register_extract_provider` e `register_crawl_provider` fazem o mesmo para `web_extract` (`async extract(url)`) e `web_crawl` (`async crawl(domain, *, instruction, max_pages)`).
 
 ## 7. Tools disponíveis (referência rápida)
 

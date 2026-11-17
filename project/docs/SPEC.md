@@ -168,6 +168,28 @@ Correções do relatório `reports/2026-11-13_relatorio-melhorias.md`. Detalhes 
 |---------|---------|--------|
 | Memória particionada por usuário final (`subject_key`): a sessão lê a memória compartilhada mais a do próprio usuário e grava só na dele; `spawn` herda a chave; `learn_from_subject_sessions` decide se essas sessões alimentam harness, dream e skills; `inspector.list_subjects` e `kernel.purge_subject` | B-79 | ✅ Entregue |
 
+### Pós-MVP (Pedidos de hosts — 2026-11-17)
+
+Pedidos da equipe do SymbiOS, atendidos no que serve a qualquer host. Plano em `reports/2026-11-17_plano-pedidos-symbios.md`.
+
+| Feature | Backlog | Status |
+|---------|---------|--------|
+| Aprovação adiada: o callback responde `ApprovalDecision.defer()`, o pedido fica em `pending_approvals` e `kernel.resolve_pending` executa depois no contexto original | B-90 | done |
+| Uso por chamada ao modelo: `current_llm_call()`, tabela `llm_usage`, `TurnOutcome.usage`, `inspector.usage_totals` / `usage_by`, `set_usage_callback` | B-36 | done (budget por request continua aberto) |
+| `close_session` preserva a nota do host no `final_score` | B-80 | done |
+| Skills em teste listadas ao modelo por opção (`skill_trial_listing`) | B-81 | done |
+| `<symbiote-chat>`: histórico com adapter definido depois, `reload()`, widget dentro do pacote (`symbiote.ui`) | B-82 | done |
+| `MemoryStore.reactivate` | B-83 | done |
+| `current_spawn()`: contexto público de delegação | B-84 | done |
+| `set_dream_callback` e `wait_dream` | B-85 | done |
+| Modelo do dream por symbiote (`dream_llm`) | B-86 | done |
+| Modo do resumo de sessão (`session_summary_mode`: `concat`, `llm`, `off`) | B-87 | done |
+| Descoberta de tools a partir de uma descrição OpenAPI em mãos (`discover_tools(spec=...)`) | B-88 | done |
+| Conhecimento sob demanda por item (`auto_recall=False`) | B-89 | done |
+| Tools de web sem mecanismo fixo e sem SymGateway: provedor do host ou nome registrado; `brave_api` e `searxng` diretos | B-91 | done |
+| `ForgeLLMAdapter` só envia `project_slug` ao provider `symgateway` | B-92 | done |
+| Objectives no `SymGatewayLLMAdapter` | B-93 | done |
+
 ### O que está fora do escopo
 
 - Multi-tenant completo

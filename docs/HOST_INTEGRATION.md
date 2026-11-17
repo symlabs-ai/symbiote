@@ -292,6 +292,12 @@ contract.
 
 ### LLM through SymGateway
 
+SymGateway is optional. The kernel calls whatever `LLMPort` the host gives it
+and needs nothing from a gateway: with a provider key, use `ForgeLLMAdapter`
+(or your own adapter) and skip this section. `ForgeLLMAdapter` sends the
+gateway's project (`project_slug`, default `"symbiote"`) only when
+`provider="symgateway"`; pass `project_slug="<yours>"` or `None` to change it.
+
 With a SymGateway key in place of a provider key, use `SymGatewayLLMAdapter`.
 The key needs `models.read`, `work_sessions.create` and `gateway.llm.invoke`.
 
@@ -325,6 +331,20 @@ share one default session. Set the same key around `close_session()` so the
 reflection and dream calls land in the conversation's session. The adapter
 talks to the OpenAI-compatible `/v1/chat/completions` with httpx; it does not
 stream, so `on_token` receives the final text.
+
+The gateway can also choose the model: name an Objective instead of a model.
+
+```python
+llm = SymGatewayLLMAdapter(api_key, objective="chat_fast", on_routed=print)
+llm.list_objectives()                 # the key's LLM Objectives (needs objectives.read)
+aux = llm.with_objective("summarize") # same work sessions, routed by another Objective
+llm.complete(messages, config={"objective": "summarize"})  # for one call
+llm.last_routing   # {"model": ..., "objective": ..., "provider": ..., "request_id": ..., "work_session": ...}
+```
+
+`on_routed(routing)` is called after every call with what the gateway
+answered, including the Objective that routed it. Objectives exist only in
+this adapter; the kernel and `LLMPort` know nothing about them.
 
 ---
 
@@ -393,6 +413,33 @@ These changes are in `CHANGELOG.md` under `[Unreleased]`, each with a
   SIGTERM now terminates the process after closing browser sessions (a host
   handler installed earlier is still called).
 - **CLI:** the default server is `http://localhost:8008`.
+
+### Upgrading to the release after 0.8.9
+
+The database gains migrations 13 to 15 (PostgreSQL 7 to 9), applied when the
+kernel starts. Every new option defaults to the old behaviour. What a host
+may notice:
+
+- **Score:** a score given with `report_feedback` before `close_session` is
+  now part of `final_score` (it used to be overwritten by the close).
+- **Tool results:** `ToolCallResult`, and the `tool_results` dicts of
+  `message()`, have a new key `pending_approval_id` (`None` unless the call was
+  deferred).
+- **`prune()`** returns one more key, `llm_usage`.
+- **Turn contexts:** the rows of `inspector.list_turn_contexts` have
+  `llm_calls`, `prompt_tokens`, `completion_tokens` and `total_tokens`.
+- **Web tools:** `register(search_routing=...)` with no provider for
+  `web_search` raises `ValueError` (it used to fall back to Brave through
+  SymGateway). An unknown backend name raises `ValueError`, not
+  `NotImplementedError`.
+- **`ForgeLLMAdapter`** no longer sends `project_slug` to providers other than
+  `symgateway`.
+- **Private attributes:** `kernel._llm` and `kernel._evolver_llm` are now a
+  metering wrapper around the adapter you passed (`.wrapped` is your adapter,
+  and its attributes stay reachable through the wrapper). `current_spawn()`
+  and `wait_dream()` replace reading `_spawn_depth` and `_dream_threads`.
+
+---
 
 ## Tool Registration
 
@@ -489,6 +536,20 @@ Automatically discover and load tools from a repository:
 tool_ids = kernel.load_discovered_tools(sym.id, base_url="http://127.0.0.1:8000")
 ```
 
+`kernel.discover_tools(sym.id, url="http://host:8000")` fetches
+`{url}/openapi.json`. When the description lives somewhere else, parse it
+yourself and pass the `dict`: the tools are the same and follow the same
+approval and loading steps.
+
+```python
+spec = yaml.safe_load(Path("vendor/api.yaml").read_text())
+result = kernel.discover_tools(
+    sym.id, "vendor/api.yaml", spec=spec, base_url="https://api.vendor.example"
+)
+# base_url defaults to spec["servers"][0]["url"]; the path is only recorded
+# as where the description came from.
+```
+
 #### Risk levels from discovery
 
 Discovery assigns a `risk_level` to every discovered tool and propagates it all
@@ -574,6 +635,18 @@ response = kernel.message(session.id, user_message)
 # Close (triggers reflection + scoring + failure memory)
 closed = kernel.close_session(session.id)
 # closed.summary contains the auto-generated session summary
+```
+
+What that summary is depends on `session_summary_mode`, per symbiote:
+
+| Mode | The summary |
+| --- | --- |
+| `"concat"` (default) | the last messages joined; no model call |
+| `"llm"` | written once per close by the auxiliary model (`set_evolver_llm`, or the main one when there is none); falls back to the concatenation if the call fails |
+| `"off"` | none (`summary` is `None`) |
+
+```python
+kernel.environment.configure(symbiote_id=sym.id, session_summary_mode="llm")
 ```
 
 ### End users: one memory partition per person (`subject_key`)
@@ -981,7 +1054,11 @@ kernel.report_feedback(session.id, score=0.0, source="thumbs_down")
 kernel.report_feedback(session.id, score=0.7, source="task_completion")
 ```
 
-The final score combines auto-score (60%) with user feedback (40%).
+The final score combines auto-score (60%) with user feedback (40%). The
+feedback may come before or after `close_session`: either way it stays in the
+final score. A turn that called no tool gives the loop nothing to measure, so
+its auto-score is the neutral 0.8; the host's own score is what tells such
+sessions apart.
 
 ---
 
@@ -1069,6 +1146,74 @@ ToolDescriptor(
     # ...
 )
 ```
+
+### Deferring the decision: approvals that wait
+
+The callback can only block the turn while it waits for a person. When nobody
+can answer now (the person who decides is not the one in the conversation),
+answer `ApprovalDecision.defer()` instead of `True` / `False`:
+
+```python
+from symbiote.environment.policies import ApprovalDecision
+
+def approval_gate(tool_id, params, risk, ctx):
+    if ctx.host.get("is_owner"):
+        return True
+    return ApprovalDecision.defer("asked by a visitor", expires_in=48 * 3600)
+
+kernel.set_approval_callback(approval_gate, pass_context=True)
+```
+
+The call is **not executed**. The kernel stores it as a pending approval, the
+model receives a tool result saying that the action waits for a person (your
+own text with `defer(message=...)`), and the turn ends normally.
+`ApprovalDecision.approve()` and `ApprovalDecision.deny("reason")` are the
+other two answers; `deny` with a reason gives that reason to the model.
+
+```python
+outcome = kernel.turn(session.id, "cancel my order")
+outcome.pending_approvals            # ids of the calls this turn left waiting
+kernel.inspector.list_pending(sym.id)             # the ones still waiting
+kernel.inspector.list_pending(sym.id, status=None, subject_key="customer:42")
+kernel.inspector.get_pending(approval_id)
+
+resolved = kernel.resolve_pending(
+    approval_id, True, note="ok", resolved_by="owner-1", host_context={...}
+)
+resolved.status   # "executed" (resolved.result) or "failed" (resolved.error)
+kernel.resolve_pending(other_id, False, note="not this month")   # "denied"
+```
+
+- **What runs.** An approved call runs inside `resolve_pending`, with the
+  symbiote, session, end user and parameters it was asked with. Policy and the
+  tool guard are checked again, since permissions may have changed meanwhile.
+  The guard and the handler see `current_tool_context().approval_id`, so a
+  guard that refuses a tool to visitors lets the approved call through, and
+  the audit row of the execution carries the same id. The `host_context` of
+  the turn that asked is not kept: pass the one the execution needs.
+- **Once.** A request is resolved once; a second `resolve_pending`, or one for
+  an expired request, raises `ValidationError`. Two people deciding at the
+  same moment run the call once.
+- **Expiry.** A request expires after `KernelConfig.pending_approval_ttl_hours`
+  (default 168; `None` never) or after `defer(expires_in=seconds)`.
+  `kernel.expire_pending()` closes the ones past their time; it also runs at
+  the start of every turn and inside `resolve_pending`.
+- **Restart.** Requests are rows in `pending_approvals`: they are there after a
+  restart, as long as the tool is registered again.
+- **What the conversation hears.** At the start of the next turn of that
+  conversation, or of that end user (`subject_key`) with the same symbiote in
+  any session, the model finds in its context what became of each request
+  (executed and the result, failed, denied with the note, or expired), once.
+  A request made by a delegated symbiote (`spawn`) is told to the
+  conversation that delegated.
+- **Parameters.** While a request is pending its parameters are stored as they
+  came, because running the call needs them; they are erased when it is
+  resolved or expires. What `list_pending` shows (`params`) has the
+  `secret_params` and every secret the redactor knows removed.
+- **Erasure.** `purge_subject` and `purge_symbiote` remove the requests too.
+- Over HTTP: `GET /symbiotes/{id}/approvals?status=pending` and
+  `POST /approvals/{id}/resolve` with `{"approved": true, "note": "..."}`;
+  `SymbioteClient.list_approvals` / `resolve_approval`.
 
 ### Host veto: the tool guard
 
@@ -1174,7 +1319,8 @@ rendered, persisted or logged by the kernel. Credentials and identifiers go in
 `host_context` only.
 
 It reaches your code as a `ToolExecContext(symbiote_id, session_id, host)`,
-where `host` is a read-only view of the mapping:
+where `host` is a read-only view of the mapping (`approval_id` is set as well
+when the call is the execution of an approval that waited, see above):
 
 ```python
 from symbiote.environment.exec_context import (
@@ -1219,6 +1365,84 @@ Guarantees:
 Your own `contextvars.ContextVar` set before calling `message()` /
 `message_async()` keeps working: the kernel copies the caller's context into
 every worker thread it starts.
+
+### Delegation: knowing that the code runs for a delegated symbiote
+
+When a symbiote calls `spawn`, the delegated symbiote's turn runs inside the
+turn of the one that delegated: your LLM adapter, hooks, tool guard and tool
+handlers fire for it too. `current_spawn()` tells them apart:
+
+```python
+from symbiote.environment.exec_context import current_spawn
+
+spawn = current_spawn()      # None outside a delegation
+if spawn is not None:
+    spawn.symbiote_id, spawn.session_id                 # the delegated symbiote and its sub-session
+    spawn.parent_symbiote_id, spawn.parent_session_id   # who called spawn
+    spawn.root_symbiote_id, spawn.root_session_id       # the turn your host started
+    spawn.depth                                         # 1, or 2 when the delegate delegates again
+```
+
+---
+
+## Model usage: who each call is for and what it cost
+
+Every model the kernel calls is metered, whatever the provider. Inside
+`complete()` / `stream()`, an LLM adapter can ask who the call is for:
+
+```python
+from symbiote.core.llm_usage import current_llm_call, report_usage
+
+call = current_llm_call()   # None when the adapter is not called by a kernel
+call.symbiote_id, call.session_id, call.root_session_id, call.purpose
+```
+
+`purpose` is `turn`, `subagent` (a turn of a delegated symbiote),
+`reflection`, `session_summary`, `skill_review`, `dream:<phase>`, `harness`,
+`memory_consolidation`, `tool_resolution`, `long_run:plan`,
+`long_run:evaluate` or `long_run:report`. `root_session_id` is the session of
+the turn the host started: it differs from `session_id` for a delegated
+symbiote, so the whole cost of a conversation can be added up.
+
+The kernel stores one row per call in `llm_usage`: symbiote, session,
+purpose, provider, model, tokens, duration and whether it failed. No text of
+the conversation, and no price: the kernel records tokens, the host applies
+its prices. The tokens are the `usage` of the `LLMResponse` the adapter
+returned. An adapter that returns plain text, or that streams, reports them
+before it returns:
+
+```python
+class MyAdapter:
+    def complete(self, messages, config=None, tools=None) -> str:
+        data = call_my_provider(messages)
+        report_usage(data.input_tokens, data.output_tokens, provider="acme", model=data.model)
+        return data.text
+```
+
+Without either, the call is recorded with no token counts. The bundled
+`ForgeLLMAdapter` and `SymGatewayLLMAdapter` report both ways.
+
+```python
+outcome = kernel.turn(session.id, text)
+outcome.usage        # llm_calls, prompt_tokens, completion_tokens, total_tokens
+                     # of this turn, what it delegated included
+
+ins = kernel.inspector
+ins.usage_totals(sym.id, since="2026-11-01T00:00:00+00:00")
+ins.usage_by("purpose", sym.id)             # also: symbiote, session, root_session,
+ins.usage_by("subject", sym.id)             # provider, model, day, subject (end user)
+ins.usage_totals(sym.id, purpose="dream")   # a family: every dream:<phase>
+ins.usage_totals(root_session_id=session.id)  # a conversation and what it delegated
+ins.list_llm_calls(sym.id, limit=50)        # the rows, newest first
+
+kernel.set_usage_callback(lambda record: my_billing.add(record))  # every call, as it ends
+```
+
+Every turn, with or without tools, is also on record in
+`inspector.list_turn_contexts` with its own totals. `kernel.prune(usage_days=N)`
+or `KernelConfig.usage_retention_days` bound the table; `purge_symbiote`
+removes a symbiote's rows; `purge_subject` keeps the counts (they name a
+session id that no longer exists, nothing else).
 
 ---
 
@@ -1291,6 +1515,19 @@ kernel.environment.configure(symbiote_id=sym.id, context_mode="packed")
 kernel.environment.configure(symbiote_id=sym.id, context_mode="on_demand")
 ```
 
+`context_mode` decides for the whole symbiote. To keep one knowledge entry
+out of the packed prompt while the others stay in, register it with
+`auto_recall=False`: it is never packed, and the model still finds it with
+`search_knowledge` (authorize that tool in `tools` when the symbiote is in
+`packed` mode).
+
+```python
+entry = kernel.knowledge.register_source(
+    sym.id, "refund exceptions", content=text, auto_recall=False
+)
+kernel.knowledge.set_auto_recall(entry.id, True)   # change it later
+```
+
 ### Preferences and constraints hold in every turn
 
 In `packed` mode, memories reach the prompt by relevance: a memory enters
@@ -1325,6 +1562,19 @@ symbiote from the tool execution context set by `ToolGateway`; a
 the same context with `symbiote.environment.exec_context.current_tool_context()`.
 The HTTP route `GET /memory/search` and the CLI `memory search` now require
 the symbiote (`symbiote_id` query param / `--symbiote` option).
+
+A memory that was deactivated (by the host, or by the dream's prune and
+reconcile phases) can come back. `inspector.list_memories(...,
+include_inactive=True)` shows them:
+
+```python
+kernel.memory.deactivate(memory_id, symbiote_id=sym.id)
+kernel.memory.reactivate(memory_id, symbiote_id=sym.id)   # recalled again
+```
+
+`reactivate` follows the rules of `deactivate`: with `symbiote_id`, and with
+`subject_key` for an end user's partition, an entry of another symbiote or of
+another partition is not found.
 
 ---
 
@@ -1385,6 +1635,52 @@ Everything that learns can be turned off, per symbiote
 Skills live in a local directory by default. A host with several replicas
 that do not share a disk either injects a shared library (see "Skills shared
 between replicas") or runs with `skill_writes=False`.
+
+### Skills on trial
+
+A skill the agent writes starts on trial (status `quarantine`). By default
+the model never sees a skill on trial: `<available-skills>` lists the active
+ones and `skill_view` refuses the others, so a trial skill becomes active
+only when the host promotes it (`symbiote skills promote`), and
+`skill_auto_promote_threshold` has nothing to count.
+
+```python
+kernel.environment.configure(
+    symbiote_id=sym.id,
+    skill_injection_enabled=True,
+    skill_trial_listing=True,          # default False
+    skill_auto_promote_threshold=3,
+    tools=[..., "skill_view"],
+)
+```
+
+With `skill_trial_listing=True` the skills on trial are listed after the
+active ones, marked `status="trial"`, with a line telling the model that they
+were not reviewed yet. `skill_view` reads them (its answer says `"status":
+"trial"`), and each read counts: at `skill_auto_promote_threshold` reads the
+skill becomes active, unless `max_active_skills` is already reached. A skill
+on trial that nobody uses is archived by the dream's prune phase after
+`skill_quarantine_timeout_days`, so it only happens for symbiotes that dream
+(`dream_mode`) or whose host calls `kernel.dream()`.
+
+### Dream: which model, and knowing when a cycle ends
+
+```python
+kernel.environment.configure(symbiote_id=sym.id, dream_llm="main")   # default "aux"
+
+def after_dream(symbiote_id, report, error):
+    # report: the DreamReport of the cycle, or None when it failed (error is the exception)
+    ...
+
+kernel.set_dream_callback(after_dream)     # every cycle, automatic or kernel.dream()
+kernel.wait_dream(sym.id, timeout=30)      # True once no automatic cycle is running
+```
+
+`dream_llm="aux"` calls the model given to `set_evolver_llm` (the main one
+when none was set); `"main"` always calls the main model. An automatic cycle
+runs in a background thread after a session closes: the callback runs in that
+thread, before the cycle counts as finished, so `wait_dream` also waits for
+it. An exception raised by the callback is logged and goes no further.
 
 ### Retention
 
