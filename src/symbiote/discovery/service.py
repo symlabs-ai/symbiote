@@ -83,6 +83,38 @@ class DiscoveryService:
         # Strategy 4: pyproject.toml scripts (always — CLI tools complement HTTP)
         tools.extend(self._scan_pyproject_scripts(symbiote_id, root, now, result))
 
+        return self._store(result, tools)
+
+    def discover_spec(
+        self,
+        symbiote_id: str,
+        spec: dict,
+        *,
+        base_url: str | None = None,
+        source: str = "openapi-spec",
+    ) -> DiscoveryResult:
+        """Persist the tools of an OpenAPI description the caller already
+        has (a parsed ``dict``), exactly as ``discover(url=...)`` does for the
+        one it fetches from ``{url}/openapi.json``.
+
+        ``base_url`` is where the operations are called; by default the first
+        entry of the description's ``servers``. ``source`` is recorded as the
+        tools' ``source_path`` (where the description came from).
+        """
+        result = DiscoveryResult(symbiote_id=symbiote_id, source_path=source)
+        if not isinstance(spec, dict) or "paths" not in spec:
+            result.errors.append(f"openapi_spec:{source}: invalid OpenAPI spec")
+            return result
+        if base_url is None:
+            servers = spec.get("servers") or [{}]
+            base_url = servers[0].get("url", "") if isinstance(servers[0], dict) else ""
+        now = datetime.now(tz=UTC).isoformat()
+        tools = _tools_from_spec(
+            symbiote_id, spec, base_url.rstrip("/"), source, now, result.errors
+        )
+        return self._store(result, tools)
+
+    def _store(self, result: DiscoveryResult, tools: list[DiscoveredTool]) -> DiscoveryResult:
         # Deduplicate by tool_id (first wins); a different operation that
         # maps to the same id is reported instead of silently dropped.
         seen: dict[str, DiscoveredTool] = {}
@@ -142,28 +174,7 @@ class DiscoveryService:
             result.errors.append(f"openapi_url:{openapi_url}: invalid OpenAPI spec")
             return []
 
-        tools: list[DiscoveredTool] = []
-        for path, method, op in _iter_operations(spec, result.errors):
-            op_id = op.get("operationId") or _path_to_tool_id(method, path)
-            summary = op.get("summary") or op.get("description") or f"{method.upper()} {path}"
-            parameters = _openapi_params_to_schema(
-                op.get("parameters", []), op.get("requestBody"), spec
-            )
-            tools.append(DiscoveredTool(
-                id=str(uuid4()),
-                symbiote_id=symbiote_id,
-                tool_id=_slugify(op_id),
-                name=summary[:80],
-                description=op.get("description") or summary,
-                method=method.upper(),
-                url_template=f"{base_url}{_normalize_path(path)}{_query_template(op, spec)}",
-                parameters=parameters,
-                tags=op.get("tags", []),
-                risk_level=_risk_for_operation(method, op),
-                source_path=openapi_url,
-                discovered_at=now,
-            ))
-        return tools
+        return _tools_from_spec(symbiote_id, spec, base_url, openapi_url, now, result.errors)
 
     def _scan_openapi(
         self,
@@ -217,26 +228,7 @@ class DiscoveryService:
 
         servers = spec.get("servers", [{}])
         base_url = servers[0].get("url", "") if servers else ""
-        tools: list[DiscoveredTool] = []
-        for path, method, op in _iter_operations(spec, errors):
-            op_id = op.get("operationId") or _path_to_tool_id(method, path)
-            summary = op.get("summary") or op.get("description") or f"{method.upper()} {path}"
-            parameters = _openapi_params_to_schema(op.get("parameters", []), op.get("requestBody"), spec)
-            tools.append(DiscoveredTool(
-                id=str(uuid4()),
-                symbiote_id=symbiote_id,
-                tool_id=_slugify(op_id),
-                name=summary[:80],
-                description=op.get("description") or summary,
-                method=method.upper(),
-                url_template=f"{base_url}{_normalize_path(path)}{_query_template(op, spec)}",
-                parameters=parameters,
-                tags=op.get("tags", []),
-                risk_level=_risk_for_operation(method, op),
-                source_path=str(spec_file),
-                discovered_at=now,
-            ))
-        return tools
+        return _tools_from_spec(symbiote_id, spec, base_url, str(spec_file), now, errors)
 
     def _scan_fastapi(
         self,
@@ -357,6 +349,43 @@ class DiscoveryService:
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+
+def _tools_from_spec(
+    symbiote_id: str,
+    spec: dict,
+    base_url: str,
+    source: str,
+    now: str,
+    errors: list[str] | None = None,
+) -> list[DiscoveredTool]:
+    """One ``DiscoveredTool`` per operation of an OpenAPI description.
+
+    ``operationId`` becomes the ``tool_id`` (a slug of method and path when
+    absent); the parameters and the request body become its schema.
+    """
+    tools: list[DiscoveredTool] = []
+    for path, method, op in _iter_operations(spec, errors):
+        op_id = op.get("operationId") or _path_to_tool_id(method, path)
+        summary = op.get("summary") or op.get("description") or f"{method.upper()} {path}"
+        parameters = _openapi_params_to_schema(
+            op.get("parameters", []), op.get("requestBody"), spec
+        )
+        tools.append(DiscoveredTool(
+            id=str(uuid4()),
+            symbiote_id=symbiote_id,
+            tool_id=_slugify(op_id),
+            name=summary[:80],
+            description=op.get("description") or summary,
+            method=method.upper(),
+            url_template=f"{base_url}{_normalize_path(path)}{_query_template(op, spec)}",
+            parameters=parameters,
+            tags=op.get("tags", []),
+            risk_level=_risk_for_operation(method, op),
+            source_path=source,
+            discovered_at=now,
+        ))
+    return tools
 
 
 def _slugify(s: str) -> str:

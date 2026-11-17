@@ -2361,10 +2361,22 @@ class SymbioteKernel:
         return DiscoveredToolRepository(self._storage)
 
     def discover_tools(
-        self, symbiote_id: str, source_path: str = ".", *, url: str | None = None
+        self,
+        symbiote_id: str,
+        source_path: str = ".",
+        *,
+        url: str | None = None,
+        spec: dict | None = None,
+        base_url: str | None = None,
     ):
-        """Scan a repository (``source_path``) or a live server (``url``, whose
-        ``/openapi.json`` is fetched) and store what it finds as ``pending``.
+        """Scan a repository (``source_path``), a live server (``url``, whose
+        ``/openapi.json`` is fetched) or an OpenAPI description the host
+        already has (``spec``, the parsed ``dict``) and store what it finds
+        as ``pending``.
+
+        With ``spec``, ``base_url`` is where the operations are called
+        (default: the first entry of the description's ``servers``) and
+        ``source_path`` is only recorded as where the description came from.
 
         Approve with ``discovered_tools.set_status(...)``, then
         ``load_discovered_tools``. Returns the ``DiscoveryResult``. The fetch
@@ -2372,7 +2384,11 @@ class SymbioteKernel:
         """
         from symbiote.discovery.service import DiscoveryService
 
-        return DiscoveryService(self.discovered_tools).discover(symbiote_id, source_path, url=url)
+        service = DiscoveryService(self.discovered_tools)
+        if spec is not None:
+            source = source_path if source_path != "." else "openapi-spec"
+            return service.discover_spec(symbiote_id, spec, base_url=base_url, source=source)
+        return service.discover(symbiote_id, source_path, url=url)
 
     def load_discovered_tools(self, symbiote_id: str, base_url: str = "") -> list[str]:
         """Load approved discovered tools into the ToolGateway and authorize them.
