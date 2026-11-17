@@ -3,6 +3,9 @@
 The gateway key replaces the provider key. The gateway's contract:
 
 - ``GET /v1/models`` lists the models the key may use (``service_type`` ``llm``);
+- ``GET /_api/objectives`` lists the Objectives the key may read; a call
+  names either a ``model`` or an ``objective`` (the gateway then chooses the
+  model), and the response says which Objective routed it;
 - ``POST /_api/work-sessions`` opens a work session, and every inference call
   carries its uid in ``X-SymGateway-Session-Id``; the same uid is reused for
   every call of one conversation or task;
@@ -11,7 +14,7 @@ The gateway key replaces the provider key. The gateway's contract:
   project.
 
 The key needs ``models.read``, ``work_sessions.create`` and
-``gateway.llm.invoke``.
+``gateway.llm.invoke`` (and ``objectives.read`` for ``list_objectives``).
 
 The kernel already speaks the OpenAI wire format (``tool_calls`` with
 ``function.arguments`` as JSON text, ``role: tool`` results), so this adapter
@@ -65,20 +68,38 @@ class SymGatewayLLMAdapter:
     def __init__(
         self,
         api_key: str,
-        model: str,
+        model: str | None = None,
         *,
+        objective: str | None = None,
         base_url: str | None = None,
         project_slug: str | None = None,
         session_key: Callable[[], str | None] | None = None,
         session_title: str = "Symbiote",
         timeout: float = 120.0,
         client: httpx.Client | None = None,
+        on_routed: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
+        """``model`` names the model to call; ``objective`` names a gateway
+        Objective instead, and the gateway chooses the model. One of the two
+        is required; with both, the objective is used.
+
+        ``on_routed(routing)`` is called after every call with what the
+        gateway answered: ``{"model", "objective", "provider", "request_id",
+        "work_session"}`` (``objective`` is the one that routed the call, or
+        ``None``). ``last_routing`` keeps the latest one.
+        """
         if not api_key:
             raise LLMError("SymGateway API key is required")
-        if not model:
-            raise LLMError("SymGateway model is required — pick one from list_models()")
+        if not model and not objective:
+            raise LLMError(
+                "SymGateway needs a model or an objective — pick one from "
+                "list_models() or list_objectives()"
+            )
         self.model = model
+        self.objective = objective
+        self.provider = "symgateway"
+        self._on_routed = on_routed
+        self.last_routing: dict[str, Any] | None = None
         self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
         self._session_key = session_key
         self._session_title = session_title
@@ -98,6 +119,21 @@ class SymGatewayLLMAdapter:
         return [
             m["id"] for m in data.get("data", [])
             if m.get("service_type", "llm") == "llm" and m.get("id")
+        ]
+
+    def list_objectives(self) -> list[str]:
+        """Names of the LLM Objectives this key may route by: enabled and
+        with routing active."""
+        data = self._request(
+            "GET", "/_api/objectives?service_type=llm&enabled=true"
+        ).json()
+        items = data if isinstance(data, list) else data.get("data", [])
+        return [
+            o["name"] for o in items
+            if isinstance(o, dict) and o.get("name")
+            and o.get("service_type", "llm") == "llm"
+            and o.get("enabled", True)
+            and o.get("routing_status", "active") == "active"
         ]
 
     def create_work_session(self, title: str | None = None) -> str:
@@ -126,6 +162,13 @@ class SymGatewayLLMAdapter:
         an auxiliary model working on one conversation share its session."""
         other = copy.copy(self)
         other.model = model
+        other.objective = None
+        return other
+
+    def with_objective(self, objective: str) -> SymGatewayLLMAdapter:
+        """Same key, client and work sessions, routed by another Objective."""
+        other = copy.copy(self)
+        other.objective = objective
         return other
 
     @property
@@ -145,10 +188,18 @@ class SymGatewayLLMAdapter:
         config: dict | None = None,
         tools: list[dict] | None = None,
     ) -> str | LLMResponse:
-        body: dict[str, Any] = {
-            "model": (config or {}).get("model") or self.model,
-            "messages": [_wire_message(m) for m in messages],
-        }
+        # A call names an objective or a model. What the call's own config
+        # asks for wins over what the adapter was built with.
+        asked = config or {}
+        body: dict[str, Any] = {"messages": [_wire_message(m) for m in messages]}
+        if asked.get("objective"):
+            body["objective"] = asked["objective"]
+        elif asked.get("model"):
+            body["model"] = asked["model"]
+        elif self.objective:
+            body["objective"] = self.objective
+        else:
+            body["model"] = self.model
         for name in _PASSTHROUGH:
             value = (config or {}).get(name)
             if value is not None:
@@ -171,7 +222,12 @@ class SymGatewayLLMAdapter:
             response = self._request(
                 "POST", "/v1/chat/completions", json=body, headers={SESSION_HEADER: uid}
             )
-        return _parse_completion(response.json(), uid)
+        data = response.json()
+        routing = _routing(data, uid)
+        self.last_routing = routing
+        if self._on_routed is not None:
+            self._on_routed(routing)
+        return _parse_completion(data, uid)
 
     # ── internals ──────────────────────────────────────────────────────
 
@@ -214,6 +270,18 @@ def _wire_message(message: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _routing(data: dict[str, Any], session_uid: str) -> dict[str, Any]:
+    """What the gateway says about how it served a call."""
+    meta = data.get("symgateway") or {}
+    return {
+        "model": data.get("model"),
+        "objective": meta.get("objective"),
+        "provider": meta.get("provider"),
+        "request_id": meta.get("request_id"),
+        "work_session": session_uid,
+    }
+
+
 def _parse_completion(data: dict[str, Any], session_uid: str) -> str | LLMResponse:
     choices = data.get("choices") or []
     if not choices:
@@ -242,7 +310,11 @@ def _parse_completion(data: dict[str, Any], session_uid: str) -> str | LLMRespon
             completion_tokens=usage.get("completion_tokens"),
             total_tokens=usage.get("total_tokens"),
         ) if usage else None,
-        metadata={"id": data.get("id"), "work_session": session_uid},
+        metadata={
+            "id": data.get("id"),
+            "work_session": session_uid,
+            "objective": (data.get("symgateway") or {}).get("objective"),
+        },
     )
 
 
