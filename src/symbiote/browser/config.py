@@ -3,27 +3,34 @@
 from __future__ import annotations
 
 import os
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-SearchBackend = Literal["brave", "symgateway_objective"]
-ExtractBackend = Literal["forge_scraper", "firecrawl"]
-CrawlBackend = Literal["firecrawl"]
+# A registered provider name (``symbiote.browser.search.registry``). The
+# host may pass a provider object instead of a name wherever one is expected.
+SearchBackend = str
+ExtractBackend = str
+CrawlBackend = str
 BrowserBackend = Literal["chromium", "browserbase", "browser_use"]
 
 
 class SearchOptions(BaseModel):
     """Options affecting search tool behavior.
 
-    Credentials come from SymGateway (centralized in the Symlabs gateway).
-    By default we read SYMGATEWAY_BASE_URL and SYMGATEWAY_API_KEY from the
-    host's environment, just like the LLM adapter does.
+    ``provider_options`` holds what each provider needs, keyed by the
+    provider's name (``{"brave_api": {"api_key": "..."}}``). The
+    ``symgateway_*`` fields are read only by the providers that go through
+    SymGateway (``brave``, ``symgateway_objective``, ``firecrawl``), which
+    fall back to SYMGATEWAY_BASE_URL and SYMGATEWAY_API_KEY in the host's
+    environment.
     """
 
     max_results_default: int = 5
     compress_results: bool = True
+    provider_options: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    """Per-provider settings, keyed by provider name."""
     symgateway_base_url: str | None = None
     """Override SymGateway base URL. Defaults to env SYMGATEWAY_BASE_URL.
     The /v1 suffix used for LLM calls is stripped automatically for proxy calls."""
@@ -35,6 +42,10 @@ class SearchOptions(BaseModel):
     "web_seek"). Required by ``search_backend="symgateway_objective"``."""
     symgateway_objective_service: str = "websearch"
     """The Objective's service to invoke; it receives ``{"q", "count"}``."""
+
+    def options_for(self, provider: str) -> dict[str, Any]:
+        """The settings given for one provider (empty when none)."""
+        return dict(self.provider_options.get(provider) or {})
 
     def resolved_gateway_url(self) -> str:
         url = self.symgateway_base_url or os.getenv("SYMGATEWAY_BASE_URL", "")
@@ -139,9 +150,10 @@ class PolicyConfig(BaseModel):
 class SearchRouting(BaseModel):
     """Per-tool search provider routing.
 
-    When None for a tool, the top-level `search_backend` is used.
+    When None for a tool, the top-level `search_backend` is used. Each entry
+    is a registered provider name or the host's own provider object.
     """
 
-    web_search: SearchBackend | None = None
-    web_extract: SearchBackend | None = None
-    web_crawl: SearchBackend | None = None
+    web_search: Any = None
+    web_extract: Any = None
+    web_crawl: Any = None
