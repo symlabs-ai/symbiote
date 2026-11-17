@@ -1354,6 +1354,10 @@ class SymbioteKernel:
         row = self._storage.fetch_one(
             "SELECT symbiote_id FROM sessions WHERE id = ?", (session_id,)
         )
+        # ``text`` is set only when the symbiote's summary mode is not the
+        # default: the summary is then written once here and handed to the
+        # reflection and to the stored session (``None``: no summary).
+        summary: dict[str, str | None] = {}
         if row is not None:
             symbiote_id = row["symbiote_id"]
             # Each post-processing step is isolated: one failing (bad LLM
@@ -1374,11 +1378,19 @@ class SymbioteKernel:
             # off (no LLM call, nothing written to reflection_audit). The
             # other memory writers below are stopped by the MemoryStore.
             cfg = self._environment.get_config(symbiote_id)
+            if cfg is not None and cfg.session_summary_mode != "concat":
+
+                def _summarize() -> None:
+                    summary["text"] = self._reflection_for(symbiote_id).session_summary(
+                        session_id
+                    )
+
+                self._close_step("summary", _summarize)
             if cfg is None or (cfg.memory_enabled and cfg.reflection_mode != "off"):
                 self._close_step(
                     "reflection",
                     lambda: self._reflection_for(symbiote_id).reflect_session(
-                        session_id, symbiote_id
+                        session_id, symbiote_id, summary=summary.get("text")
                     ),
                 )
 
@@ -1395,7 +1407,10 @@ class SymbioteKernel:
 
             self._close_step("skill review", _review)
 
-        closed = self._sessions.close(session_id)
+        if "text" in summary:
+            closed = self._sessions.close(session_id, summary=summary["text"])
+        else:
+            closed = self._sessions.close(session_id)
         if row is not None:
             # 6. Dream mode — after the close, so this session already counts
             # towards dream_min_sessions.
@@ -1718,9 +1733,13 @@ class SymbioteKernel:
         cfg = self._environment.get_config(symbiote_id)
         mode = cfg.reflection_mode if cfg else "keyword"
         max_tokens = cfg.reflection_max_tokens if cfg else 4000
+        summary_mode = cfg.session_summary_mode if cfg else "concat"
+        # The summary is written by the auxiliary model (the main one when
+        # the host set none), whatever model the reflection itself uses.
+        summary_llm = (self._evolver_llm or self._llm) if summary_mode == "llm" else None
 
         if mode in ("keyword", "off"):  # "off" is decided by close_session
-            return self._reflection
+            return self._reflection_for_summary_only(summary_mode, summary_llm)
 
         # llm/hybrid -> evolver_llm; llm_main -> main self._llm
         llm: LLMPort | None = self._llm if mode == "llm_main" else self._evolver_llm
@@ -1729,7 +1748,7 @@ class SymbioteKernel:
         # the row was written directly to the DB), still fall back to
         # keyword instead of crashing on a None LLM.
         if llm is None:
-            return self._reflection
+            return self._reflection_for_summary_only(summary_mode, summary_llm)
 
         return ReflectionEngine(
             self._memory,
@@ -1738,6 +1757,22 @@ class SymbioteKernel:
             mode=mode,
             storage=self._storage,
             max_tokens=max_tokens,
+            summary_mode=summary_mode,
+            summary_llm=summary_llm,
+        )
+
+    def _reflection_for_summary_only(
+        self, summary_mode: str, summary_llm: LLMPort | None
+    ) -> ReflectionEngine:
+        """The keyword engine, honouring the symbiote's summary mode."""
+        if summary_mode == "concat":
+            return self._reflection
+        return ReflectionEngine(
+            self._memory,
+            self._message_repo,
+            storage=self._storage,
+            summary_mode=summary_mode,
+            summary_llm=summary_llm,
         )
 
     def _inject_handoff_if_resuming(

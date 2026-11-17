@@ -16,6 +16,9 @@ from symbiote.core.models import Decision, Message, Session, _utcnow
 from symbiote.core.ports import StoragePort
 from symbiote.core.subjects import validate_subject_key
 
+# ``close(summary=...)`` not given: generate the summary as always.
+_GENERATE: object = object()
+
 _key_locks: dict[tuple[str, str], threading.Lock] = {}
 _key_locks_guard = threading.Lock()
 
@@ -182,8 +185,14 @@ class SessionManager:
 
         return session
 
-    def close(self, session_id: str) -> Session:
-        """Close a session — set status, ended_at, and generate summary."""
+    def close(
+        self, session_id: str, *, summary: str | None | object = _GENERATE
+    ) -> Session:
+        """Close a session — set status, ended_at, and generate summary.
+
+        ``summary`` replaces the generated one: a text written by the caller,
+        or ``None`` to store no summary.
+        """
         row = self._storage.fetch_one(
             "SELECT * FROM sessions WHERE id = ?", (session_id,)
         )
@@ -191,7 +200,8 @@ class SessionManager:
             raise EntityNotFoundError("Session", session_id)
 
         now = _utcnow()
-        summary = self._generate_summary(session_id)
+        if summary is _GENERATE:
+            summary = self._generate_summary(session_id)
 
         self._storage.execute(
             "UPDATE sessions SET status = 'closed', ended_at = ?, summary = ? WHERE id = ?",

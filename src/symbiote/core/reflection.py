@@ -31,7 +31,11 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from symbiote.core._review_prompts import REFLECTION_PROMPT, render_prompt
+from symbiote.core._review_prompts import (
+    REFLECTION_PROMPT,
+    SESSION_SUMMARY_PROMPT,
+    render_prompt,
+)
 from symbiote.core.models import MemoryEntry, MemoryType
 from symbiote.core.ports import LLMPort, MemoryPort, MessagePort, StoragePort
 from symbiote.core.subjects import subject_kwargs
@@ -176,6 +180,13 @@ class ReflectionEngine:
         llm      — engineered LLM prompt using ``evolver_llm`` (cheap aux)
         llm_main — engineered LLM prompt using main ``llm`` (opt-in cost)
         hybrid   — run both, persist keyword only, log diff to audit
+
+    Summary modes (``EnvironmentConfig.session_summary_mode``), independent
+    of the mode above:
+        concat — the non-noise messages joined into one paragraph (default)
+        llm    — written by ``summary_llm``; ``concat`` when there is no
+                 model, the call fails or it answers nothing
+        off    — no summary
     """
 
     def __init__(
@@ -187,12 +198,16 @@ class ReflectionEngine:
         mode: str = "keyword",
         storage: StoragePort | None = None,
         max_tokens: int = 4000,
+        summary_mode: str = "concat",
+        summary_llm: LLMPort | None = None,
     ) -> None:
         self._memory_store = memory_store
         self._messages = messages
         self._llm = llm
         self._storage = storage  # for reflection_audit writes; optional
         self._max_tokens = max_tokens
+        self._summary_mode = summary_mode if summary_mode in {"concat", "llm", "off"} else "concat"
+        self._summary_llm = summary_llm
 
         # Validate mode; fall back to keyword if no LLM is available.
         if mode not in {"keyword", "llm", "llm_main", "hybrid"}:
@@ -208,14 +223,28 @@ class ReflectionEngine:
 
     # ── public API ─────────────────────────────────────────────────────
 
+    def session_summary(self, session_id: str, *, limit: int = 50) -> str | None:
+        """The summary of a whole session in this engine's summary mode:
+        ``None`` in mode ``off``, else the text (``""`` for no messages)."""
+        if self._summary_mode == "off":
+            return None
+        return self._generate_summary(self._fetch_messages(session_id, limit))
+
     def reflect_session(
-        self, session_id: str, symbiote_id: str, *, limit: int = 50
+        self,
+        session_id: str,
+        symbiote_id: str,
+        *,
+        limit: int = 50,
+        summary: str | None = None,
     ) -> ReflectionResult:
         """Run reflection on a session's messages, dispatching by mode.
 
         Only messages not reflected before are considered (when the message
         store tracks a watermark), so closing a reopened session does not
-        learn the same messages twice.
+        learn the same messages twice. ``summary``, when given, is the
+        session's summary already written by the caller (``session_summary``)
+        and is returned as it is instead of being generated again.
         """
         get_mark = getattr(self._messages, "get_reflection_watermark", None)
         since = get_mark(session_id) if get_mark is not None else None
@@ -228,7 +257,7 @@ class ReflectionEngine:
             def mark() -> None:
                 set_mark(session_id, last)
 
-        return self._reflect_messages(messages, session_id, symbiote_id, mark)
+        return self._reflect_messages(messages, session_id, symbiote_id, mark, summary)
 
     def _commit(self, persist: Callable[[], _T], mark: Callable[[], None] | None) -> _T:
         """Store the facts and move the watermark as one unit: the same
@@ -250,9 +279,11 @@ class ReflectionEngine:
         session_id: str,
         symbiote_id: str,
         mark: Callable[[], None] | None = None,
+        summary: str | None = None,
     ) -> ReflectionResult:
         discarded_count = sum(1 for m in messages if self._is_noise(m["content"]))
-        summary = self._generate_summary(messages)
+        if summary is None:
+            summary = self._generate_summary(messages)
         # The session of an end user reflects inside that user's partition:
         # the facts it stores belong to the user (``MemoryStore.store``), and
         # the memories offered to the LLM as PATCH targets are only theirs.
@@ -423,6 +454,16 @@ class ReflectionEngine:
         return bool(_NOISE_RE.match(stripped))
 
     def _generate_summary(self, messages: list[dict]) -> str:
+        """The summary of ``messages`` in this engine's summary mode."""
+        if self._summary_mode == "off":
+            return ""
+        if self._summary_mode == "llm":
+            written = self._summarize_llm(messages)
+            if written:
+                return written
+        return self._concat_summary(messages)
+
+    def _concat_summary(self, messages: list[dict]) -> str:
         """Concatenate non-noise messages into a summary paragraph."""
         parts = [
             msg["content"]
@@ -430,6 +471,26 @@ class ReflectionEngine:
             if not self._is_noise(msg["content"])
         ]
         return " ".join(parts)
+
+    def _summarize_llm(self, messages: list[dict]) -> str | None:
+        """A summary written by the summary model, or ``None`` when there is
+        no model, nothing worth summarizing, or the call fails (the caller
+        then falls back to the concatenation)."""
+        if self._summary_llm is None:
+            return None
+        kept = [m for m in messages if not self._is_noise(m["content"])]
+        if not kept:
+            return None
+        prompt = render_prompt(
+            SESSION_SUMMARY_PROMPT, messages=self._format_messages_for_prompt(kept)
+        )
+        try:
+            response = self._summary_llm.complete([{"role": "user", "content": prompt}])
+        except Exception as exc:
+            _log.warning("Session summary LLM failed (%s); using the concatenation", exc)
+            return None
+        text = response if isinstance(response, str) else getattr(response, "content", "")
+        return (text or "").strip() or None
 
     # ── LLM extraction (engineered prompt) ─────────────────────────────
 

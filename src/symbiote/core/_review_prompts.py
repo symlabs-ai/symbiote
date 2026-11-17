@@ -273,6 +273,23 @@ Messages:
 Summary:"""
 
 
+SESSION_SUMMARY_PROMPT = """\
+Summarize the conversation below in one short paragraph (at most 120 words):
+what the person wanted, what was done or decided, and anything left open.
+
+Write for someone who was not there and will pick the conversation up later.
+Leave out greetings and small talk. Do not add anything that was not said.
+
+Output ONLY the summary as plain prose, in the same language the conversation
+used (PT-BR stays PT-BR, EN stays EN — do NOT translate). No preamble like
+"Here is the summary" or "Aqui está o resumo".
+
+Conversation:
+{messages}
+
+Summary:"""
+
+
 def build_skill_review_prompt(
     *,
     strict: bool = False,
@@ -341,6 +358,7 @@ def render_prompt(template: str, **values: str) -> str:
 __all__ = [
     "COMPRESSION_PROMPT",
     "REFLECTION_PROMPT",
+    "SESSION_SUMMARY_PROMPT",
     "SKILL_REVIEW_PROMPT",
     "_ANTI_PATTERNS_BLOCK",
     "_HIERARCHY_BLOCK",
