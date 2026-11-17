@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from symbiote.core.llm_usage import llm_call
 from symbiote.core.sql import days_ago
 from symbiote.core.subjects import learning_sessions_clause
 from symbiote.harness.versions import HarnessVersionRepository
@@ -199,9 +200,10 @@ class HarnessEvolver:
         )
 
         try:
-            proposal = self._proposer_llm.complete(
-                [{"role": "user", "content": prompt}]
-            )
+            with llm_call("harness", symbiote_id):
+                proposal = self._proposer_llm.complete(
+                    [{"role": "user", "content": prompt}]
+                )
             if not isinstance(proposal, str):
                 proposal = getattr(proposal, "content", str(proposal))
         except Exception as exc:

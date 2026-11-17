@@ -36,6 +36,7 @@ import httpx
 
 from symbiote.adapters.llm.forge import _extract_tool_calls
 from symbiote.core.exceptions import LLMError
+from symbiote.core.llm_usage import report_usage
 from symbiote.environment.descriptors import (
     LLMModelIdentity,
     LLMResponse,
@@ -220,9 +221,17 @@ def _parse_completion(data: dict[str, Any], session_uid: str) -> str | LLMRespon
     choice = choices[0]
     message = choice.get("message") or {}
     tool_calls = _extract_tool_calls(message)
-    if not tool_calls:
-        return message.get("content") or ""
     usage = data.get("usage") or {}
+    if not tool_calls:
+        # Plain text carries no usage: hand it to the kernel directly.
+        report_usage(
+            usage.get("prompt_tokens"),
+            usage.get("completion_tokens"),
+            usage.get("total_tokens"),
+            provider="symgateway",
+            model=data.get("model"),
+        )
+        return message.get("content") or ""
     return LLMResponse(
         content=message.get("content") or "",
         tool_calls=tool_calls,

@@ -244,14 +244,17 @@ class KernelInspector:
         ``"packed"`` (in the system prompt) or ``"on_demand"`` (returned by
         ``search_memories`` / ``search_knowledge`` during the turn);
         ``skills`` lists the names in ``<available-skills>``. It records what
-        the model was given, not what it used.
+        the model was given, not what it used. ``llm_calls`` and the token
+        columns are what the model calls of the turn cost, the ones of a
+        symbiote it delegated to included.
         """
         if symbiote_id is None and session_id is None:
             raise ValueError("list_turn_contexts needs symbiote_id or session_id")
         column, value = ("session_id", session_id) if session_id else ("symbiote_id", symbiote_id)
         rows = self._storage.fetch_all(
             "SELECT id, session_id, symbiote_id, memories_json, knowledge_json, "
-            "skills_json, tokens_estimate, created_at "
+            "skills_json, tokens_estimate, created_at, "
+            "llm_calls, prompt_tokens, completion_tokens, total_tokens "
             f"FROM turn_contexts WHERE {column} = ? "
             "ORDER BY created_at DESC, rowid DESC LIMIT ?",
             (value, limit),
@@ -318,6 +321,162 @@ class KernelInspector:
         params.append(limit)
         rows = self._storage.fetch_all(sql, tuple(params))
         return [_decode(r, "ops_json") for r in rows]
+
+    # ── model usage ────────────────────────────────────────────────────
+
+    # What ``usage_by`` can group on. ``subject`` is the end user of the
+    # conversation the call was made for; ``root_session`` is that
+    # conversation (the session of the turn the host started, which differs
+    # from ``session`` for the calls of a delegated symbiote).
+    USAGE_GROUPS: dict[str, str] = {
+        "purpose": "u.purpose",
+        "symbiote": "u.symbiote_id",
+        "session": "u.session_id",
+        "root_session": "u.root_session_id",
+        "provider": "u.provider",
+        "model": "u.model",
+        "day": "SUBSTR(u.created_at, 1, 10)",
+        "subject": "s.subject_key",
+    }
+    _USAGE_SUMS = (
+        "COUNT(*) AS llm_calls, "
+        "COALESCE(SUM(CASE WHEN u.success = 0 THEN 1 ELSE 0 END), 0) AS failed_calls, "
+        "COALESCE(SUM(u.prompt_tokens), 0) AS prompt_tokens, "
+        "COALESCE(SUM(u.completion_tokens), 0) AS completion_tokens, "
+        "COALESCE(SUM(u.total_tokens), 0) AS total_tokens"
+    )
+    _USAGE_FROM = (
+        " FROM llm_usage u LEFT JOIN sessions s "
+        "ON s.id = COALESCE(u.root_session_id, u.session_id)"
+    )
+
+    @staticmethod
+    def _usage_filter(
+        symbiote_id: str | None,
+        session_id: str | None,
+        root_session_id: str | None,
+        subject_key: str | None | AnySubject,
+        purpose: str | None,
+        since: str | None,
+        until: str | None,
+    ) -> tuple[str, list[Any]]:
+        conditions: list[str] = []
+        params: list[Any] = []
+        for column, value in (
+            ("u.symbiote_id", symbiote_id),
+            ("u.session_id", session_id),
+            ("u.root_session_id", root_session_id),
+        ):
+            if value is not None:
+                conditions.append(f"{column} = ?")
+                params.append(value)
+        if subject_key is None:
+            conditions.append("s.subject_key IS NULL")
+        elif not isinstance(subject_key, AnySubject):
+            conditions.append("s.subject_key = ?")
+            params.append(subject_key)
+        if purpose is not None:
+            # ``dream`` also selects ``dream:prune``, ``dream:generalize``...
+            conditions.append("(u.purpose = ? OR u.purpose LIKE ?)")
+            params.extend([purpose, f"{purpose}:%"])
+        if since is not None:
+            conditions.append("u.created_at >= ?")
+            params.append(since)
+        if until is not None:
+            conditions.append("u.created_at < ?")
+            params.append(until)
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        return where, params
+
+    def usage_totals(
+        self,
+        symbiote_id: str | None = None,
+        *,
+        session_id: str | None = None,
+        root_session_id: str | None = None,
+        subject_key: str | None | AnySubject = ANY_SUBJECT,
+        purpose: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> dict:
+        """Model calls and tokens that match the filters, summed.
+
+        ``llm_calls`` counts every call and ``failed_calls`` the ones that
+        raised; the token sums cover the calls whose adapter reported them.
+        ``purpose`` selects one purpose or a family (``"dream"`` covers every
+        ``dream:<phase>``). ``since`` / ``until`` are ISO-8601 instants,
+        ``until`` excluded. ``subject_key`` keeps the calls made for one end
+        user (``None``: for no end user).
+        """
+        where, params = self._usage_filter(
+            symbiote_id, session_id, root_session_id, subject_key, purpose, since, until
+        )
+        row = self._storage.fetch_one(
+            f"SELECT {self._USAGE_SUMS}{self._USAGE_FROM}{where}",  # noqa: S608
+            tuple(params),
+        )
+        return {key: int(value or 0) for key, value in dict(row or {}).items()}
+
+    def usage_by(
+        self,
+        group: str,
+        symbiote_id: str | None = None,
+        *,
+        session_id: str | None = None,
+        root_session_id: str | None = None,
+        subject_key: str | None | AnySubject = ANY_SUBJECT,
+        purpose: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 200,
+    ) -> list[dict]:
+        """The sums of ``usage_totals``, one row per value of ``group`` (a
+        key of ``USAGE_GROUPS``), largest ``total_tokens`` first. Each row
+        carries the group's value under the key ``group``."""
+        column = self.USAGE_GROUPS.get(group)
+        if column is None:
+            raise ValueError(
+                f"unknown usage group {group!r}: expected one of {sorted(self.USAGE_GROUPS)}"
+            )
+        where, params = self._usage_filter(
+            symbiote_id, session_id, root_session_id, subject_key, purpose, since, until
+        )
+        rows = self._storage.fetch_all(
+            f"SELECT {column} AS grp, {self._USAGE_SUMS}{self._USAGE_FROM}{where} "  # noqa: S608
+            f"GROUP BY {column} ORDER BY total_tokens DESC, llm_calls DESC, grp LIMIT ?",
+            (*params, limit),
+        )
+        out = []
+        for row in rows:
+            data = dict(row)
+            value = data.pop("grp")
+            out.append({group: value, **{k: int(v or 0) for k, v in data.items()}})
+        return out
+
+    def list_llm_calls(
+        self,
+        symbiote_id: str | None = None,
+        *,
+        session_id: str | None = None,
+        root_session_id: str | None = None,
+        subject_key: str | None | AnySubject = ANY_SUBJECT,
+        purpose: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """The recorded model calls that match the filters, newest first."""
+        where, params = self._usage_filter(
+            symbiote_id, session_id, root_session_id, subject_key, purpose, since, until
+        )
+        rows = self._storage.fetch_all(
+            "SELECT u.id, u.symbiote_id, u.session_id, u.root_session_id, u.purpose, "
+            "u.provider, u.model, u.prompt_tokens, u.completion_tokens, u.total_tokens, "
+            f"u.elapsed_ms, u.success, u.created_at{self._USAGE_FROM}{where} "  # noqa: S608
+            "ORDER BY u.created_at DESC, u.rowid DESC LIMIT ?",
+            (*params, limit),
+        )
+        return [dict(r) for r in rows]
 
     # ── tools ──────────────────────────────────────────────────────────
 

@@ -8,6 +8,7 @@ import threading
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal, cast
 
+from symbiote.core.llm_usage import llm_call
 from symbiote.dream.models import BudgetTracker, DreamContext, DreamReport
 from symbiote.dream.phases import (
     EvaluatePhase,
@@ -132,7 +133,8 @@ class DreamEngine:
                 continue
 
             try:
-                result = phase.run(ctx)
+                with llm_call(f"dream:{phase.name}", symbiote_id):
+                    result = phase.run(ctx)
                 report.phases.append(result)
             except Exception as exc:
                 logger.exception("dream phase %s failed", phase.name)

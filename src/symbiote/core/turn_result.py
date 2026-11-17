@@ -37,6 +37,21 @@ class TurnReply(TypedDict):
     tool_results: list[dict[str, Any]]
 
 
+class TurnUsage(BaseModel):
+    """What the model calls made to answer a turn cost.
+
+    Counts every call of the turn, the ones of a symbiote it delegated to
+    (``spawn``) included. Token counts are sums of what the LLM adapter
+    reported: they stay at 0 for an adapter that reports none, while
+    ``llm_calls`` is always counted.
+    """
+
+    llm_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
 class TurnOutcome(BaseModel):
     """A finished turn: the reply and how the tool loop ended."""
 
@@ -49,6 +64,7 @@ class TurnOutcome(BaseModel):
     tool_calls: int = 0
     elapsed_ms: int = 0
     tool_mode: str | None = None
+    usage: TurnUsage = Field(default_factory=TurnUsage)
 
     @property
     def stopped_early(self) -> bool:
@@ -56,9 +72,14 @@ class TurnOutcome(BaseModel):
         return self.stop_reason != "end_turn"
 
 
-def turn_outcome(response: str | TurnReply | Any, trace: LoopTrace | None) -> TurnOutcome:
-    """Build the outcome of a turn from what ``message()`` would return and
-    the loop trace of that same turn."""
+def turn_outcome(
+    response: str | TurnReply | Any,
+    trace: LoopTrace | None,
+    usage: dict[str, int] | None = None,
+) -> TurnOutcome:
+    """Build the outcome of a turn from what ``message()`` would return, the
+    loop trace of that same turn and its token totals."""
+    turn_usage = TurnUsage(**usage) if usage else TurnUsage()
     if isinstance(response, dict):
         text = str(response.get("text") or "")
         results = [ToolCallResult.model_validate(r) for r in response.get("tool_results") or []]
@@ -66,10 +87,11 @@ def turn_outcome(response: str | TurnReply | Any, trace: LoopTrace | None) -> Tu
         text = "" if response is None else str(response)
         results = []
     if trace is None:
-        return TurnOutcome(text=text, tool_results=results)
+        return TurnOutcome(text=text, tool_results=results, usage=turn_usage)
     return TurnOutcome(
         text=text,
         tool_results=results,
+        usage=turn_usage,
         stop_reason=trace.stop_reason or "end_turn",
         iterations=trace.total_iterations,
         tool_calls=trace.total_tool_calls,

@@ -38,6 +38,7 @@ from symbiote.agent_protocols import (
     create_default_protocol_registry,
 )
 from symbiote.core.context import AssembledContext
+from symbiote.core.llm_usage import llm_call
 from symbiote.core.models import Message
 from symbiote.core.ports import LLMPort
 from symbiote.core.turn_control import TurnStop, check_turn
@@ -534,7 +535,8 @@ class LongRunRunner:
 
         check_turn()  # no model call starts once the turn has to stop
         try:
-            response = self._llm.complete(messages, config=self._config_for(context))
+            with llm_call("long_run:plan"):
+                response = self._llm.complete(messages, config=self._config_for(context))
             raw = _response_text(response)
         except Exception as exc:
             logger.warning("[long-run] planner failed: %s", exc)
@@ -817,9 +819,10 @@ class LongRunRunner:
 
         check_turn()
         try:
-            response = self._evaluator_llm.complete(
-                eval_messages, config=self._config_for(context)
-            )
+            with llm_call("long_run:evaluate"):
+                response = self._evaluator_llm.complete(
+                    eval_messages, config=self._config_for(context)
+                )
             result = self._parse_eval_json(_response_text(response))
         except Exception as exc:
             logger.warning("[long-run] evaluator failed: %s", exc)
@@ -884,9 +887,10 @@ class LongRunRunner:
         ]
         check_turn()
         try:
-            text = _response_text(
-                self._llm.complete(messages, config=self._config_for(context))
-            ).strip()
+            with llm_call("long_run:report"):
+                text = _response_text(
+                    self._llm.complete(messages, config=self._config_for(context))
+                ).strip()
             if text:
                 return text
         except TurnStop:

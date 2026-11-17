@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
 from symbiote.api import http as _api
@@ -211,6 +211,36 @@ def api_symbiote_reflections(
         (symbiote_id, limit),
     )
     return [dict(r) for r in rows]
+
+
+@router.get("/api/symbiotes/{symbiote_id}/usage")
+def api_symbiote_usage(
+    symbiote_id: str,
+    auth: Annotated[APIKey, Depends(require_admin)],
+    adapter: Annotated[StoragePort, Depends(get_adapter)],
+    inspector: Annotated[KernelInspector, Depends(get_inspector)],
+    group_by: str = Query(default="purpose"),
+    purpose: str | None = Query(default=None),
+    since: str | None = Query(default=None),
+    until: str | None = Query(default=None),
+) -> dict:
+    """Model calls and tokens of a symbiote: the totals and one row per
+    ``group_by`` value (admin console — what it cost)."""
+    _require_symbiote_access(adapter, symbiote_id, auth)
+    if group_by not in inspector.USAGE_GROUPS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"group_by must be one of {sorted(inspector.USAGE_GROUPS)}",
+        )
+    return {
+        "totals": inspector.usage_totals(
+            symbiote_id, purpose=purpose, since=since, until=until
+        ),
+        "group_by": group_by,
+        "groups": inspector.usage_by(
+            group_by, symbiote_id, purpose=purpose, since=since, until=until
+        ),
+    }
 
 
 @router.get("/api/symbiotes/{symbiote_id}/activity")

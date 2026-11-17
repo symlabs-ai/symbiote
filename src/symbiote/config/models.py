@@ -68,6 +68,9 @@ class KernelConfig(BaseModel):
     # Same for long-term memory: ``kernel.prune()`` deletes the memory entries
     # created more than N days ago, whatever their session.
     memory_retention_days: int | None = Field(default=None, ge=0)
+    # Same for the record of model calls (``llm_usage``): ``kernel.prune()``
+    # deletes the rows older than N days, whatever their session.
+    usage_retention_days: int | None = Field(default=None, ge=0)
     # Preferences and constraints enter every turn's context (the most
     # important first, up to this many), whatever words the message uses:
     # "prefers short answers" applies to a question about the week too.

@@ -35,6 +35,7 @@ from symbiote.core.exceptions import (
 from symbiote.core.hooks import CompositeHook
 from symbiote.core.identity import IdentityManager
 from symbiote.core.inspector import KernelInspector
+from symbiote.core.llm_usage import LLMCallRecord, llm_call, metered
 from symbiote.core.models import Session, Symbiote
 from symbiote.core.ports import (
     LLMPort,
@@ -65,7 +66,12 @@ from symbiote.core.turn_control import (
     bind_turn_control,
     reset_turn_control,
 )
-from symbiote.core.turn_record import TurnRecord, close_turn_record, open_turn_record
+from symbiote.core.turn_record import (
+    TurnRecord,
+    close_turn_record,
+    current_turn_record,
+    open_turn_record,
+)
 from symbiote.core.turn_result import TurnOutcome, TurnReply, turn_outcome
 from symbiote.discovery.loader import DiscoveredToolLoader
 from symbiote.discovery.repository import DiscoveredToolRepository
@@ -112,6 +118,12 @@ from symbiote.skills.shared import GLOBAL_SCOPE as GLOBAL_SKILL_SCOPE
 from symbiote.skills.shared import SkillsSync
 from symbiote.skills.store import SkillsStore
 from symbiote.workspace.manager import WorkspaceManager
+
+# ``turn()`` / ``turn_async()`` leave a list here; the turn that runs inside
+# appends its token totals when it ends (the outermost turn appends last).
+_turn_usage_out: contextvars.ContextVar[list[dict[str, int]] | None] = contextvars.ContextVar(
+    "symbiote_turn_usage_out", default=None
+)
 
 
 def _response_text(response) -> str:  # noqa: ANN001
@@ -182,6 +194,10 @@ class SymbioteKernel:
         )
 
         self._config = config
+        # Every model the kernel calls reports each call to ``_on_llm_call``
+        # (``llm_usage``, the turn's totals, the host's usage callback).
+        self._usage_callback: Callable[[LLMCallRecord], None] | None = None
+        llm = metered(llm, self._on_llm_call)
         self._llm = llm
 
         # Storage: the host's adapter, or the default SQLite file.
@@ -451,7 +467,62 @@ class SymbioteKernel:
         Using a different model avoids blind spots (the proposer has different
         strengths/weaknesses than the model being optimized for).
         """
-        self._evolver_llm = llm
+        self._evolver_llm = metered(llm, self._on_llm_call)
+
+    def set_usage_callback(
+        self, callback: Callable[[LLMCallRecord], None] | None
+    ) -> None:
+        """Install (or remove, with ``None``) a function called after every
+        model call the kernel makes: ``callback(record)``.
+
+        ``record`` is an ``LLMCallRecord`` (``symbiote.core.llm_usage``): the
+        symbiote, the session, the purpose of the call (``turn``,
+        ``subagent``, ``reflection``, ``dream:<phase>``...), provider, model
+        and token counts. The same record is stored in ``llm_usage``
+        (``kernel.inspector.usage``). It runs in the thread that made the
+        call, right after it; an exception it raises is logged and goes no
+        further.
+        """
+        self._usage_callback = callback
+
+    def _on_llm_call(self, record: LLMCallRecord) -> None:
+        """Sink of every metered model call. Never raises."""
+        from datetime import UTC, datetime
+        from uuid import uuid4
+
+        turn = current_turn_record()
+        if turn is not None:
+            turn.add_usage(record.prompt_tokens, record.completion_tokens, record.total_tokens)
+        try:
+            self._storage.execute(
+                "INSERT INTO llm_usage "
+                "(id, symbiote_id, session_id, root_session_id, purpose, provider, model, "
+                "prompt_tokens, completion_tokens, total_tokens, elapsed_ms, success, "
+                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(uuid4()),
+                    record.symbiote_id,
+                    record.session_id,
+                    record.root_session_id,
+                    record.purpose,
+                    record.provider,
+                    record.model,
+                    record.prompt_tokens,
+                    record.completion_tokens,
+                    record.total_tokens,
+                    record.elapsed_ms,
+                    int(record.success),
+                    datetime.now(tz=UTC).isoformat(),
+                ),
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("could not store a model call in llm_usage")
+        callback = self._usage_callback
+        if callback is not None:
+            try:
+                callback(record)
+            except Exception:
+                logging.getLogger(__name__).exception("usage callback failed")
 
     def set_approval_callback(
         self,
@@ -883,11 +954,15 @@ class SymbioteKernel:
         when a limit ended it rather than the model) and how many iterations
         and tool calls it took. Raises what ``message()`` raises.
         """
-        return turn_outcome(
-            *self._message_locked(
+        usage: list[dict[str, int]] = []
+        token = _turn_usage_out.set(usage)
+        try:
+            reply, trace = self._message_locked(
                 session_id, content, extra_context, llm_config, host_context
             )
-        )
+        finally:
+            _turn_usage_out.reset(token)
+        return turn_outcome(reply, trace, usage[-1] if usage else None)
 
     def _message_locked(
         self,
@@ -1048,6 +1123,9 @@ class SymbioteKernel:
         finally:
             close_turn_record(record_token)
             self._persist_turn_context(record)
+            usage_out = _turn_usage_out.get()
+            if usage_out is not None:
+                usage_out.append(record.usage())
             _reset_active_symbiote(_scope_token)
 
     async def message_async(
@@ -1089,11 +1167,15 @@ class SymbioteKernel:
     ) -> TurnOutcome:
         """Async variant of ``turn()``: runs like ``message_async()`` and
         returns a :class:`TurnOutcome`."""
-        return turn_outcome(
-            *await self._message_async_locked(
+        usage: list[dict[str, int]] = []
+        token = _turn_usage_out.set(usage)
+        try:
+            reply, trace = await self._message_async_locked(
                 session_id, content, extra_context, on_token, llm_config, host_context
             )
-        )
+        finally:
+            _turn_usage_out.reset(token)
+        return turn_outcome(reply, trace, usage[-1] if usage else None)
 
     async def _message_async_locked(
         self,
@@ -1190,6 +1272,9 @@ class SymbioteKernel:
         finally:
             close_turn_record(record_token)
             self._persist_turn_context(record)
+            usage_out = _turn_usage_out.get()
+            if usage_out is not None:
+                usage_out.append(record.usage())
             _reset_active_symbiote(_scope_token)
 
     def _record_cancelled_turn(
@@ -1297,8 +1382,9 @@ class SymbioteKernel:
             self._storage.execute(
                 "INSERT INTO turn_contexts "
                 "(id, session_id, symbiote_id, memories_json, knowledge_json, "
-                "skills_json, tokens_estimate, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "skills_json, tokens_estimate, created_at, "
+                "llm_calls, prompt_tokens, completion_tokens, total_tokens) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     str(uuid4()),
                     record.session_id,
@@ -1308,6 +1394,10 @@ class SymbioteKernel:
                     json.dumps(record.skills),
                     record.tokens_estimate,
                     datetime.now(tz=UTC).isoformat(),
+                    record.llm_calls,
+                    record.prompt_tokens,
+                    record.completion_tokens,
+                    record.total_tokens,
                 ),
             )
         except Exception:
@@ -1381,9 +1471,10 @@ class SymbioteKernel:
             if cfg is not None and cfg.session_summary_mode != "concat":
 
                 def _summarize() -> None:
-                    summary["text"] = self._reflection_for(symbiote_id).session_summary(
-                        session_id
-                    )
+                    with llm_call("session_summary", symbiote_id, session_id):
+                        summary["text"] = self._reflection_for(symbiote_id).session_summary(
+                            session_id
+                        )
 
                 self._close_step("summary", _summarize)
             if cfg is None or (cfg.memory_enabled and cfg.reflection_mode != "off"):
@@ -2078,6 +2169,7 @@ class SymbioteKernel:
         messages_days: int | None = None,
         traces_days: int | None = None,
         memories_days: int | None = None,
+        usage_days: int | None = None,
     ) -> dict[str, int]:
         """Apply the retention windows; returns rows deleted (or that would be).
 
@@ -2085,10 +2177,12 @@ class SymbioteKernel:
         ``turn_contexts``) of sessions that are ``closed`` and ended more than
         N days ago; active sessions are never touched. Removes the memory
         entries created more than N days ago, whatever their session.
+        Removes the record of the model calls (``llm_usage``) made more than
+        N days ago, whatever their session.
         Summaries and scores are kept. The windows default to
         ``KernelConfig.message_retention_days`` / ``trace_retention_days`` /
-        ``memory_retention_days``; ``None`` (the default) leaves those tables
-        alone. Not scheduled automatically.
+        ``memory_retention_days`` / ``usage_retention_days``; ``None`` (the
+        default) leaves those tables alone. Not scheduled automatically.
         """
         trace_window = (
             traces_days if traces_days is not None
@@ -2108,9 +2202,30 @@ class SymbioteKernel:
             memories_days if memories_days is not None
             else self._config.memory_retention_days
         )
+        usage_window = (
+            usage_days if usage_days is not None
+            else self._config.usage_retention_days
+        )
         # One transaction: a prune that fails midway deletes nothing.
         with self._storage.transaction():
-            return self._prune(windows, old_sessions, memory_window, dry_run)
+            counts = self._prune(windows, old_sessions, memory_window, dry_run)
+            counts["llm_usage"] = self._prune_older_than("llm_usage", usage_window, dry_run)
+            return counts
+
+    def _prune_older_than(self, table: str, days: int | None, dry_run: bool) -> int:
+        """Delete the rows of ``table`` created more than ``days`` days ago."""
+        from datetime import UTC, datetime, timedelta
+
+        if days is None:
+            return 0
+        cutoff = (datetime.now(tz=UTC) - timedelta(days=days)).isoformat()
+        row = self._storage.fetch_one(
+            f"SELECT COUNT(*) AS c FROM {table} WHERE created_at < ?", (cutoff,)  # noqa: S608
+        )
+        found = int(row["c"]) if row else 0
+        if not dry_run and found:
+            self._storage.execute(f"DELETE FROM {table} WHERE created_at < ?", (cutoff,))  # noqa: S608
+        return found
 
     def _prune(
         self,
@@ -2158,6 +2273,7 @@ class SymbioteKernel:
         "session_locks",
     )
     _PURGE_BY_SYMBIOTE = (
+        "llm_usage",
         "turn_contexts",
         "execution_traces",
         "session_scores",
@@ -2471,7 +2587,7 @@ class SymbioteKernel:
         The host provides this — the kernel never instantiates an LLM on its own.
         Only used when ``tool_loading="semantic"`` is configured for a symbiote.
         """
-        self._context_assembler._semantic_llm = llm
+        self._context_assembler._semantic_llm = metered(llm, self._on_llm_call)
 
     # ── Harness evolution ───────────────────────────────────────────
 

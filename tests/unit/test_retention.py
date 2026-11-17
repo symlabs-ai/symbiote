@@ -21,6 +21,7 @@ def _counts(**deleted: int) -> dict[str, int]:
         "execution_traces": 0,
         "turn_contexts": 0,
         "memory_entries": 0,
+        "llm_usage": 0,
         **deleted,
     }
 

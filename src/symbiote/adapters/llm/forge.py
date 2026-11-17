@@ -7,6 +7,7 @@ import os
 from typing import TYPE_CHECKING, Any
 
 from symbiote.core.exceptions import LLMError, is_transient_llm_error, llm_error_status
+from symbiote.core.llm_usage import report_usage
 from symbiote.environment.descriptors import (
     LLMModelIdentity,
     LLMResponse,
@@ -44,6 +45,9 @@ class ForgeLLMAdapter:
         replay it (e.g. ``poolside_laguna_v1``) need.
         """
         self._stream_tool_calls = stream_tool_calls
+        # Read by the kernel's usage record when a response names neither.
+        self.provider = provider
+        self.model = model
         if ChatAgent is None:
             raise LLMError(
                 "forge_llm is not installed — run `pip install forge-llm`"
@@ -107,6 +111,8 @@ class ForgeLLMAdapter:
                     usage=_extract_usage(response),
                     metadata=_extract_opaque_metadata(response),
                 )
+            # Plain text carries no usage: hand it to the kernel directly.
+            _report(_extract_usage(response), _extract_model_identity(response))
             return response.content or ""
         except LLMError:
             raise
@@ -150,11 +156,14 @@ class ForgeLLMAdapter:
                 cfg = ChatConfig(**(config or {}))
                 kwargs["config"] = cfg
 
+            usage: Any = None
             for chunk in self._agent.stream_chat(**kwargs):
+                usage = _value(chunk, "usage") or usage
                 if hasattr(chunk, "content") and chunk.content:
                     yield chunk.content
                 elif isinstance(chunk, str):
                     yield chunk
+            _report(_extract_usage({"usage": usage}), None)
         except LLMError:
             raise
         except Exception as exc:
@@ -198,6 +207,8 @@ class ForgeLLMAdapter:
                 finish_reason=finish_reason,
                 usage=_extract_usage({"usage": usage}),
             )
+        else:
+            _report(_extract_usage({"usage": usage}), None)
 
 
 def _wrap_error(exc: Exception) -> LLMError:
@@ -260,6 +271,19 @@ def _extract_finish_reason(response: Any) -> str | None:
     if finish_reason is None:
         finish_reason = _value(response, "finish_reason")
     return str(finish_reason) if finish_reason is not None else None
+
+
+def _report(usage: LLMTokenUsage | None, identity: LLMModelIdentity | None) -> None:
+    """Tell the kernel what a call that returns plain text cost."""
+    if usage is None and identity is None:
+        return
+    report_usage(
+        usage.prompt_tokens if usage else None,
+        usage.completion_tokens if usage else None,
+        usage.total_tokens if usage else None,
+        provider=identity.provider if identity else None,
+        model=identity.model if identity else None,
+    )
 
 
 def _extract_model_identity(response: Any) -> LLMModelIdentity | None:

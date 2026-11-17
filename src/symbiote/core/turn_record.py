@@ -15,6 +15,7 @@ It says what the model saw, not what it used.
 from __future__ import annotations
 
 import contextvars
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,6 +30,36 @@ class TurnRecord:
     skills: list[str] = field(default_factory=list)
     tokens_estimate: int = 0
     assembled: bool = False
+    # What the model calls made for this turn cost. The calls of a symbiote
+    # this turn delegated to (``spawn``) are included: ``parent`` is the turn
+    # that delegated, and every call is added up the chain.
+    llm_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    parent: TurnRecord | None = field(default=None, repr=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+
+    def add_usage(
+        self, prompt_tokens: int | None, completion_tokens: int | None, total_tokens: int | None
+    ) -> None:
+        """Count one model call for this turn and for the turns above it."""
+        record: TurnRecord | None = self
+        while record is not None:
+            with record._lock:  # delegations may run in parallel
+                record.llm_calls += 1
+                record.prompt_tokens += prompt_tokens or 0
+                record.completion_tokens += completion_tokens or 0
+                record.total_tokens += total_tokens or 0
+            record = record.parent
+
+    def usage(self) -> dict[str, int]:
+        return {
+            "llm_calls": self.llm_calls,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+        }
 
     def add_memories(self, ids: list[str], source: str) -> None:
         _extend(self.memories, ids, source)
@@ -66,7 +97,7 @@ def current_turn_record() -> TurnRecord | None:
 
 
 def open_turn_record(symbiote_id: str, session_id: str) -> tuple[TurnRecord, contextvars.Token]:
-    record = TurnRecord(symbiote_id=symbiote_id, session_id=session_id)
+    record = TurnRecord(symbiote_id=symbiote_id, session_id=session_id, parent=_current.get())
     return record, _current.set(record)
 
 

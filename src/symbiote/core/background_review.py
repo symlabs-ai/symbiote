@@ -53,6 +53,7 @@ from symbiote.core._review_prompts import (
     build_skill_review_prompt,
     render_prompt,
 )
+from symbiote.core.llm_usage import llm_call
 from symbiote.core.provenance import (
     BACKGROUND_REVIEW,
     reset_current_write_origin,
@@ -247,7 +248,8 @@ class BackgroundReviewEngine:
                 messages=conversation,
                 existing_skills=self._format_existing_skills(),
             )
-            response = self._llm.complete([{"role": "user", "content": prompt}])
+            with llm_call("skill_review", symbiote_id, session_id):
+                response = self._llm.complete([{"role": "user", "content": prompt}])
             text = response if isinstance(response, str) else getattr(response, "content", "")
 
             ops = self._parse_ops(text)

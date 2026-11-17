@@ -422,13 +422,46 @@ CREATE INDEX idx_sessions_symbiote_subject ON sessions(symbiote_id, subject_key)
 _V7_HOST_OPTIONS = """
 ALTER TABLE environment_configs ADD COLUMN skill_trial_listing INTEGER DEFAULT 0;
 
-ALTER TABLE environment_configs ADD COLUMN dream_llm TEXT DEFAULT 'aux';
+ALTER TABLE environment_configs ADD COLUMN dream_llm TEXT COLLATE "C" DEFAULT 'aux';
 
-ALTER TABLE environment_configs ADD COLUMN session_summary_mode TEXT DEFAULT 'concat';
+ALTER TABLE environment_configs ADD COLUMN session_summary_mode TEXT COLLATE "C" DEFAULT 'concat';
 
 ALTER TABLE knowledge_entries ADD COLUMN auto_recall INTEGER DEFAULT 1;
 
 ALTER TABLE session_scores ADD COLUMN scored_at_close INTEGER DEFAULT 1;
+"""
+
+_V8_LLM_USAGE = """
+CREATE TABLE llm_usage (
+    rowid BIGINT GENERATED ALWAYS AS IDENTITY,
+    id                TEXT COLLATE "C" PRIMARY KEY,
+    symbiote_id       TEXT COLLATE "C",
+    session_id        TEXT COLLATE "C",
+    root_session_id   TEXT COLLATE "C",
+    purpose           TEXT COLLATE "C" NOT NULL,
+    provider          TEXT COLLATE "C",
+    model             TEXT COLLATE "C",
+    prompt_tokens     INTEGER,
+    completion_tokens INTEGER,
+    total_tokens      INTEGER,
+    elapsed_ms        INTEGER DEFAULT 0,
+    success           INTEGER DEFAULT 1,
+    created_at        TEXT COLLATE "C" NOT NULL
+);
+
+CREATE INDEX idx_llm_usage_symbiote ON llm_usage(symbiote_id, created_at);
+
+CREATE INDEX idx_llm_usage_session ON llm_usage(session_id);
+
+CREATE INDEX idx_llm_usage_root_session ON llm_usage(root_session_id);
+
+ALTER TABLE turn_contexts ADD COLUMN llm_calls INTEGER DEFAULT 0;
+
+ALTER TABLE turn_contexts ADD COLUMN prompt_tokens INTEGER DEFAULT 0;
+
+ALTER TABLE turn_contexts ADD COLUMN completion_tokens INTEGER DEFAULT 0;
+
+ALTER TABLE turn_contexts ADD COLUMN total_tokens INTEGER DEFAULT 0;
 """
 
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
@@ -439,6 +472,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (5, "tool_visibility", _V5_TOOL_VISIBILITY),
     (6, "subject_key", _V6_SUBJECT_KEY),
     (7, "host_options", _V7_HOST_OPTIONS),
+    (8, "llm_usage", _V8_LLM_USAGE),
 )
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

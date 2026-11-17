@@ -6,6 +6,8 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
+from symbiote.core.llm_usage import llm_call
+
 if TYPE_CHECKING:
     from symbiote.core.ports import LLMPort
 
@@ -45,7 +47,8 @@ class ToolTagResolver:
         ]
 
         try:
-            response = self._llm.complete(messages)
+            with llm_call("tool_resolution"):
+                response = self._llm.complete(messages)
             # Handle LLMResponse or plain str
             text = response.content if hasattr(response, "content") else str(response)
             parsed = json.loads(text.strip())

@@ -19,6 +19,7 @@ import threading
 from typing import TYPE_CHECKING
 
 from symbiote.core._review_prompts import COMPRESSION_PROMPT, render_prompt
+from symbiote.core.llm_usage import llm_call
 from symbiote.core.models import MemoryEntry
 from symbiote.core.ports import LLMPort, MemoryPort
 
@@ -91,7 +92,7 @@ class MemoryConsolidator:
             return -1  # background task started
 
         # Sync mode: compress and persist in current thread
-        summary = self._compress(to_consolidate)
+        summary = self._compress(to_consolidate, symbiote_id, session_id)
         return self._persist_summary(summary, symbiote_id, session_id)
 
     def consolidate_sync(
@@ -114,7 +115,7 @@ class MemoryConsolidator:
         to_consolidate = list(msgs[: -self._keep_recent])
         to_keep = msgs[-self._keep_recent :]
 
-        summary = self._compress(to_consolidate)
+        summary = self._compress(to_consolidate, symbiote_id, working_memory.session_id)
         persisted = self._persist_summary(summary, symbiote_id, working_memory.session_id)
 
         working_memory.recent_messages = list(to_keep)
@@ -125,7 +126,7 @@ class MemoryConsolidator:
     ) -> None:
         """Run in background thread: compress and persist a session_summary."""
         try:
-            summary = self._compress(messages)
+            summary = self._compress(messages, symbiote_id, session_id)
             if summary:
                 self._persist_summary(summary, symbiote_id, session_id)
         except Exception as exc:
@@ -160,7 +161,9 @@ class MemoryConsolidator:
         )
         return total_chars // 4
 
-    def _compress(self, messages: list) -> str:
+    def _compress(
+        self, messages: list, symbiote_id: str | None = None, session_id: str | None = None
+    ) -> str:
         """Use LLM to compress messages into a narrative summary.
 
         Falls back to a naive pipe-joined truncation if the LLM call fails,
@@ -172,9 +175,10 @@ class MemoryConsolidator:
         prompt = render_prompt(COMPRESSION_PROMPT, messages=msg_text)
 
         try:
-            response = self._llm.complete(
-                [{"role": "user", "content": prompt}]
-            )
+            with llm_call("memory_consolidation", symbiote_id, session_id):
+                response = self._llm.complete(
+                    [{"role": "user", "content": prompt}]
+                )
             # LLMPort may return str or LLMResponse — extract text
             text = response if isinstance(response, str) else getattr(response, "content", "")
             return text.strip()

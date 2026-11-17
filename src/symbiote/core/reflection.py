@@ -36,6 +36,7 @@ from symbiote.core._review_prompts import (
     SESSION_SUMMARY_PROMPT,
     render_prompt,
 )
+from symbiote.core.llm_usage import llm_call
 from symbiote.core.models import MemoryEntry, MemoryType
 from symbiote.core.ports import LLMPort, MemoryPort, MessagePort, StoragePort
 from symbiote.core.subjects import subject_kwargs
@@ -228,7 +229,8 @@ class ReflectionEngine:
         ``None`` in mode ``off``, else the text (``""`` for no messages)."""
         if self._summary_mode == "off":
             return None
-        return self._generate_summary(self._fetch_messages(session_id, limit))
+        with llm_call("session_summary", session_id=session_id):
+            return self._generate_summary(self._fetch_messages(session_id, limit))
 
     def reflect_session(
         self,
@@ -257,7 +259,8 @@ class ReflectionEngine:
             def mark() -> None:
                 set_mark(session_id, last)
 
-        return self._reflect_messages(messages, session_id, symbiote_id, mark, summary)
+        with llm_call("reflection", symbiote_id, session_id):
+            return self._reflect_messages(messages, session_id, symbiote_id, mark, summary)
 
     def _commit(self, persist: Callable[[], _T], mark: Callable[[], None] | None) -> _T:
         """Store the facts and move the watermark as one unit: the same
@@ -384,7 +387,8 @@ class ReflectionEngine:
         """
         messages = self._fetch_messages(session_id, limit)
         facts = self._extract_keyword(messages)
-        summary = f"Task: {task_description}\n{self._generate_summary(messages)}"
+        with llm_call("reflection", symbiote_id, session_id):
+            summary = f"Task: {task_description}\n{self._generate_summary(messages)}"
         discarded_count = sum(1 for m in messages if self._is_noise(m["content"]))
 
         persisted = 0
@@ -485,7 +489,8 @@ class ReflectionEngine:
             SESSION_SUMMARY_PROMPT, messages=self._format_messages_for_prompt(kept)
         )
         try:
-            response = self._summary_llm.complete([{"role": "user", "content": prompt}])
+            with llm_call("session_summary"):
+                response = self._summary_llm.complete([{"role": "user", "content": prompt}])
         except Exception as exc:
             _log.warning("Session summary LLM failed (%s); using the concatenation", exc)
             return None

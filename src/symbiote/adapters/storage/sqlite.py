@@ -186,6 +186,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "_migrate_tool_visibility",
     "_migrate_subject_key",
     "_migrate_host_options",
+    "_migrate_llm_usage",
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -641,6 +642,44 @@ class SQLiteAdapter:
             "ADD COLUMN session_summary_mode TEXT DEFAULT 'concat'",
             "ALTER TABLE knowledge_entries ADD COLUMN auto_recall INTEGER DEFAULT 1",
             "ALTER TABLE session_scores ADD COLUMN scored_at_close INTEGER DEFAULT 1",
+        ):
+            with contextlib.suppress(sqlite3.OperationalError):  # column already exists
+                self._conn.execute(stmt)
+        self._conn.commit()
+
+    def _migrate_llm_usage(self) -> None:
+        """14: one row per model call (who it was for, tokens) and the token
+        totals of each turn."""
+        self._conn.execute(
+            """CREATE TABLE IF NOT EXISTS llm_usage (
+                id TEXT PRIMARY KEY,
+                symbiote_id TEXT,
+                session_id TEXT,
+                root_session_id TEXT,
+                purpose TEXT NOT NULL,
+                provider TEXT,
+                model TEXT,
+                prompt_tokens INTEGER,
+                completion_tokens INTEGER,
+                total_tokens INTEGER,
+                elapsed_ms INTEGER DEFAULT 0,
+                success INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL
+            )"""
+        )
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS idx_llm_usage_symbiote "
+            "ON llm_usage(symbiote_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_llm_usage_session ON llm_usage(session_id)",
+            "CREATE INDEX IF NOT EXISTS idx_llm_usage_root_session "
+            "ON llm_usage(root_session_id)",
+        ):
+            self._conn.execute(stmt)
+        for stmt in (
+            "ALTER TABLE turn_contexts ADD COLUMN llm_calls INTEGER DEFAULT 0",
+            "ALTER TABLE turn_contexts ADD COLUMN prompt_tokens INTEGER DEFAULT 0",
+            "ALTER TABLE turn_contexts ADD COLUMN completion_tokens INTEGER DEFAULT 0",
+            "ALTER TABLE turn_contexts ADD COLUMN total_tokens INTEGER DEFAULT 0",
         ):
             with contextlib.suppress(sqlite3.OperationalError):  # column already exists
                 self._conn.execute(stmt)
