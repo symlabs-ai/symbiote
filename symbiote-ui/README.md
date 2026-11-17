@@ -71,7 +71,7 @@ With `sendMessageStream`, a `response_done` event that carries `text` sets the f
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `adapter` | `Object` | **Required.** `{ sendMessage, loadHistory, clearHistory }` |
+| `adapter` | `Object` | **Required.** `{ sendMessage, loadHistory, clearHistory }`. May be set after the panel is open (in `mode="inline"` it opens as soon as the element connects): the history is loaded when the adapter arrives |
 | `initialSuggestions` | `Array` | `[{label, message}]` for empty state buttons |
 | `contextProvider` | `Function` | `() => string` returning page context (called on each send) |
 
@@ -84,6 +84,7 @@ With `sendMessageStream`, a `response_done` event that carries `text` sets the f
 | `toggle()` | Toggle open/close |
 | `sendMessage(text)` | Programmatically send a message |
 | `clearMessages()` | Clear UI and call `adapter.clearHistory()` |
+| `reload()` | Clear UI and load the history again from the adapter (nothing is erased on the server). Returns a promise |
 | `addMessage(role, content)` | Inject a message without going through the adapter |
 
 ## Events
@@ -157,6 +158,23 @@ The distributable is a single concatenated file. Rebuild after editing source fi
 ```
 
 No Node.js required — it's just `cat`.
+
+## Serving it from a Python host
+
+The built file ships inside the `symbiote` package, so a host does not keep its own copy:
+
+```python
+from fastapi.responses import FileResponse
+from symbiote.ui import widget_path, widget_version
+
+@app.get("/vendor/symbiote-chat.js")
+def chat_js():
+    return FileResponse(widget_path(), media_type="application/javascript")
+
+# widget_version() changes whenever the file changes: <script src="/vendor/symbiote-chat.js?v=...">
+```
+
+`build.sh` writes `dist/symbiote-chat.js` and the packaged copy (`src/symbiote/ui/symbiote-chat.js`).
 
 ## Examples
 

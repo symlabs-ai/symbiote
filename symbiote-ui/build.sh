@@ -48,5 +48,8 @@ done
 echo "" >> "$DIR/dist/symbiote-chat.js"
 echo "})();" >> "$DIR/dist/symbiote-chat.js"
 
+# The Python package ships the same file (symbiote.ui.widget_path()).
+cp "$DIR/dist/symbiote-chat.js" "$DIR/../src/symbiote/ui/symbiote-chat.js"
+
 SIZE=$(wc -c < "$DIR/dist/symbiote-chat.js")
 echo "Done: dist/symbiote-chat.js (${SIZE} bytes)"

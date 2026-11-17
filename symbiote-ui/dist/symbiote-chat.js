@@ -964,7 +964,12 @@ class SymbioteChat extends HTMLElement {
   // ── Properties ──
 
   get adapter() { return this._adapter; }
-  set adapter(val) { this._adapter = val || NoopAdapter; }
+  set adapter(val) {
+    this._adapter = val || NoopAdapter;
+    // A panel that opened before the host set its adapter (inline mode opens
+    // on connect) has no history yet: load it now.
+    if (this._isOpen) this._ensureHistory();
+  }
 
   get initialSuggestions() { return this._initialSuggestions; }
   set initialSuggestions(val) {
@@ -987,6 +992,7 @@ class SymbioteChat extends HTMLElement {
     if (this._shadow.innerHTML && _old !== _new) {
       this._render();
       this._bindEvents();
+      this._historyLoaded = false;  // the messages went away with the old DOM
       if (this._isInline()) this._setOpen(true);
     }
   }
@@ -1017,17 +1023,30 @@ class SymbioteChat extends HTMLElement {
   }
 
   clearMessages() {
+    if (!this._emptyMessages()) return;
+    this._historyLoaded = false;
+    const key = this.getAttribute('session-key') || '';
+    this._adapter.clearHistory(key).catch(() => {});
+  }
+
+  // Drop what is shown and load the history again from the adapter (nothing
+  // is erased on the server). Resolves when the history is on screen.
+  async reload() {
+    if (!this._emptyMessages()) return;
+    this._historyLoaded = false;
+    if (this._isOpen) await this._ensureHistory();
+  }
+
+  _emptyMessages() {
     const container = this._ref('messages');
-    if (!container) return;
+    if (!container) return false;
     const empty = this._ref('empty');
     container.innerHTML = '';
     if (empty) {
       container.appendChild(empty);
       empty.style.display = '';
     }
-    this._historyLoaded = false;
-    const key = this.getAttribute('session-key') || '';
-    this._adapter.clearHistory(key).catch(() => {});
+    return true;
   }
 
   addMessage(role, content) {
@@ -1102,10 +1121,7 @@ class SymbioteChat extends HTMLElement {
       panel?.classList.add('open');
       overlay?.classList.add('open');
       this._ref('input')?.focus();
-      if (!this._historyLoaded) {
-        this._historyLoaded = true;
-        this._loadHistory();
-      }
+      this._ensureHistory();
       this.dispatchEvent(new CustomEvent('symbiote-open'));
     } else {
       panel?.classList.remove('open');
@@ -1115,6 +1131,14 @@ class SymbioteChat extends HTMLElement {
   }
 
   // ── History ──
+
+  // Loads the history once, and only from a real adapter: asking the
+  // NoopAdapter would mark it as loaded before the host had set its own.
+  _ensureHistory() {
+    if (this._historyLoaded || this._adapter === NoopAdapter) return Promise.resolve();
+    this._historyLoaded = true;
+    return this._loadHistory();
+  }
 
   async _loadHistory() {
     const key = this.getAttribute('session-key') || '';

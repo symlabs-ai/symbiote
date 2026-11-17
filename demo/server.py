@@ -38,11 +38,12 @@ from demo.runtime import (
     list_gateway_models,
     validate_key,
 )
+from symbiote.ui import widget_path
 
 logger = logging.getLogger("demo")
 
 STATIC = Path(__file__).with_name("static")
-CHAT_JS = Path(__file__).resolve().parents[1] / "symbiote-ui" / "dist" / "symbiote-chat.js"
+CHAT_JS = widget_path()
 SYMBIOTES = ("sol", "researcher")
 
 
