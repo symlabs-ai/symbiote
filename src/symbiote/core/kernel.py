@@ -331,6 +331,9 @@ class SymbioteKernel:
         # Background dream threads, one per symbiote at most.
         self._dream_threads: dict[str, threading.Thread] = {}
         self._dream_lock = threading.Lock()
+        self._dream_callback: (
+            Callable[[str, DreamReport | None, BaseException | None], None] | None
+        ) = None
 
         # Skill self-improvement wiring (Sprint 4)
         # Lazily resolved when first needed so a kernel with no skills/ root
@@ -1834,7 +1837,13 @@ class SymbioteKernel:
         return DreamEngine(
             storage=self._storage,
             memory=self._memory,
-            llm=self._evolver_llm or self._llm,
+            # ``dream_llm``: the auxiliary model (the main one when the host
+            # set none) or, by explicit choice, always the main model.
+            llm=(
+                self._llm
+                if cfg is not None and cfg.dream_llm == "main"
+                else self._evolver_llm or self._llm
+            ),
             max_llm_calls=cfg.dream_max_llm_calls if cfg else 10,
             min_sessions=min_sessions if min_sessions is not None else cfg.dream_min_sessions,
             dry_run=dry_run,
@@ -1871,16 +1880,69 @@ class SymbioteKernel:
             thread.start()
 
     def _run_dream(self, engine: DreamEngine, symbiote_id: str, mode: str) -> None:
+        report: DreamReport | None = None
+        error: BaseException | None = None
         try:
-            engine.dream(symbiote_id, mode)
-        except Exception:
+            report = engine.dream(symbiote_id, mode)
+        except Exception as exc:
+            error = exc
             logging.getLogger(__name__).exception(
                 "dream background cycle failed for %s", symbiote_id
             )
         finally:
+            # Before the cycle counts as finished: ``wait_dream`` returns only
+            # after the host's own step ran.
+            self._notify_dream(symbiote_id, report, error)
             with self._dream_lock:
                 if self._dream_threads.get(symbiote_id) is threading.current_thread():
                     del self._dream_threads[symbiote_id]
+
+    def _notify_dream(
+        self,
+        symbiote_id: str,
+        report: DreamReport | None,
+        error: BaseException | None,
+    ) -> None:
+        callback = self._dream_callback
+        if callback is None:
+            return
+        try:
+            callback(symbiote_id, report, error)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "dream callback failed for %s", symbiote_id
+            )
+
+    def set_dream_callback(
+        self,
+        callback: Callable[[str, DreamReport | None, BaseException | None], None] | None,
+    ) -> None:
+        """Install (or remove, with ``None``) a function called when a dream
+        cycle ends: ``callback(symbiote_id, report, error)``.
+
+        It runs at the end of every cycle, the automatic ones started after a
+        session closes and the ones asked through ``dream()`` (dry runs too:
+        see ``report.dry_run``). ``report`` is the ``DreamReport`` of the
+        cycle, or ``None`` when it failed, in which case ``error`` is the
+        exception. An automatic cycle calls it in its own background thread,
+        before the cycle counts as finished, so ``wait_dream`` also waits for
+        it; an exception raised by the callback is logged and goes no further.
+        """
+        self._dream_callback = callback
+
+    def wait_dream(self, symbiote_id: str, timeout: float | None = None) -> bool:
+        """Wait for the symbiote's automatic dream cycle, if one is running.
+
+        Returns ``True`` when no cycle is running any more (also when none
+        was), ``False`` when ``timeout`` (seconds) ran out first. ``None``
+        waits without limit.
+        """
+        with self._dream_lock:
+            thread = self._dream_threads.get(symbiote_id)
+        if thread is None or thread is threading.current_thread():
+            return True
+        thread.join(timeout)
+        return not thread.is_alive()
 
     def dream(self, symbiote_id: str, *, dry_run: bool = False) -> DreamReport:
         """Run a dream cycle synchronously (for CLI / manual invocation)."""
@@ -1888,7 +1950,13 @@ class SymbioteKernel:
         mode = cfg.dream_mode if cfg and cfg.dream_mode != "off" else "light"
         # Manual trigger ignores min_sessions.
         engine = self._build_dream_engine(cfg, symbiote_id, min_sessions=1, dry_run=dry_run)
-        return engine.dream(symbiote_id, mode)
+        try:
+            report = engine.dream(symbiote_id, mode)
+        except Exception as exc:
+            self._notify_dream(symbiote_id, None, exc)
+            raise
+        self._notify_dream(symbiote_id, report, None)
+        return report
 
     def report_feedback(
         self, session_id: str, score: float, source: str = "user"
