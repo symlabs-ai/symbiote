@@ -172,9 +172,17 @@ class PendingApprovalStore:
     def expire_due(self) -> int:
         """Mark as expired every pending request past its time; returns how many."""
         now = _now()
+        due = "status = ? AND expires_at IS NOT NULL AND expires_at <= ?"
+        # Runs at the start of every turn: read first, write only when there
+        # is something to expire.
+        if self._storage.fetch_one(
+            f"SELECT 1 AS due FROM pending_approvals WHERE {due} LIMIT 1",  # noqa: S608
+            (PENDING, now),
+        ) is None:
+            return 0
         result = self._storage.execute(
             "UPDATE pending_approvals SET status = ?, resolved_at = ?, params_json = NULL "
-            "WHERE status = ? AND expires_at IS NOT NULL AND expires_at <= ?",
+            f"WHERE {due}",  # noqa: S608
             (EXPIRED, now, PENDING, now),
         )
         return int(getattr(result, "rowcount", 0) or 0)
@@ -282,6 +290,14 @@ class PendingApprovalStore:
         elif not isinstance(subject_key, AnySubject):
             conditions.append("subject_key = ?")
             params.append(subject_key)
+        # A request stored as pending may already be past its time, so those
+        # two states are told apart after reading; the others are final.
+        if status in (PENDING, EXPIRED):
+            conditions.append("status IN (?, ?)")
+            params.extend([PENDING, EXPIRED])
+        elif status is not None:
+            conditions.append("status = ?")
+            params.append(status)
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
         rows = self._storage.fetch_all(
             f"SELECT {_COLUMNS} FROM pending_approvals{where} "  # noqa: S608
