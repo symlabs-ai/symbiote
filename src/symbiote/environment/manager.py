@@ -383,6 +383,13 @@ class EnvironmentManager:
             return False
         return cfg.skill_injection_enabled
 
+    def get_skill_trial_listing(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> bool:
+        """Return skill_trial_listing from config, or False if no config."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        return bool(cfg is not None and cfg.skill_trial_listing)
+
     def get_skill_injection_mode(
         self, symbiote_id: str, workspace_id: str | None = None
     ) -> str:

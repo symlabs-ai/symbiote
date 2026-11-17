@@ -277,6 +277,9 @@ class EnvironmentConfig(BaseModel):
     # After N successful loads from quarantine, auto-promote to active.
     # Threshold 3 picked to filter one-off coincidence loads while not
     # making the LLM wait forever for promotion. Set to 0 to disable.
+    # A turn loads a skill on trial only with ``skill_trial_listing``; without
+    # it the uses never happen and the host promotes (``symbiote skills
+    # promote``).
     skill_auto_promote_threshold: int = Field(default=3, ge=0, le=50)
     # Days in quarantine without ANY use_count growth → auto-archived by
     # the next DreamEngine.PrunePhase. Counterpart of max_quarantine_skills:

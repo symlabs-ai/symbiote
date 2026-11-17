@@ -106,14 +106,22 @@ class SkillsLoader:
         """
         return list(self._skills.values())
 
-    def listable_skills(self) -> list[Skill]:
+    def listable_skills(self, include_trial: bool = False) -> list[Skill]:
         """Subset of skills that should appear in ``<available-skills>``.
 
         Excludes quarantine and archived. This is the view the LLM sees.
+        With ``include_trial`` the skills on trial (quarantine) follow the
+        active ones (``EnvironmentConfig.skill_trial_listing``).
         """
-        return [
+        active = [
             s for s in self._skills.values()
             if s.status == usage.STATUS_ACTIVE
+        ]
+        if not include_trial:
+            return active
+        return active + [
+            s for s in self._skills.values()
+            if s.status == usage.STATUS_QUARANTINE
         ]
 
     def peek(self, name: str) -> Skill | None:
@@ -166,22 +174,26 @@ class SkillsLoader:
                 result.append(skill)
         return result
 
-    def build_summary(self) -> str:
+    def build_summary(self, include_trial: bool = False) -> str:
         """Build an XML summary of available skills for the system prompt.
 
         Quarantine and archived skills are excluded — only ``active`` skills
         reach the LLM via the system prompt. Quarantine skills can still be
-        loaded by name via ``get_skill`` (useful for testing and CLI).
+        loaded by name via ``get_skill`` (useful for testing and CLI). With
+        ``include_trial`` they are listed too, marked ``status="trial"``.
         """
-        listable = self.listable_skills()
+        listable = self.listable_skills(include_trial)
         if not listable:
             return ""
 
         lines = ["<available-skills>"]
         for skill in listable:
             always_attr = ' always="true"' if skill.always else ""
+            trial_attr = (
+                ' status="trial"' if skill.status == usage.STATUS_QUARANTINE else ""
+            )
             lines.append(
-                f'  <skill name="{skill.name}"{always_attr}>'
+                f'  <skill name="{skill.name}"{always_attr}{trial_attr}>'
                 f"{skill.description}</skill>"
             )
         lines.append("</available-skills>")

@@ -32,6 +32,9 @@ class InjectedSkill(BaseModel):
     name: str
     description: str = ""
     tokens: int = 0
+    # ``trial`` for a skill still on trial (quarantine), listed only when the
+    # symbiote has ``skill_trial_listing``.
+    status: str = "active"
 
 
 class AssembledContext(BaseModel):
@@ -471,9 +474,12 @@ class ContextAssembler:
         listable_fn = getattr(loader, "listable_skills", None)
         if listable_fn is None:
             return None, [], 0
-        skills = listable_fn()
+        trial_getter = getattr(self._environment, "get_skill_trial_listing", None)
+        list_trial = bool(trial_getter(symbiote_id)) if trial_getter is not None else False
+        skills = listable_fn(include_trial=True) if list_trial else listable_fn()
         if not skills:
             return None, [], 0
+        has_trial = any(getattr(s, "status", "active") == "quarantine" for s in skills)
 
         header = "<available-skills>"
         footer = "</available-skills>"
@@ -485,10 +491,21 @@ class ContextAssembler:
             if injection_mode == "index"
             else ""
         )
+        # Skills on trial are reachable only through skill_view, whatever
+        # the injection mode.
+        trial_hint = (
+            'Skills marked status="trial" were written by the agent and are '
+            "not reviewed yet: read one with skill_view(name) and check that "
+            "it fits before relying on it."
+            if has_trial
+            else ""
+        )
         # Fixed wrapper cost counts against the budget up front.
         wrapper_text = header + "\n" + footer
         if index_hint:
             wrapper_text += "\n" + index_hint
+        if trial_hint:
+            wrapper_text += "\n" + trial_hint
         wrapper_tokens = self._estimate_tokens(wrapper_text)
         remaining = self._budget - budget_used - wrapper_tokens
         if remaining <= 0:
@@ -502,7 +519,9 @@ class ContextAssembler:
             description = getattr(skill, "description", "") or ""
             always = bool(getattr(skill, "always", False))
             always_attr = ' always="true"' if always else ""
-            line = f'  <skill name="{name}"{always_attr}>{description}</skill>'
+            on_trial = getattr(skill, "status", "active") == "quarantine"
+            trial_attr = ' status="trial"' if on_trial else ""
+            line = f'  <skill name="{name}"{always_attr}{trial_attr}>{description}</skill>'
             line_tokens = self._estimate_tokens(line)
             if body_tokens + line_tokens > remaining:
                 break  # least-recently-discovered skills drop first
@@ -511,6 +530,7 @@ class ContextAssembler:
             injected.append(
                 InjectedSkill(
                     name=name, description=description, tokens=line_tokens,
+                    status="trial" if on_trial else "active",
                 )
             )
 
@@ -520,6 +540,8 @@ class ContextAssembler:
         lines.append(footer)
         if index_hint:
             lines.append(index_hint)
+        if trial_hint and any(s.status == "trial" for s in injected):
+            lines.append(trial_hint)
         summary = "\n".join(lines)
         return summary, injected, wrapper_tokens + body_tokens
 

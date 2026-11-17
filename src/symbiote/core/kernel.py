@@ -1528,7 +1528,20 @@ class SymbioteKernel:
         skill_tool_module.register(self._tool_gateway, self._skills_store)
         register_view = getattr(skill_tool_module, "register_view", None)
         if register_view is not None:
-            register_view(self._tool_gateway, self._skills_loader)
+            register_view(
+                self._tool_gateway, self._skills_loader, self._skill_trial_policy
+            )
+
+    def _skill_trial_policy(self) -> tuple[int, int] | None:
+        """For ``skill_view``: ``None`` when the calling symbiote hides its
+        skills on trial, else ``(auto_promote_threshold, max_active_skills)``."""
+        from symbiote.skills.scope import get_active_symbiote
+
+        symbiote_id = get_active_symbiote()
+        cfg = self._environment.get_config(symbiote_id) if symbiote_id else None
+        if cfg is None or not cfg.skill_trial_listing:
+            return None
+        return cfg.skill_auto_promote_threshold, cfg.max_active_skills
 
     def _setup_skills_wiring_per_symbiote(self, base_root: Path, cfg) -> None:
         """Wire skills in per-symbiote scope (Option A).
@@ -1584,7 +1597,9 @@ class SymbioteKernel:
         if reg_resolved is not None:
             reg_resolved(self._tool_gateway, _store_provider)
         if reg_view_resolved is not None:
-            reg_view_resolved(self._tool_gateway, _loader_provider)
+            reg_view_resolved(
+                self._tool_gateway, _loader_provider, self._skill_trial_policy
+            )
 
     def _background_review_for(self, symbiote_id: str) -> BackgroundReviewEngine | None:
         """Return the engine used for ``skill_review_enabled`` symbiotes.

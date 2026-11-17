@@ -204,7 +204,7 @@ def make_handler(store: SkillsStore | None = None, *, store_provider=None):
     return _handler
 
 
-def make_view_handler(loader: Any = None, *, loader_provider=None):
+def make_view_handler(loader: Any = None, *, loader_provider=None, trial_policy=None):
     """Build a ToolGateway handler that loads a skill body by name.
 
     Pass ``loader`` for a fixed ``SkillsLoader`` (global mode) OR
@@ -214,6 +214,13 @@ def make_view_handler(loader: Any = None, *, loader_provider=None):
     progressive-disclosure surface matches the <available-skills> index, which
     also lists active skills only. ``loader.get_skill`` is used so loading also
     bumps usage telemetry / auto-promotion exactly as a real recall would.
+
+    ``trial_policy`` is a zero-arg callable for the active symbiote: ``None``
+    when skills on trial stay hidden (the default), or
+    ``(auto_promote_threshold, max_active_skills)`` when the symbiote lists
+    them (``EnvironmentConfig.skill_trial_listing``). Then a skill on trial is
+    read like an active one, the answer says it is on trial, and the read
+    counts towards its promotion.
     """
     if loader_provider is None:
         if loader is None:
@@ -244,9 +251,19 @@ def make_view_handler(loader: Any = None, *, loader_provider=None):
         # drives auto-promotion), so a refused view must not call it —
         # otherwise a few refused loads promoted a quarantined skill.
         peek = getattr(loader, "peek", None)
+        on_trial = False
         if peek is not None:
             skill = peek(name)
-            if skill is not None and getattr(skill, "status", usage.STATUS_ACTIVE) == usage.STATUS_ACTIVE:
+            status = getattr(skill, "status", usage.STATUS_ACTIVE)
+            policy = trial_policy() if trial_policy is not None else None
+            if skill is not None and status == usage.STATUS_QUARANTINE and policy is not None:
+                # The symbiote lists its skills on trial: this read is a use.
+                threshold, max_active = policy
+                loader.set_auto_promote_threshold(threshold)
+                loader.set_max_active_skills(max_active)
+                skill = loader.get_skill(name)
+                on_trial = True
+            elif skill is not None and status == usage.STATUS_ACTIVE:
                 skill = loader.get_skill(name)
         else:
             get_skill = getattr(loader, "get_skill", None)
@@ -260,6 +277,25 @@ def make_view_handler(loader: Any = None, *, loader_provider=None):
                 ensure_ascii=False,
             )
         status = getattr(skill, "status", usage.STATUS_ACTIVE)
+        if on_trial and status in (usage.STATUS_QUARANTINE, usage.STATUS_ACTIVE):
+            promoted = status == usage.STATUS_ACTIVE
+            return json.dumps(
+                {
+                    "success": True,
+                    "name": name,
+                    "status": "active" if promoted else "trial",
+                    "description": getattr(skill, "description", "") or "",
+                    "content": getattr(skill, "content", "") or "",
+                    "note": (
+                        "This skill was on trial and is now active."
+                        if promoted
+                        else "This skill is on trial: it was written by the agent "
+                        "and has not been reviewed yet. Check that it fits before "
+                        "relying on it."
+                    ),
+                },
+                ensure_ascii=False,
+            )
         if status != usage.STATUS_ACTIVE:
             return json.dumps(
                 {
@@ -340,7 +376,7 @@ def register_resolved(gateway: ToolGateway, store_provider) -> None:
     )
 
 
-def register_view(gateway: ToolGateway, loader: Any) -> None:
+def register_view(gateway: ToolGateway, loader: Any, trial_policy=None) -> None:
     """Register skill_view bound to a fixed SkillsLoader (global mode).
 
     Registered but NOT auto-authorized. Hosts opt in per-symbiote via
@@ -349,17 +385,20 @@ def register_view(gateway: ToolGateway, loader: Any) -> None:
     the full body of a skill it sees in the <available-skills> index.
     Read-only → ``risk_level='low'``.
     """
-    gateway.register_descriptor(_view_descriptor(), make_view_handler(loader))
+    gateway.register_descriptor(
+        _view_descriptor(), make_view_handler(loader, trial_policy=trial_policy)
+    )
 
 
-def register_view_resolved(gateway: ToolGateway, loader_provider) -> None:
+def register_view_resolved(gateway: ToolGateway, loader_provider, trial_policy=None) -> None:
     """Register skill_view resolving the SkillsLoader per call (per-symbiote).
 
     ``loader_provider`` is a zero-arg callable returning the loader for the
     active symbiote.
     """
     gateway.register_descriptor(
-        _view_descriptor(), make_view_handler(loader_provider=loader_provider)
+        _view_descriptor(),
+        make_view_handler(loader_provider=loader_provider, trial_policy=trial_policy),
     )
 
 
