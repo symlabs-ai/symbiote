@@ -1445,11 +1445,11 @@ does not, so `cache_read_input_tokens` and `cache_creation_input_tokens` are
 added to it. An adapter may also pass the counters one by one:
 `report_usage(1200, 80, cache_read_tokens=1024)`.
 
-`ForgeLLMAdapter` passes on what `forge_llm` gives it: at the pinned version
-that is three counters, with nothing about the cache (and, for Anthropic, an
-input that leaves the cached part out). `SymGatewayLLMAdapter` fills every
-counter. A host that needs exact cache accounting with a direct provider key
-uses its own adapter until `forge_llm` passes the provider's usage through.
+Both bundled adapters fill these counters. `ForgeLLMAdapter` reads the
+provider's own usage, which `forge_llm` hands over from version 0.7.17 (the
+one this release pins): for OpenAI and Anthropic, in plain and tool answers
+and in streams (it asks the stream for its usage). `SymGatewayLLMAdapter`
+reads the gateway's usage.
 
 ```python
 outcome = kernel.turn(session.id, text)

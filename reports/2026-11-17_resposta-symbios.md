@@ -25,7 +25,7 @@ A referência completa de cada recurso está em `docs/HOST_INTEGRATION.md`. O qu
 | 13 | Conhecimento "só quando procura", item a item | Entrou |
 | 14 | Ler uma descrição OpenAPI já baixada | Entrou a conversão em ferramentas. A função que monta a chamada HTTP não entrou |
 | 15 | Textos do prompt por idioma | **Não entrou agora** |
-| 16 | Tokens de cache em cada chamada registrada | Entrou na engine e no adapter do SymGateway. No `ForgeLLMAdapter` depende de uma mudança no `forge_llm` |
+| 16 | Tokens de cache em cada chamada registrada | Entrou, na engine e nos dois adapters que vêm com ela |
 
 ## 2. O que entrou, e o que vocês podem apagar
 
@@ -130,10 +130,12 @@ report_usage(usage=usage_from_provider(resposta.usage), provider="anthropic", mo
 
 `usage_from_provider` lê os nomes de cada provedor: soma `cache_read_input_tokens` e `cache_creation_input_tokens` à entrada da Anthropic, lê `prompt_tokens_details.cached_tokens` da OpenAI e aceita os campos do SymGateway como vêm.
 
-Dois pontos que vocês precisam saber:
+Os dois adapters que vêm com a engine preenchem os campos:
 
-- **`ForgeLLMAdapter` ainda não preenche o cache.** O `forge_llm`, na versão que a engine usa, reduz o uso do provedor a três contadores antes de entregá-lo ao adapter. Os tokens de cache não chegam, e com a Anthropic o `prompt_tokens` vem sem a parte do cache. O adapter já lê os campos quando eles chegam, então o que falta é o `forge_llm` repassar o `usage` do provedor. Abrimos o item B-94 para isso, que é de outro repositório. Como o SymbiOS usa um adapter próprio para as chaves diretas, vocês preenchem tudo hoje com `usage_from_provider`.
-- **O `SymGatewayLLMAdapter` lia os campos errados.** Ele procurava `prompt_tokens` e `completion_tokens`, e o gateway responde `input_tokens` e `output_tokens`. Corrigimos, e ele agora preenche também os campos de cache.
+- **`ForgeLLMAdapter`.** O `forge_llm` reduzia o uso do provedor a três contadores, então o cache não chegava e a entrada da Anthropic vinha sem a parte do cache. Corrigimos no `forge_llm` (v0.7.17) e a engine já usa essa versão. Vale para Anthropic e OpenAI, em respostas de texto, com ferramentas e em streaming.
+- **`SymGatewayLLMAdapter`.** Ele procurava `prompt_tokens` e `completion_tokens`, e o gateway responde `input_tokens` e `output_tokens`, então entrada e saída vinham vazias. Corrigimos, e ele preenche também os campos de cache.
+
+Um adapter próprio, como o de vocês para as chaves diretas, preenche tudo com `usage_from_provider`. No streaming da OpenAI é preciso pedir o uso ao provedor (`stream_options.include_usage`), como vocês já apontaram.
 
 ### Pedido 4 — Saber que o código roda dentro de um spawn
 

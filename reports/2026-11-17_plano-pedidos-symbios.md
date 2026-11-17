@@ -168,7 +168,7 @@ Fase 1 não depende de nada e pode sair primeiro. A Fase 4 usa o `current_spawn(
 
 ## 9. Notas de execução
 
-Executado em 2026-11-17, em 17 commits locais sobre `268a3ce` (sem push e sem release). Todas as tarefas TK-00 a TK-52 foram feitas. Suíte: 2812 testes em SQLite; PostgreSQL e gate de qualidade em Docker registrados no relatório de entrega.
+Executado em 2026-11-17, em commits locais sobre `268a3ce` (sem push e sem release do Symbiote). Todas as tarefas TK-00 a TK-52 foram feitas. Suíte: 2812 testes em SQLite; PostgreSQL e gate de qualidade em Docker registrados no relatório de entrega.
 
 Desvios do que estava escrito acima:
 
@@ -185,6 +185,6 @@ Feito além do plano, por ter aparecido no caminho:
 - `ForgeLLMAdapter` e `SymGatewayLLMAdapter` perdiam os tokens das respostas em texto puro;
 - duas colunas de texto da migração 7 do PostgreSQL estavam sem `COLLATE "C"` (corrigido antes de qualquer release).
 
-Adendo de 2026-11-17 (pedido 16, tokens de cache), avaliado como genérico e feito na mesma migração do `llm_usage`: `cache_read_tokens`, `cache_write_tokens`, `cache_write_5m_tokens`, `cache_write_1h_tokens` e `reasoning_tokens` no registro, na tabela, no `report_usage()` e nas somas do inspector; convenção única (`prompt_tokens` é a entrada inteira, com o cache) e `usage_from_provider()` para converter o que cada provedor devolve. O `SymGatewayLLMAdapter` preenche tudo, e nele foi corrigida a leitura de `input_tokens` / `output_tokens`. O `ForgeLLMAdapter` só preenche o que o `forge_llm` repassa, e hoje ele não repassa o cache: virou o B-94, de outro repositório.
+Adendo de 2026-11-17 (pedido 16, tokens de cache), avaliado como genérico e feito na mesma migração do `llm_usage`: `cache_read_tokens`, `cache_write_tokens`, `cache_write_5m_tokens`, `cache_write_1h_tokens` e `reasoning_tokens` no registro, na tabela, no `report_usage()` e nas somas do inspector; convenção única (`prompt_tokens` é a entrada inteira, com o cache) e `usage_from_provider()` para converter o que cada provedor devolve. O `SymGatewayLLMAdapter` preenche tudo, e nele foi corrigida a leitura de `input_tokens` / `output_tokens`. O `forge_llm` não repassava o cache (B-94): por decisão do operador em 2026-11-17 ele foi corrigido e publicado como v0.7.17 (`62f5939`, `TokenUsage.raw` e `include_usage` nos streams), e o Symbiote passou a fixar essa versão no `pyproject.toml`, nos dois `requirements/*.lock`, no `Dockerfile` e no workflow de staging.
 
-Em aberto: o "budget máximo por request" do B-36 e o B-94. O relatório para o SymbiOS está em `reports/2026-11-17_resposta-symbios.md`.
+Em aberto: o "budget máximo por request" do B-36. O relatório para o SymbiOS está em `reports/2026-11-17_resposta-symbios.md`.
