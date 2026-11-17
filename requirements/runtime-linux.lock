@@ -9,7 +9,7 @@ click==8.4.2
 distro==1.9.0
 fastapi==0.140.13
 filelock==3.32.0
-forge-llm @ git+https://github.com/symlabs-ai/forge_llm.git@af51be9244c69cd19b817dea9528016dc582cb3f
+forge-llm @ git+https://github.com/symlabs-ai/forge_llm.git@62f59392d06a67bd06431c3eea0dc995ccad1d38
 fsspec==2026.6.0
 h11==0.16.0
 hf-xet==1.5.2

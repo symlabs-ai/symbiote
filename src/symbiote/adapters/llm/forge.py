@@ -166,9 +166,8 @@ class ForgeLLMAdapter:
         try:
             chat_messages = [_to_chat_message(m) for m in messages]
             kwargs: dict = {"messages": chat_messages}
-            if config:
-                cfg = ChatConfig(**(config or {}))
-                kwargs["config"] = cfg
+            if config or _STREAM_USAGE:
+                kwargs["config"] = _stream_config(config)
 
             usage: Any = None
             for chunk in self._agent.stream_chat(**kwargs):
@@ -192,7 +191,7 @@ class ForgeLLMAdapter:
         """Text chunks as they arrive, then an ``LLMResponse`` if the model
         called tools (the provider assembles the calls at the end)."""
         try:
-            cfg = ChatConfig(**(config or {}))
+            cfg = _stream_config(config)
             cfg.tools = tools
             parts: list[str] = []
             raw_calls: list | None = None
@@ -312,9 +311,28 @@ def _extract_model_identity(response: Any) -> LLMModelIdentity | None:
 
 def _extract_usage(response: Any) -> LLMTokenUsage | None:
     """What the call cost, in the kernel's convention (``prompt_tokens`` is
-    the whole input, cache included). Reads whatever forge_llm passed on of
-    the provider's usage; the cache counters appear only when it does."""
-    return usage_from_provider(_value(response, "token_usage", _value(response, "usage")))
+    the whole input, cache included).
+
+    forge_llm hands over the provider's own counters in ``raw`` (0.7.17 and
+    later): they are read from there, prompt cache included, and each
+    provider's way of counting is turned into the one convention. An older
+    forge_llm gives three counters and nothing about the cache.
+    """
+    usage = _value(response, "token_usage", _value(response, "usage"))
+    raw = _value(usage, "raw")
+    return usage_from_provider(raw if isinstance(raw, dict) and raw else usage)
+
+
+# A stream reports its usage only when asked (forge_llm 0.7.17 and later).
+_STREAM_USAGE = "include_usage" in getattr(ChatConfig, "__dataclass_fields__", {})
+
+
+def _stream_config(config: dict | None) -> Any:
+    """The ChatConfig of a streamed call, asking for its token usage."""
+    cfg = ChatConfig(**(config or {}))
+    if _STREAM_USAGE:
+        cfg.include_usage = True
+    return cfg
 
 
 def _extract_opaque_metadata(response: Any) -> dict[str, Any]:

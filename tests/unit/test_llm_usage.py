@@ -725,3 +725,118 @@ def test_forge_adapter_passes_on_what_forge_llm_gives_it() -> None:
     assert (plain.prompt_tokens, plain.cache_read_tokens) == (10, None)
     assert (detailed.prompt_tokens, detailed.cache_read_tokens) == (1200, 1024)
     assert (detailed.provider, detailed.model) == ("openai", "gpt-x")
+
+
+# ── through forge_llm: the provider's own counters arrive in ``raw`` ────
+
+_ANTHROPIC_RAW = {
+    "input_tokens": 100, "output_tokens": 50,
+    "cache_read_input_tokens": 2000, "cache_creation_input_tokens": 300,
+    "cache_creation": {"ephemeral_5m_input_tokens": 200, "ephemeral_1h_input_tokens": 100},
+}
+_OPENAI_RAW = {
+    "prompt_tokens": 1200, "completion_tokens": 80, "total_tokens": 1280,
+    "prompt_tokens_details": {"cached_tokens": 1024},
+    "completion_tokens_details": {"reasoning_tokens": 30},
+}
+
+
+def _forge_with_provider(provider_name: str, provider) -> tuple:
+    """A real ``ForgeLLMAdapter`` over forge_llm's real agent, with only the
+    network replaced: ``provider`` stands where the SDK adapter would be."""
+    pytest.importorskip("forge_llm")
+    from forge_llm.domain.entities import ChatConfig
+
+    from symbiote.adapters.llm.forge import ForgeLLMAdapter
+
+    if "include_usage" not in ChatConfig.__dataclass_fields__:
+        pytest.skip("needs forge_llm 0.7.17 or later (usage pass-through)")
+    adapter = ForgeLLMAdapter(provider=provider_name, model="m", api_key="k")
+    adapter._agent._provider = provider
+    records: list[LLMCallRecord] = []
+    return MeteredLLM(adapter, records.append), records
+
+
+def test_anthropic_cache_tokens_arrive_through_forge_llm() -> None:
+    from unittest.mock import MagicMock
+
+    provider = MagicMock()
+    provider.send.return_value = {
+        "content": "ok", "role": "assistant", "model": "claude-x", "provider": "anthropic",
+        "usage": {
+            "prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150,
+            "raw": _ANTHROPIC_RAW,
+        },
+    }
+    llm, records = _forge_with_provider("anthropic", provider)
+
+    assert llm.complete([{"role": "user", "content": "hi"}]) == "ok"
+
+    (record,) = records
+    # Anthropic's input came without the cache: the record has the whole input.
+    assert (record.prompt_tokens, record.completion_tokens, record.total_tokens) == (
+        2400, 50, 2450,
+    )
+    assert (record.cache_read_tokens, record.cache_write_tokens) == (2000, 300)
+    assert (record.cache_write_5m_tokens, record.cache_write_1h_tokens) == (200, 100)
+    assert (record.provider, record.model) == ("anthropic", "claude-x")
+
+
+def test_openai_cache_tokens_arrive_through_forge_llm() -> None:
+    from unittest.mock import MagicMock
+
+    provider = MagicMock()
+    provider.send.return_value = {
+        "content": "ok", "role": "assistant", "model": "gpt-x", "provider": "openai",
+        "usage": {**{k: v for k, v in _OPENAI_RAW.items() if k.endswith("_tokens")},
+                  "raw": _OPENAI_RAW},
+    }
+    llm, records = _forge_with_provider("openai", provider)
+
+    llm.complete([{"role": "user", "content": "hi"}])
+
+    (record,) = records
+    assert (record.prompt_tokens, record.total_tokens) == (1200, 1280)
+    assert (record.cache_read_tokens, record.cache_write_tokens) == (1024, None)
+    assert record.reasoning_tokens == 30
+
+
+def test_a_streamed_answer_through_forge_llm_reports_its_usage() -> None:
+    from unittest.mock import MagicMock
+
+    provider = MagicMock()
+    provider.stream.return_value = iter([
+        {"content": "he", "provider": "anthropic"},
+        {"content": "llo", "provider": "anthropic"},
+        {"content": "", "provider": "anthropic", "finish_reason": "stop",
+         "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150,
+                   "raw": _ANTHROPIC_RAW}},
+    ])
+    llm, records = _forge_with_provider("anthropic", provider)
+
+    assert list(llm.stream([{"role": "user", "content": "hi"}])) == ["he", "llo"]
+
+    assert provider.stream.call_args.kwargs["config"]["include_usage"] is True
+    (record,) = records
+    assert (record.prompt_tokens, record.cache_read_tokens, record.cache_write_tokens) == (
+        2400, 2000, 300,
+    )
+
+
+def test_a_streamed_openai_answer_gets_its_usage_from_the_last_chunk() -> None:
+    from unittest.mock import MagicMock
+
+    provider = MagicMock()
+    provider.stream.return_value = iter([
+        {"content": "hello", "provider": "openai"},
+        {"content": "", "provider": "openai", "finish_reason": "stop"},
+        {"content": "", "provider": "openai",
+         "usage": {"prompt_tokens": 1200, "completion_tokens": 80, "total_tokens": 1280,
+                   "raw": _OPENAI_RAW}},
+    ])
+    llm, records = _forge_with_provider("openai", provider)
+
+    assert list(llm.stream([{"role": "user", "content": "hi"}])) == ["hello"]
+
+    (record,) = records
+    assert (record.prompt_tokens, record.cache_read_tokens) == (1200, 1024)
