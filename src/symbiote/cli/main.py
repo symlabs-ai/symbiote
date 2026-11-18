@@ -1461,12 +1461,33 @@ def prune(
         None, "--memories-days", min=0,
         help="Delete memory entries created more than N days ago.",
     ),
+    usage_days: int | None = typer.Option(
+        None, "--usage-days", min=0,
+        help="Delete the record of model calls made more than N days ago.",
+    ),
+    summaries_days: int | None = typer.Option(
+        None, "--summaries-days", min=0,
+        help="Clear the summary of sessions closed more than N days ago.",
+    ),
+    audit_days: int | None = typer.Option(
+        None, "--audit-days", min=0,
+        help="Delete audit rows and resolved approval requests older than N days.",
+    ),
+    sessions_days: int | None = typer.Option(
+        None, "--sessions-days", min=0,
+        help="Delete sessions closed more than N days ago, with all their rows.",
+    ),
+    by_age: bool = typer.Option(
+        False, "--by-age",
+        help="Messages and traces older than their window leave active sessions too.",
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Only count."),
 ) -> None:
-    """Retention for messages and traces of old closed sessions, and for memories.
+    """Retention for what old sessions left behind, and for memories.
 
-    Active sessions are never touched. Without options nothing is deleted.
-    Suggested cron (weekly): ``symbiote prune --messages-days 180 --traces-days 30``.
+    Without options nothing is deleted. Active sessions are touched only with
+    ``--by-age``. Suggested cron (weekly):
+    ``symbiote prune --messages-days 180 --traces-days 30``.
     """
     kernel = _make_kernel()
     try:
@@ -1475,12 +1496,20 @@ def prune(
             messages_days=messages_days,
             traces_days=traces_days,
             memories_days=memories_days,
+            usage_days=usage_days,
+            summaries_days=summaries_days,
+            audit_days=audit_days,
+            sessions_days=sessions_days,
+            basis="age" if by_age else None,
         )
     finally:
         kernel.shutdown()
     verb = "Would delete" if dry_run else "Deleted"
     for table, n in counts.items():
-        console.print(f"{verb} {n} row(s) from {_e(table)}")
+        if table == "summaries":
+            console.print(f"{'Would clear' if dry_run else 'Cleared'} {n} session summary(ies)")
+        else:
+            console.print(f"{verb} {n} row(s) from {_e(table)}")
 
 
 if __name__ == "__main__":

@@ -2585,6 +2585,26 @@ class SymbioteKernel:
         self._tool_gateway.unregister_tool(tool_id)
         return True
 
+    _RETENTION_BASES = ("closed", "age")
+    # The tables ``prune()`` deletes from, in the order it reports them. The
+    # rows of ``sessions`` go last: foreign keys are enforced.
+    _PRUNE_TABLES = (
+        "messages",
+        "execution_traces",
+        "turn_contexts",
+        "memory_entries",
+        "llm_usage",
+        "audit_log",
+        "reflection_audit",
+        "skill_review_audit",
+        "pending_approvals",
+        "decisions",
+        "process_instances",
+        "artifacts",
+        "session_locks",
+        "session_scores",
+    )
+
     def prune(
         self,
         *,
@@ -2593,98 +2613,146 @@ class SymbioteKernel:
         traces_days: int | None = None,
         memories_days: int | None = None,
         usage_days: int | None = None,
+        summaries_days: int | None = None,
+        audit_days: int | None = None,
+        sessions_days: int | None = None,
+        basis: str | None = None,
     ) -> dict[str, int]:
         """Apply the retention windows; returns rows deleted (or that would be).
 
-        Removes the messages and the traces (``execution_traces`` and
-        ``turn_contexts``) of sessions that are ``closed`` and ended more than
-        N days ago; active sessions are never touched. Removes the memory
-        entries created more than N days ago, whatever their session.
-        Removes the record of the model calls (``llm_usage``) made more than
-        N days ago, whatever their session.
-        Summaries and scores are kept. The windows default to
-        ``KernelConfig.message_retention_days`` / ``trace_retention_days`` /
-        ``memory_retention_days`` / ``usage_retention_days``; ``None`` (the
-        default) leaves those tables alone. Not scheduled automatically.
+        Each window is a number of days; ``None`` (the default) leaves its
+        tables alone. An argument replaces the ``KernelConfig`` value of the
+        same window for this call. Not scheduled automatically.
+
+        - ``messages_days`` (``message_retention_days``): the messages of
+          sessions that are ``closed`` and ended more than N days ago.
+        - ``traces_days`` (``trace_retention_days``): ``execution_traces``
+          and ``turn_contexts`` of those sessions.
+        - ``memories_days`` (``memory_retention_days``): the memory entries
+          created more than N days ago, whatever their session.
+        - ``usage_days`` (``usage_retention_days``): the record of the model
+          calls (``llm_usage``) made more than N days ago.
+        - ``summaries_days`` (``summary_retention_days``): the summary of the
+          sessions closed more than N days ago is cleared. The default
+          summary is the text of the session's last messages, so a host that
+          removes messages for privacy sets this window too.
+        - ``audit_days`` (``audit_retention_days``): the rows of
+          ``audit_log`` (every tool call, with its arguments),
+          ``reflection_audit`` and ``skill_review_audit`` created more than N
+          days ago, and the approval requests resolved more than N days ago,
+          whatever their session. Requests still waiting are kept.
+        - ``sessions_days`` (``session_retention_days``): the sessions closed
+          more than N days ago are deleted, with everything tied to them
+          (messages, traces, scores, audit rows, approval requests,
+          decisions, artifacts). Memory entries are long-term memory and
+          stay, under their own window.
+
+        ``basis`` (``retention_basis``) says what the message and trace
+        windows measure. ``"closed"`` (the default): only sessions closed more
+        than N days ago, so a session that is never closed keeps everything.
+        ``"age"``: also every message and trace created more than N days ago,
+        in any session, the active ones included. A turn reads the recent
+        messages of its session, so use a window longer than the history a
+        conversation needs.
+
+        Scores are kept unless their session is deleted. The result has one
+        entry per table, ``summaries`` (summaries cleared) and ``sessions``.
+        One transaction: a prune that fails midway changes nothing.
         """
-        trace_window = (
-            traces_days if traces_days is not None
-            else self._config.trace_retention_days
-        )
-        windows = {
-            "messages": messages_days if messages_days is not None
-            else self._config.message_retention_days,
-            "execution_traces": trace_window,
-            "turn_contexts": trace_window,
-        }
-        old_sessions = (
+        from datetime import UTC, datetime, timedelta
+
+        cfg = self._config
+        basis = cfg.retention_basis if basis is None else basis
+        if basis not in self._RETENTION_BASES:
+            raise ValidationError(
+                f"retention basis must be one of {list(self._RETENTION_BASES)}, got {basis!r}"
+            )
+        now = datetime.now(tz=UTC)
+
+        def cutoff(explicit: int | None, configured: int | None) -> str | None:
+            days = configured if explicit is None else explicit
+            return None if days is None else (now - timedelta(days=days)).isoformat()
+
+        closed_before = (
             "SELECT id FROM sessions WHERE status = 'closed' "
             "AND ended_at IS NOT NULL AND ended_at < ?"
         )
-        memory_window = (
-            memories_days if memories_days is not None
-            else self._config.memory_retention_days
-        )
-        usage_window = (
-            usage_days if usage_days is not None
-            else self._config.usage_retention_days
-        )
-        # One transaction: a prune that fails midway deletes nothing.
+        of_closed = f"session_id IN ({closed_before})"
+        # table -> the conditions (OR-ed) that select what leaves it.
+        targets: dict[str, list[tuple[str, tuple]]] = {t: [] for t in self._PRUNE_TABLES}
+
+        messages = cutoff(messages_days, cfg.message_retention_days)
+        traces = cutoff(traces_days, cfg.trace_retention_days)
+        for limit, tables in (
+            (messages, ("messages",)),
+            (traces, ("execution_traces", "turn_contexts")),
+        ):
+            if limit is None:
+                continue
+            for table in tables:
+                targets[table].append((of_closed, (limit,)))
+                if basis == "age":
+                    targets[table].append(("created_at < ?", (limit,)))
+
+        memories = cutoff(memories_days, cfg.memory_retention_days)
+        if memories is not None:
+            targets["memory_entries"].append(("created_at < ?", (memories,)))
+        usage = cutoff(usage_days, cfg.usage_retention_days)
+        if usage is not None:
+            targets["llm_usage"].append(("created_at < ?", (usage,)))
+
+        audit = cutoff(audit_days, cfg.audit_retention_days)
+        if audit is not None:
+            for table in ("audit_log", "reflection_audit", "skill_review_audit"):
+                targets[table].append(("created_at < ?", (audit,)))
+            targets["pending_approvals"].append(
+                ("status <> 'pending' AND COALESCE(resolved_at, created_at) < ?", (audit,))
+            )
+
+        sessions = cutoff(sessions_days, cfg.session_retention_days)
+        if sessions is not None:
+            for table in (*self._PURGE_SUBJECT_BY_SESSION, "pending_approvals"):
+                targets[table].append((of_closed, (sessions,)))
+        summaries = cutoff(summaries_days, cfg.summary_retention_days)
+
+        closed = "status = 'closed' AND ended_at IS NOT NULL AND ended_at < ?"
         with self._storage.transaction():
-            counts = self._prune(windows, old_sessions, memory_window, dry_run)
-            counts["llm_usage"] = self._prune_older_than("llm_usage", usage_window, dry_run)
+            counts = {
+                table: self._prune_rows(table, conditions, dry_run)
+                for table, conditions in targets.items()
+            }
+            counts["summaries"] = 0
+            if summaries is not None:
+                stale = f"{closed} AND summary IS NOT NULL"
+                row = self._storage.fetch_one(
+                    f"SELECT COUNT(*) AS c FROM sessions WHERE {stale}", (summaries,)  # noqa: S608
+                )
+                counts["summaries"] = int(row["c"]) if row else 0
+                if not dry_run and counts["summaries"]:
+                    self._storage.execute(
+                        f"UPDATE sessions SET summary = NULL WHERE {stale}", (summaries,)  # noqa: S608
+                    )
+            counts["sessions"] = (
+                0 if sessions is None
+                else self._prune_rows("sessions", [(closed, (sessions,))], dry_run)
+            )
             return counts
 
-    def _prune_older_than(self, table: str, days: int | None, dry_run: bool) -> int:
-        """Delete the rows of ``table`` created more than ``days`` days ago."""
-        from datetime import UTC, datetime, timedelta
-
-        if days is None:
+    def _prune_rows(
+        self, table: str, conditions: list[tuple[str, tuple]], dry_run: bool
+    ) -> int:
+        """Delete the rows of ``table`` that match any of ``conditions``."""
+        if not conditions:
             return 0
-        cutoff = (datetime.now(tz=UTC) - timedelta(days=days)).isoformat()
+        where = " OR ".join(f"({clause})" for clause, _ in conditions)
+        params = tuple(value for _, values in conditions for value in values)
         row = self._storage.fetch_one(
-            f"SELECT COUNT(*) AS c FROM {table} WHERE created_at < ?", (cutoff,)  # noqa: S608
+            f"SELECT COUNT(*) AS c FROM {table} WHERE {where}", params  # noqa: S608
         )
         found = int(row["c"]) if row else 0
         if not dry_run and found:
-            self._storage.execute(f"DELETE FROM {table} WHERE created_at < ?", (cutoff,))  # noqa: S608
+            self._storage.execute(f"DELETE FROM {table} WHERE {where}", params)  # noqa: S608
         return found
-
-    def _prune(
-        self,
-        windows: dict[str, int | None],
-        old_sessions: str,
-        memory_window: int | None,
-        dry_run: bool,
-    ) -> dict[str, int]:
-        from datetime import UTC, datetime, timedelta
-
-        counts: dict[str, int] = {}
-        for table, days in windows.items():
-            if days is None:
-                counts[table] = 0
-                continue
-            cutoff = (datetime.now(tz=UTC) - timedelta(days=days)).isoformat()
-            where = f"session_id IN ({old_sessions})"
-            row = self._storage.fetch_one(
-                f"SELECT COUNT(*) AS c FROM {table} WHERE {where}", (cutoff,)  # noqa: S608
-            )
-            counts[table] = int(row["c"]) if row else 0
-            if not dry_run and counts[table]:
-                self._storage.execute(f"DELETE FROM {table} WHERE {where}", (cutoff,))  # noqa: S608
-
-        counts["memory_entries"] = 0
-        if memory_window is not None:
-            cutoff = (datetime.now(tz=UTC) - timedelta(days=memory_window)).isoformat()
-            row = self._storage.fetch_one(
-                "SELECT COUNT(*) AS c FROM memory_entries WHERE created_at < ?", (cutoff,)
-            )
-            counts["memory_entries"] = int(row["c"]) if row else 0
-            if not dry_run and counts["memory_entries"]:
-                self._storage.execute(
-                    "DELETE FROM memory_entries WHERE created_at < ?", (cutoff,)
-                )
-        return counts
 
     # Rows that belong to a symbiote through one of its sessions, then the
     # rows that carry its id. Children first: foreign keys are enforced.

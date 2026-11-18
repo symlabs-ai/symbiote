@@ -71,6 +71,22 @@ class KernelConfig(BaseModel):
     # Same for the record of model calls (``llm_usage``): ``kernel.prune()``
     # deletes the rows older than N days, whatever their session.
     usage_retention_days: int | None = Field(default=None, ge=0)
+    # The summary of the sessions closed more than N days ago is cleared. The
+    # default summary is the text of the session's last messages: a host that
+    # removes messages for privacy sets this window too.
+    summary_retention_days: int | None = Field(default=None, ge=0)
+    # The audit rows (``audit_log`` with the arguments of every tool call,
+    # ``reflection_audit``, ``skill_review_audit``) created more than N days
+    # ago, and the approval requests resolved more than N days ago.
+    audit_retention_days: int | None = Field(default=None, ge=0)
+    # The sessions closed more than N days ago are deleted with everything
+    # tied to them. Memory entries stay, under ``memory_retention_days``.
+    session_retention_days: int | None = Field(default=None, ge=0)
+    # What the message and trace windows measure. "closed": sessions closed
+    # more than N days ago (a session never closed keeps everything). "age":
+    # also every message and trace created more than N days ago, in any
+    # session, the active ones included.
+    retention_basis: Literal["closed", "age"] = "closed"
     # How long a tool call deferred by the approval callback waits for a
     # person before it expires (``ApprovalDecision.defer(expires_in=...)``
     # replaces it for one request). ``None``: it waits for ever.
