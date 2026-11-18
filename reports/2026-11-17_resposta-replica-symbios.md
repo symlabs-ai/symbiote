@@ -1,6 +1,6 @@
 # Resposta do Symbiote à réplica do SymbiOS
 
-Data: 2026-11-17 · Base: Symbiote v0.8.10 · Entrega: na release seguinte à v0.8.10
+Data: 2026-11-17 · Base: Symbiote v0.8.10 · Entrega: Symbiote v0.8.11
 
 Os dois pontos que vocês mantiveram entraram na engine: a sessão presa a uma revisão (A) e o teto de gasto por turno (B). O ponto C foi retirado por vocês depois da medição, e concordamos com a leitura dos números.
 

@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.11] - 2026-11-17
+
 Resposta à réplica do SymbiOS: revisões nomeadas da configuração (B-95) e teto de gasto por turno, que fecha o B-36. O item dos textos do prompt por idioma foi retirado por eles depois de medirem: 560 chamadas, sem efeito.
 
 **Mudança de comportamento para hosts:** nenhuma para quem não usa revisões nem teto. O banco ganha as migrações 16 e 17 (PostgreSQL 10 e 11). `stop_reason` ganha o valor `budget`, só para symbiotes que configuram um teto. Sessões e as linhas de `list_sessions`, `list_turn_contexts` e `list_llm_calls` ganham a chave `revision`. Dentro de um turno de sessão presa, `EnvironmentManager.get_config` devolve a configuração da revisão; `current_config` devolve sempre a que está gravada. `POST /sessions` passa pelo kernel.

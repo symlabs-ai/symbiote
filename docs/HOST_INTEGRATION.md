@@ -448,7 +448,7 @@ may notice:
 
 ---
 
-### Upgrading from 0.8.10
+### Upgrading to 0.8.11
 
 Migrations 16 and 17 (PostgreSQL 10 and 11). Nothing changes for a host that
 uses neither the spending ceiling nor revisions. What a host may notice:
