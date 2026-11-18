@@ -2039,16 +2039,66 @@ it. An exception raised by the callback is logged and goes no further.
 ### Retention
 
 `kernel.prune()` (or `symbiote prune`) applies the retention windows. Nothing
-runs it automatically; call it from a cron.
+runs it automatically; call it from a cron. Every window is off until you set
+it, in `KernelConfig` or as an argument of one call.
 
-| Window | Removes |
+| Window (`KernelConfig` / `prune()` / CLI) | Removes |
 |---|---|
-| `message_retention_days` / `--messages-days` | messages of sessions closed more than N days ago |
-| `trace_retention_days` / `--traces-days` | `execution_traces` and `turn_contexts` of those sessions |
-| `memory_retention_days` / `--memories-days` | memory entries created more than N days ago, whatever their session |
+| `message_retention_days` / `messages_days` / `--messages-days` | messages of sessions closed more than N days ago |
+| `trace_retention_days` / `traces_days` / `--traces-days` | `execution_traces` and `turn_contexts` of those sessions |
+| `summary_retention_days` / `summaries_days` / `--summaries-days` | the summary of sessions closed more than N days ago (set to empty; the session stays) |
+| `audit_retention_days` / `audit_days` / `--audit-days` | rows of `audit_log`, `reflection_audit` and `skill_review_audit` created more than N days ago, and approval requests resolved more than N days ago, whatever their session |
+| `session_retention_days` / `sessions_days` / `--sessions-days` | sessions closed more than N days ago, with everything tied to them |
+| `memory_retention_days` / `memories_days` / `--memories-days` | memory entries created more than N days ago, whatever their session |
+| `usage_retention_days` / `usage_days` / `--usage-days` | `llm_usage` rows created more than N days ago |
 
-It returns the rows deleted per table: `messages`, `execution_traces`,
-`turn_contexts`, `memory_entries`.
+It returns what it deleted, one entry per table it can touch, plus
+`summaries` (summaries cleared) and `sessions`. `dry_run=True` only counts,
+and counts exactly what the real call deletes. The whole call is one
+transaction.
+
+**The message window does not remove the summary.** `close_session` stores a
+summary of the session, and by default it is the text of the last five
+messages. A host that removes messages for privacy either sets
+`summary_retention_days` to the same number or configures the symbiote with
+`session_summary_mode="off"`, so no summary is written.
+
+**A session that is never closed.** The message and trace windows go by the
+day the session was closed, so a host that keeps one session open per
+conversation (`get_or_create_session`) would keep its messages for ever.
+`retention_basis="age"` (`prune(basis="age")`, `--by-age`) makes the two
+windows also remove every message and trace created more than N days ago, in
+any session, the active ones included:
+
+```python
+KernelConfig(
+    message_retention_days=30,
+    trace_retention_days=30,
+    retention_basis="age",        # default "closed"
+    summary_retention_days=30,
+    audit_retention_days=90,
+    session_retention_days=90,
+)
+```
+
+A turn reads the recent messages of its session, so use a window longer than
+the history a conversation needs. The conversation goes on after the prune,
+with the messages that are left.
+
+**What the audit window covers.** `audit_log` has one row per tool call, with
+its arguments (after your redactor and `secret_params`). The window goes by
+the age of the row, so it also applies to sessions still open. An approval
+request still waiting for a person is kept, however old; a resolved one counts
+from the day it was resolved.
+
+**What the session window covers.** The session row and the rows that hang on
+it: messages, traces, turn contexts, the score, audit rows, approval
+requests, decisions, artifacts. It only reaches closed sessions: close the
+ones you consider over. Not removed: the memories learned in the session
+(long-term memory, under `memory_retention_days`), the `llm_usage` rows
+(counts, under `usage_retention_days`) and the scores already added to the
+harness versions. A later `get_or_create_session` with the same
+`external_key` starts a new session.
 
 ### Erasing a symbiote
 

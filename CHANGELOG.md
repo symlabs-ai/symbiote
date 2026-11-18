@@ -5,6 +5,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+Retenção: o que sobrava depois de um `prune` (B-100, B-101; achados no relatório da equipe do SymGateway). Todas as janelas novas vêm desligadas.
+
+**Mudança de comportamento para hosts:** `kernel.prune()` devolve mais entradas: uma por tabela que ele pode tocar (`audit_log`, `reflection_audit`, `skill_review_audit`, `pending_approvals`, `decisions`, `process_instances`, `artifacts`, `session_locks`, `session_scores`), mais `summaries` e `sessions`. Quem compara o resultado inteiro com um dicionário fixo precisa ajustar. Sem as janelas novas configuradas, o `prune` apaga exatamente o que apagava.
+
+### Novas funcionalidades
+
+- feat(retention): janela para o resumo das sessões (B-100). `KernelConfig.summary_retention_days` / `prune(summaries_days=N)` / `--summaries-days` limpa o resumo das sessões fechadas há mais de N dias. O resumo padrão é o texto das últimas cinco mensagens, e a janela de mensagens não o remove.
+- feat(retention): retenção pela idade da linha (B-101). `KernelConfig.retention_basis="age"` / `prune(basis="age")` / `--by-age`: as janelas de mensagens e de traces passam a remover também o que foi criado há mais de N dias em qualquer sessão, inclusive as ativas. O padrão (`"closed"`) continua valendo só para sessões fechadas há mais de N dias.
+- feat(retention): janela de auditoria (B-101). `audit_retention_days` / `prune(audit_days=N)` / `--audit-days` remove as linhas de `audit_log`, `reflection_audit` e `skill_review_audit` criadas há mais de N dias e os pedidos de aprovação resolvidos há mais de N dias, em qualquer sessão. Pedido ainda esperando uma pessoa não é removido.
+- feat(retention): janela de sessões (B-101). `session_retention_days` / `prune(sessions_days=N)` / `--sessions-days` apaga as sessões fechadas há mais de N dias com tudo que está preso a elas (mensagens, traces, score, auditoria, pedidos de aprovação, decisões, artefatos). As memórias aprendidas na sessão ficam, sob a janela delas.
+- feat(cli): `symbiote prune --usage-days`, que faltava no CLI.
+
+### Melhorias
+
+- `prune(dry_run=True)` conta exatamente o que a chamada real apaga, também quando duas janelas alcançam a mesma linha.
+
+### Outros
+
+- docs: seção "Retention" de `docs/HOST_INTEGRATION.md` reescrita, com o aviso de que a janela de mensagens não remove o resumo e o caso da sessão que nunca é fechada.
+- docs: resposta ao relatório do SymGateway em `reports/2026-11-18_resposta-relatorio-symgateway.md`.
+
 ## [v0.8.12] - 2026-11-18
 
 Três pedidos de hosts que põem um symbiote para atender outras pessoas ou que gerenciam as próprias integrações (B-96 a B-98; vieram da equipe do SymbiOS).
