@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.14] - 2026-11-18
+
 ### Correções
 
 - fix(chat): uma nova tentativa após resposta vazia não reenvia um bloco de texto vazio do assistente; retornos vazios de tools recebem um marcador não vazio, e falhas da reformulação são registradas antes do fallback.
