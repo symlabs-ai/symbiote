@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Tools whose cut result was already reported at WARNING (later cuts: DEBUG).
 _cut_reported: set[str] = set()
+_EMPTY_TOOL_RESULT = "(no output)"
 
 
 class AgentProtocolError(ValueError):
@@ -166,6 +167,18 @@ def format_legacy_assistant(text: str, calls: list[ToolCall]) -> str:
     return "\n".join(parts)
 
 
+def _non_empty_tool_result(value: Any) -> Any:
+    """Return a provider-safe representation for an empty tool result.
+
+    JSON objects and lists are already non-empty text when serialized. Only a
+    missing or blank scalar result needs a marker so no adapter can emit an
+    empty tool-result text block.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return _EMPTY_TOOL_RESULT
+    return value
+
+
 def compact_tool_result(
     result_text: str,
     max_chars: int,
@@ -208,12 +221,14 @@ def format_legacy_tool_results(
     parts: list[str] = []
     for result in results:
         if result.success:
+            output = _non_empty_tool_result(result.output)
             raw = (
                 f"[Tool result: {result.tool_id}]\n"
-                f"{json.dumps(result.output, default=str, ensure_ascii=False)}"
+                f"{json.dumps(output, default=str, ensure_ascii=False)}"
             )
         else:
-            raw = f"[Tool error: {result.tool_id}]\n{result.error}"
+            error = _non_empty_tool_result(result.error)
+            raw = f"[Tool error: {result.tool_id}]\n{error}"
         parts.append(compact_tool_result(raw, max_chars, tool_id=result.tool_id))
     return "\n\n".join(parts)
 
@@ -302,9 +317,9 @@ def serialize_native_exchange(
     for call, result in zip(calls, results, strict=True):
         payload: dict[str, Any] = {"success": result.success}
         if result.success:
-            payload["output"] = result.output
+            payload["output"] = _non_empty_tool_result(result.output)
         else:
-            payload["error"] = result.error
+            payload["error"] = _non_empty_tool_result(result.error)
         content = json.dumps(
             payload,
             default=str,

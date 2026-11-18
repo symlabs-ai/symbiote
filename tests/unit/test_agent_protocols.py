@@ -171,6 +171,20 @@ class TestLegacyProtocol:
             },
         ]
 
+    def test_empty_text_tool_result_has_non_empty_marker(self) -> None:
+        protocol = LegacyTextProtocol()
+
+        messages = protocol.serialize_exchange(
+            "calling",
+            "",
+            [ToolCall(tool_id="lookup")],
+            [ToolCallResult(tool_id="lookup", success=True, output="   ")],
+            tool_result_max_chars=2000,
+            state=protocol.create_state(),
+        )
+
+        assert messages[1]["content"] == '[Tool result: lookup]\n"(no output)"'
+
     def test_exchange_cardinality_mismatch_is_not_silently_zipped(
         self,
     ) -> None:

@@ -5,6 +5,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+### Correções
+
+- fix(chat): uma nova tentativa após resposta vazia não reenvia um bloco de texto vazio do assistente; retornos vazios de tools recebem um marcador não vazio, e falhas da reformulação são registradas antes do fallback.
+
 ## [v0.8.13] - 2026-11-18
 
 Retenção: o que sobrava depois de um `prune` (B-100, B-101; achados no relatório da equipe do SymGateway). Todas as janelas novas vêm desligadas.

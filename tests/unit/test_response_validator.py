@@ -89,6 +89,34 @@ class TestValidatorHelpers:
         assert len(fb) > 10
 
 
+class ProviderRulesLLM:
+    """Provider-like adapter that rejects empty text content blocks."""
+
+    def __init__(self, responses: list[str]) -> None:
+        self._responses = iter(responses)
+        self.calls: list[list[dict]] = []
+
+    def complete(self, messages, config=None, tools=None):
+        del config, tools
+        self.calls.append(list(messages))
+        for message in messages:
+            content = message.get("content")
+            if (
+                message.get("role") == "assistant"
+                and not message.get("tool_calls")
+                and isinstance(content, str)
+                and not content.strip()
+            ):
+                raise ValueError("assistant text content blocks must be non-empty")
+            if (
+                message.get("role") == "tool"
+                and isinstance(content, str)
+                and not content.strip()
+            ):
+                raise ValueError("tool result text content blocks must be non-empty")
+        return next(self._responses)
+
+
 class TestChatRunnerValidation:
     """Integration tests: ChatRunner should retry invalid responses."""
 
@@ -160,27 +188,61 @@ class TestChatRunnerValidation:
         assert result.success is True
         assert result.output == fallback_text()
 
-    def test_empty_response_triggers_retry(self) -> None:
-        """An empty response triggers a retry."""
+    def test_empty_response_triggers_provider_safe_retry(self) -> None:
+        """An empty response is not replayed as empty assistant text."""
         from symbiote.runners.chat import ChatRunner
 
-        call_count = 0
-
-        class EmptyThenValidLLM:
-            def complete(self, messages, config=None, tools=None):
-                nonlocal call_count
-                call_count += 1
-                if call_count == 1:
-                    return ""
-                return "Desculpe, vamos tentar novamente."
-
-        runner = ChatRunner(llm=EmptyThenValidLLM())
+        llm = ProviderRulesLLM(["", "Desculpe, vamos tentar novamente."])
+        runner = ChatRunner(llm=llm)
         ctx = self._make_context()
         result = runner.run(ctx)
 
         assert result.success is True
         assert result.output == "Desculpe, vamos tentar novamente."
-        assert call_count == 2
+        assert len(llm.calls) == 2
+        retry = llm.calls[1]
+        assert retry[-1]["role"] == "user"
+        assert retry[-1]["content"] == reformulate_message()
+        assert not any(
+            message.get("role") == "assistant"
+            and isinstance(message.get("content"), str)
+            and not message["content"].strip()
+            for message in retry
+        )
+
+    def test_two_empty_responses_fall_back_without_provider_error(self) -> None:
+        """Repeated empty replies exhaust validation retries normally."""
+        from symbiote.runners.chat import ChatRunner
+
+        llm = ProviderRulesLLM(["", "", ""])
+        runner = ChatRunner(llm=llm)
+        result = runner.run(self._make_context())
+
+        assert result.success is True
+        assert result.output == fallback_text()
+        assert len(llm.calls) == 3
+
+    def test_retry_failure_is_logged_before_fallback(self, caplog) -> None:
+        """A failed reformulation call remains a fallback but is observable."""
+        from symbiote.runners.chat import ChatRunner
+
+        class RejectRetryLLM:
+            calls = 0
+
+            def complete(self, messages, config=None, tools=None):
+                del messages, config, tools
+                self.calls += 1
+                if self.calls == 1:
+                    return ""
+                raise RuntimeError("provider rejected retry")
+
+        with caplog.at_level("WARNING", logger="symbiote.runners.chat"):
+            result = ChatRunner(llm=RejectRetryLLM()).run(self._make_context())
+
+        assert result.success is True
+        assert result.output == fallback_text()
+        assert "response reformulation attempt 1/2 failed" in caplog.text
+        assert "provider rejected retry" in caplog.text
 
     def test_streaming_tokens_buffered_and_released_after_validation(self) -> None:
         """Streaming tokens must only reach on_token after validation passes."""

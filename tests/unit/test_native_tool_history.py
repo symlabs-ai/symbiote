@@ -39,15 +39,16 @@ class SequenceLLM:
 
 
 class ResultGateway:
-    def __init__(self, *, success: bool = True) -> None:
+    def __init__(self, *, success: bool = True, output: object = None) -> None:
         self.success = success
+        self.output = {"ok": True} if output is None else output
 
     def execute_tool_calls(self, *, calls: list[ToolCall], **kwargs):
         return [
             ToolCallResult(
                 tool_id=call.tool_id,
                 success=self.success,
-                output={"ok": True} if self.success else None,
+                output=self.output if self.success else None,
                 error=None if self.success else "failed",
             )
             for call in calls
@@ -169,6 +170,39 @@ class TestFlattenToolExchanges:
 
 
 class TestNativeHistory:
+    def test_empty_tool_result_is_non_empty_on_provider_retry(self) -> None:
+        class ProviderRulesLLM(SequenceLLM):
+            def complete(self, messages: list[dict], **kwargs):
+                for message in messages:
+                    content = message.get("content")
+                    if (
+                        message.get("role") == "tool"
+                        and isinstance(content, str)
+                        and not content.strip()
+                    ):
+                        raise ValueError(
+                            "tool result text content blocks must be non-empty"
+                        )
+                return super().complete(messages, **kwargs)
+
+        llm = ProviderRulesLLM(
+            [_native_call("empty-result"), LLMResponse(content="complete")]
+        )
+        runner = ChatRunner(
+            llm,
+            tool_gateway=ResultGateway(output=""),
+            native_tools=True,
+        )
+
+        result = runner.run(_context())
+
+        assert result.success
+        tool_message = next(
+            message for message in llm.calls[1] if message.get("role") == "tool"
+        )
+        assert tool_message["content"].strip()
+        assert "(no output)" in tool_message["content"]
+
     def test_sync_loop_replays_native_turn_and_keeps_reasoning_ephemeral(
         self,
         caplog,

@@ -1535,13 +1535,26 @@ class ChatRunner:
             return clean_text, buffered_chunks
 
         original_text, original_chunks = clean_text, buffered_chunks
-        retry_messages = list(messages)
-        for _ in range(_MAX_VALIDATION_RETRIES):
-            retry_messages.append({"role": "assistant", "content": clean_text})
+        for attempt in range(1, _MAX_VALIDATION_RETRIES + 1):
+            retry_messages = list(messages)
+            # Empty assistant text is not a valid provider content block. A
+            # reformulation needs only the non-empty user instruction; keep a
+            # non-empty rejected answer when it can help the model fix itself.
+            if clean_text.strip():
+                retry_messages.append({"role": "assistant", "content": clean_text})
             retry_messages.append({"role": "user", "content": reformulate_message()})
             try:
                 retry_response, retry_chunks = self._call_llm_sync(retry_messages, kwargs, None)
-            except Exception:
+            except Exception as exc:
+                # A kernel-wrapped adapter also records this failed call in
+                # llm_usage; the warning keeps standalone runners observable.
+                logger.warning(
+                    "response reformulation attempt %d/%d failed: %s",
+                    attempt,
+                    _MAX_VALIDATION_RETRIES,
+                    exc,
+                    exc_info=True,
+                )
                 break
             clean_text, retry_calls = self._parse_response(retry_response)
             if protocol_state is not None:
