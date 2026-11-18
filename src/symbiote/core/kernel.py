@@ -65,6 +65,12 @@ from symbiote.core.session_lock import (
     SessionLease,
     renew_interval,
 )
+from symbiote.core.session_scope import (
+    SessionScope,
+    bind_session_scope,
+    reset_session_scope,
+    tools_from_json,
+)
 from symbiote.core.subjects import (
     learns_from_subjects,
     subject_kwargs,
@@ -899,9 +905,27 @@ class SymbioteKernel:
         external_key: str | None = None,
         subject_key: str | None = None,
         revision: str | None = None,
+        tools_allowed: list[str] | None = None,
+        delegation: str | None = None,
     ) -> Session:
         """Start a session. Raises EntityNotFoundError for an unknown symbiote
         (instead of a bare FOREIGN KEY IntegrityError).
+
+        ``tools_allowed`` narrows the session to a list of tools: it sees and
+        may call only the ones that are in the list and that the
+        configuration it reads authorizes. It only narrows (a tool the
+        configuration does not authorize stays refused), covers the tools a
+        mode adds by itself (``environment.mode_tools``), and follows the
+        delegation: the session of a symbiote this one delegates to carries
+        the same list, and ``spawn`` must be in it for the delegation to
+        happen. ``None`` (the default): no restriction; ``[]``: no tool.
+        Change it with ``set_session_tools``.
+
+        ``delegation`` is ``"open"`` (the default) or ``"strict"``: with
+        ``"strict"`` a symbiote this session delegates to only answers from a
+        revision (the one with this session's label, or its default), and the
+        delegation is refused when it has neither. See
+        ``set_default_revision``.
 
         ``revision`` pins the session to a revision of the symbiote's
         configuration (``create_revision``): its turns read the persona, the
@@ -930,6 +954,8 @@ class SymbioteKernel:
             external_key=external_key,
             subject_key=subject_key,
             revision=self._open_revision(symbiote_id, revision),
+            tools_allowed=tools_allowed,
+            delegation=delegation,
         )
 
     def _open_revision(self, symbiote_id: str, label: str | None) -> str | None:
@@ -976,7 +1002,33 @@ class SymbioteKernel:
 
     def get_revision(self, symbiote_id: str, label: str) -> Revision | None:
         """One revision of a symbiote, or ``None``."""
-        return self._revisions.get(symbiote_id, label)
+        return self._revisions.fetch(symbiote_id, label)
+
+    def set_default_revision(self, symbiote_id: str, label: str | None) -> Revision | None:
+        """Make ``label`` the symbiote's default revision, or leave it with
+        none (``None``).
+
+        The default is where a delegation lands. A session pinned to ``L``
+        that delegates to this symbiote reads its revision ``L``; when there
+        is none (or it was retired), its default revision; when there is no
+        default either, its current configuration, unless the session
+        delegates in ``"strict"`` mode, which refuses. A session that is not
+        pinned delegates to the current configuration (in ``"strict"`` mode,
+        to the default).
+
+        It changes nothing else: a session started without ``revision`` still
+        reads the current configuration. Raises ``EntityNotFoundError`` for
+        an unknown symbiote or label and ``ValidationError`` for a retired
+        label. The default revision cannot be retired: move the default
+        first.
+        """
+        if self._identity.get_current(symbiote_id) is None:
+            raise EntityNotFoundError("Symbiote", symbiote_id)
+        return self._revisions.set_default(symbiote_id, label)
+
+    def get_default_revision(self, symbiote_id: str) -> Revision | None:
+        """The symbiote's default revision, or ``None``."""
+        return self._revisions.default_for(symbiote_id)
 
     def list_revisions(self, symbiote_id: str) -> list[Revision]:
         """The revisions of a symbiote, newest first."""
@@ -985,7 +1037,8 @@ class SymbioteKernel:
     def retire_revision(self, symbiote_id: str, label: str) -> Revision:
         """Close a revision to new sessions. The sessions already pinned to
         it go on reading it; move one with ``set_session_revision``. Raises
-        ``EntityNotFoundError`` for an unknown label."""
+        ``EntityNotFoundError`` for an unknown label and ``ValidationError``
+        for the symbiote's default revision (move the default first)."""
         return self._revisions.retire(symbiote_id, label)
 
     def set_session_revision(self, session_id: str, revision: str | None) -> Session:
@@ -1000,18 +1053,53 @@ class SymbioteKernel:
             session_id, self._open_revision(session.symbiote_id, revision)
         )
 
-    def _bind_session_revision(
-        self, symbiote_id: str, label: str | None, record: TurnRecord
-    ) -> contextvars.Token:
-        """Make the session's revision the one of the turn in progress."""
+    def set_session_tools(
+        self, session_id: str, tools_allowed: list[str] | None
+    ) -> Session:
+        """Narrow a session to a list of tools, or lift the restriction
+        (``None``). See ``start_session``. Takes effect on the session's next
+        turn. Raises ``EntityNotFoundError`` for an unknown session and
+        ``ValidationError`` for a list that is not one of tool ids."""
+        return self._sessions.set_tools(session_id, tools_allowed)
+
+    def set_session_delegation(self, session_id: str, delegation: str | None) -> Session:
+        """Set a session's delegation mode: ``"open"`` (also ``None``) or
+        ``"strict"``. See ``start_session``. Takes effect on the session's
+        next turn. Raises ``EntityNotFoundError`` for an unknown session."""
+        return self._sessions.set_delegation(session_id, delegation)
+
+    _SESSION_SCOPE_SQL = (
+        "SELECT symbiote_id, revision, tools_allowed, delegation FROM sessions WHERE id = ?"
+    )
+
+    def _bind_session(
+        self, session_id: str, row: dict, record: TurnRecord | None = None
+    ) -> tuple[contextvars.Token, contextvars.Token]:
+        """Make what the session is pinned and narrowed to govern what runs
+        from here on: its revision, its tools and its delegation mode."""
+        symbiote_id = row["symbiote_id"]
+        label = row.get("revision")
         revision = self._revisions.get(symbiote_id, label) if label else None
         if label and revision is None:
             logging.getLogger(__name__).warning(
                 "revision %r of symbiote %s is gone; the turn reads the current "
                 "configuration", label, symbiote_id,
             )
-        record.revision = revision.label if revision is not None else None
-        return bind_revision(revision)
+        if record is not None:
+            record.revision = revision.label if revision is not None else None
+        tools = tools_from_json(row.get("tools_allowed"))
+        scope = SessionScope(
+            symbiote_id=symbiote_id,
+            session_id=session_id,
+            tools_allowed=frozenset(tools) if tools is not None else None,
+            delegation=row.get("delegation") or "open",
+        )
+        return bind_revision(revision), bind_session_scope(scope)
+
+    @staticmethod
+    def _unbind_session(tokens: tuple[contextvars.Token, contextvars.Token]) -> None:
+        reset_session_scope(tokens[1])
+        reset_revision(tokens[0])
 
     def get_or_create_session(
         self,
@@ -1020,6 +1108,8 @@ class SymbioteKernel:
         goal: str | None = None,
         subject_key: str | None = None,
         revision: str | None = None,
+        tools_allowed: list[str] | None = None,
+        delegation: str | None = None,
     ) -> Session:
         """Find or create a session by external key (e.g. user_id:url_key).
 
@@ -1032,6 +1122,12 @@ class SymbioteKernel:
         which ``Session.revision`` shows: a conversation in progress does not
         change configuration because a newer revision exists. Move it with
         ``set_session_revision``.
+
+        ``tools_allowed`` and ``delegation`` (see ``start_session``) follow
+        the same rule: given to a session created here, kept as they are by
+        one that already exists (``Session.tools_allowed`` and
+        ``Session.delegation`` show them). Change them with
+        ``set_session_tools`` and ``set_session_delegation``.
         """
         return self._sessions.get_or_create_by_external_key(
             symbiote_id=symbiote_id,
@@ -1039,6 +1135,8 @@ class SymbioteKernel:
             goal=goal,
             subject_key=subject_key,
             revision=self._open_revision(symbiote_id, revision),
+            tools_allowed=tools_allowed,
+            delegation=delegation,
         )
 
     def get_session(self, session_id: str) -> Session | None:
@@ -1219,9 +1317,7 @@ class SymbioteKernel:
         extra_context: dict | None = None,
         llm_config: dict | None = None,
     ) -> tuple[str | TurnReply, LoopTrace | None]:
-        row = self._storage.fetch_one(
-            "SELECT symbiote_id, revision FROM sessions WHERE id = ?", (session_id,)
-        )
+        row = self._storage.fetch_one(self._SESSION_SCOPE_SQL, (session_id,))
         if row is None:
             raise EntityNotFoundError("Session", session_id)
         symbiote_id = row["symbiote_id"]
@@ -1231,8 +1327,9 @@ class SymbioteKernel:
         # tool path copies contextvars into worker threads, so this propagates.
         _scope_token = _set_active_symbiote(symbiote_id)
         record, record_token = open_turn_record(symbiote_id, session_id)
-        # The revision the session is pinned to governs this turn's reads.
-        revision_token = self._bind_session_revision(symbiote_id, row.get("revision"), record)
+        # The revision the session is pinned to governs this turn's reads,
+        # and the tools it is narrowed to bound what the turn may call.
+        scope_tokens = self._bind_session(session_id, row, record)
         try:
             # Skills written by other replicas since this one's last turn.
             self._sync_skills(symbiote_id)
@@ -1281,7 +1378,7 @@ class SymbioteKernel:
             usage_out = _turn_usage_out.get()
             if usage_out is not None:
                 usage_out.append(record.usage())
-            reset_revision(revision_token)
+            self._unbind_session(scope_tokens)
             _reset_active_symbiote(_scope_token)
 
     async def message_async(
@@ -1386,16 +1483,14 @@ class SymbioteKernel:
         on_token: Callable[[str], None] | None = None,
         llm_config: dict | None = None,
     ) -> tuple[str | TurnReply, LoopTrace | None]:
-        row = self._storage.fetch_one(
-            "SELECT symbiote_id, revision FROM sessions WHERE id = ?", (session_id,)
-        )
+        row = self._storage.fetch_one(self._SESSION_SCOPE_SQL, (session_id,))
         if row is None:
             raise EntityNotFoundError("Session", session_id)
         symbiote_id = row["symbiote_id"]
 
         _scope_token = _set_active_symbiote(symbiote_id)
         record, record_token = open_turn_record(symbiote_id, session_id)
-        revision_token = self._bind_session_revision(symbiote_id, row.get("revision"), record)
+        scope_tokens = self._bind_session(session_id, row, record)
         try:
             if self._skills_sync is not None:  # disk and database I/O: off the loop
                 await asyncio.to_thread(self._sync_skills, symbiote_id)
@@ -1437,7 +1532,7 @@ class SymbioteKernel:
             usage_out = _turn_usage_out.get()
             if usage_out is not None:
                 usage_out.append(record.usage())
-            reset_revision(revision_token)
+            self._unbind_session(scope_tokens)
             _reset_active_symbiote(_scope_token)
 
     def _record_cancelled_turn(
@@ -1605,9 +1700,18 @@ class SymbioteKernel:
         )
         if not approved:
             return claimed
-        cfg = self._environment.get_config(claimed.symbiote_id)
+        # The call runs as the session that asked: its revision and the tools
+        # it is narrowed to now decide whether policy still allows it.
+        scope_tokens = None
+        if claimed.session_id:
+            session_row = self._storage.fetch_one(
+                self._SESSION_SCOPE_SQL, (claimed.session_id,)
+            )
+            if session_row is not None:
+                scope_tokens = self._bind_session(claimed.session_id, session_row)
         host_token = bind_host_context(host_context)
         try:
+            cfg = self._environment.get_config(claimed.symbiote_id)
             result = self._tool_gateway.execute(
                 claimed.symbiote_id,
                 claimed.session_id,
@@ -1625,6 +1729,8 @@ class SymbioteKernel:
             )
         finally:
             reset_host_context(host_token)
+            if scope_tokens is not None:
+                self._unbind_session(scope_tokens)
         if result.success:
             return self._approvals.finish(approval_id, executed=True, result=result.output)
         return self._approvals.finish(

@@ -295,6 +295,30 @@ class EnvironmentManager:
         """Check if a tool is in the tools list."""
         return tool_id in self.list_tools(symbiote_id, workspace_id)
 
+    def mode_tools(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> list[str]:
+        """The tools the symbiote's modes add by themselves, without being in
+        its ``tools`` list: ``get_tool_schema`` with ``tool_loading="index"``,
+        ``search_memories`` and ``search_knowledge`` with
+        ``context_mode="on_demand"``.
+
+        A session that narrows its tools (``tools_allowed``) narrows these
+        too: a host that wants a mode to keep working for that session adds
+        them to the list on purpose. Without ``search_knowledge`` a session of
+        an ``on_demand`` symbiote has no way to reach the knowledge; without
+        ``get_tool_schema`` a session of an ``index`` symbiote is shown the
+        full schemas of its tools instead of the index.
+        """
+        from symbiote.environment.policies import INDEX_META_TOOL, ON_DEMAND_META_TOOLS
+
+        tools: list[str] = []
+        if self.get_tool_loading(symbiote_id, workspace_id) == "index":
+            tools.append(INDEX_META_TOOL)
+        if self.get_context_mode(symbiote_id, workspace_id) == "on_demand":
+            tools.extend(ON_DEMAND_META_TOOLS)
+        return tools
+
     def get_tool_tags(
         self, symbiote_id: str, workspace_id: str | None = None
     ) -> list[str]:

@@ -18,6 +18,12 @@ tools may be called, not what an HTTP tool's URL is). What happens after a
 session closes (reflection, summary, dream) follows the current
 configuration too.
 
+A symbiote may have one default revision (``set_default_revision``). It is
+only where a delegation lands: a pinned session that delegates to a symbiote
+without a revision of the same label gets that symbiote's default instead of
+whatever is being edited there. A session started without a revision still
+reads the current configuration.
+
 ``active_revision_for(symbiote_id)`` is where the three readers
 (``EnvironmentManager.get_config``, ``IdentityManager.get``,
 ``KnowledgeService.query``) look: it is bound for the duration of a turn.
@@ -61,6 +67,10 @@ class Revision(BaseModel):
     created_at: str
     # Set by ``retire_revision``: no new session may start on it.
     retired_at: str | None = None
+    # The symbiote's default revision: what it answers with when a pinned
+    # session of another symbiote delegates to it and it has no revision of
+    # the same label (``set_default_revision``).
+    is_default: bool = False
 
 
 def validate_label(label: Any) -> str:
@@ -193,6 +203,40 @@ class RevisionStore:
             )
         return revision
 
+    def fetch(self, symbiote_id: str, label: str) -> Revision | None:
+        """The revision as the database has it now (``retired_at`` and
+        ``is_default`` change; the rest never does)."""
+        return self._fetch(symbiote_id, label)
+
+    def default_for(self, symbiote_id: str) -> Revision | None:
+        """The symbiote's default revision, or ``None`` (read from the
+        database: another replica may have moved it)."""
+        row = self._storage.fetch_one(
+            f"{self._SELECT} WHERE r.symbiote_id = ? AND r.is_default = 1 "
+            "AND r.retired_at IS NULL ORDER BY r.created_at DESC, r.rowid DESC",
+            (symbiote_id,),
+        )
+        return self._to_model(row) if row is not None else None
+
+    def set_default(self, symbiote_id: str, label: str | None) -> Revision | None:
+        """Make ``label`` the symbiote's default revision, or leave it with
+        none (``None``). Raises as ``require_open`` does."""
+        revision = self.require_open(symbiote_id, label) if label is not None else None
+        with self._storage.transaction():
+            self._storage.execute(
+                "UPDATE symbiote_revisions SET is_default = 0 "
+                "WHERE symbiote_id = ? AND is_default = 1",
+                (symbiote_id,),
+            )
+            if revision is not None:
+                self._storage.execute(
+                    "UPDATE symbiote_revisions SET is_default = 1 "
+                    "WHERE symbiote_id = ? AND label = ?",
+                    (symbiote_id, revision.label),
+                )
+        self.forget(symbiote_id)
+        return self._fetch(symbiote_id, revision.label) if revision is not None else None
+
     def list_for(self, symbiote_id: str) -> list[Revision]:
         rows = self._storage.fetch_all(
             f"{self._SELECT} WHERE r.symbiote_id = ? ORDER BY r.created_at DESC, r.rowid DESC",
@@ -206,6 +250,11 @@ class RevisionStore:
         current = self._fetch(symbiote_id, label)
         if current is None:
             raise EntityNotFoundError("Revision", label)
+        if current.is_default and current.retired_at is None:
+            raise ValidationError(
+                f"revision {label!r} is the symbiote's default: move the default "
+                "to another revision (or to none) before retiring it"
+            )
         if current.retired_at is None:
             self._storage.execute(
                 "UPDATE symbiote_revisions SET retired_at = ? "
@@ -226,7 +275,7 @@ class RevisionStore:
 
     _SELECT = (
         "SELECT r.id, r.symbiote_id, r.label, r.note, r.name, r.role, r.persona_json, "
-        "r.config_json, r.created_at, r.retired_at, "
+        "r.config_json, r.created_at, r.retired_at, r.is_default, "
         "(SELECT COUNT(*) FROM revision_knowledge k WHERE k.revision_id = r.id) "
         "AS knowledge_count FROM symbiote_revisions r"
     )
@@ -252,6 +301,7 @@ class RevisionStore:
             knowledge_count=int(row.get("knowledge_count") or 0),
             created_at=row["created_at"],
             retired_at=row.get("retired_at"),
+            is_default=bool(row.get("is_default") or 0),
         )
 
 

@@ -101,6 +101,8 @@ class SymbioteClient:
         external_key: str | None = None,
         subject_key: str | None = None,
         revision: str | None = None,
+        tools_allowed: list[str] | None = None,
+        delegation: str | None = None,
     ) -> dict:
         """Create or resume a session.
 
@@ -112,6 +114,11 @@ class SymbioteClient:
         ``revision`` pins a new session to a revision of the symbiote's
         configuration (``create_revision``); a session that already exists
         keeps the one it has.
+
+        ``tools_allowed`` narrows a new session to a list of tools (it only
+        narrows what the configuration authorizes; ``[]``: no tool), and
+        ``delegation="strict"`` makes a Symbiota it delegates to answer only
+        from a revision. A session that already exists keeps what it has.
         """
         body: dict[str, Any] = {"symbiote_id": symbiote_id}
         if goal is not None:
@@ -122,6 +129,10 @@ class SymbioteClient:
             body["subject_key"] = subject_key
         if revision is not None:
             body["revision"] = revision
+        if tools_allowed is not None:
+            body["tools_allowed"] = list(tools_allowed)
+        if delegation is not None:
+            body["delegation"] = delegation
         return self._post("/sessions", body)
 
     # ── Revisions of the configuration ────────────────────────────────────
@@ -145,6 +156,33 @@ class SymbioteClient:
     def set_session_revision(self, session_id: str, revision: str | None) -> dict:
         """Pin a session to another revision, or to none (``None``)."""
         resp = self._client.put(f"/sessions/{session_id}/revision", json={"revision": revision})
+        resp.raise_for_status()
+        return resp.json()
+
+    def set_session_tools(self, session_id: str, tools_allowed: list[str] | None) -> dict:
+        """Narrow a session to a list of tools, or lift the restriction
+        (``None``)."""
+        resp = self._client.put(
+            f"/sessions/{session_id}/tools", json={"tools_allowed": tools_allowed}
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def set_session_delegation(self, session_id: str, delegation: str) -> dict:
+        """Set a session's delegation mode: ``"open"`` or ``"strict"``."""
+        resp = self._client.put(
+            f"/sessions/{session_id}/delegation", json={"delegation": delegation}
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def set_default_revision(self, symbiote_id: str, label: str | None) -> dict | None:
+        """Make a revision the Symbiota's default (where a delegation lands
+        when the caller's label has no match), or leave it with none
+        (``None``)."""
+        resp = self._client.put(
+            f"/symbiotes/{symbiote_id}/default-revision", json={"label": label}
+        )
         resp.raise_for_status()
         return resp.json()
 

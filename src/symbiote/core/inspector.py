@@ -14,6 +14,7 @@ from typing import Any
 
 from symbiote.core.approvals import PENDING, PendingApprovalStore
 from symbiote.core.ports import StoragePort
+from symbiote.core.session_scope import DELEGATION_OPEN, tools_from_json
 from symbiote.core.subjects import ANY_SUBJECT, AnySubject
 
 
@@ -70,11 +71,14 @@ class KernelInspector:
         ``subject_key`` keeps the sessions of one end user; ``None`` keeps
         the ones without an end user. By default, all of them. ``revision``
         keeps the sessions pinned to that revision; each row says which one
-        it is pinned to (``None``: the current configuration).
+        it is pinned to (``None``: the current configuration), the tools it
+        is narrowed to (``tools_allowed``; ``None``: no restriction) and its
+        ``delegation`` mode.
         """
         sql = (
             "SELECT s.id, s.symbiote_id, sym.name AS symbiote_name, s.goal, s.status, "
-            "s.external_key, s.subject_key, s.revision, s.started_at, s.ended_at, s.summary, "
+            "s.external_key, s.subject_key, s.revision, s.tools_allowed, s.delegation, "
+            "s.started_at, s.ended_at, s.summary, "
             "sc.auto_score, sc.user_score, sc.final_score, sc.stop_reason "
             "FROM sessions s JOIN symbiotes sym ON sym.id = s.symbiote_id "
             "LEFT JOIN session_scores sc ON sc.session_id = s.id"
@@ -99,7 +103,11 @@ class KernelInspector:
             sql += " WHERE " + " AND ".join(conditions)
         sql += " ORDER BY s.started_at DESC, s.rowid DESC LIMIT ?"
         params.append(limit)
-        return self._storage.fetch_all(sql, tuple(params))
+        rows = self._storage.fetch_all(sql, tuple(params))
+        for row in rows:
+            row["tools_allowed"] = tools_from_json(row.get("tools_allowed"))
+            row["delegation"] = row.get("delegation") or DELEGATION_OPEN
+        return rows
 
     def list_messages(self, session_id: str, *, limit: int = 200) -> list[dict]:
         """The last ``limit`` messages of a session, in chronological order."""
@@ -335,10 +343,11 @@ class KernelInspector:
     def list_revisions(self, symbiote_id: str) -> list[dict]:
         """The revisions of a symbiote, newest first, each with how many
         sessions are pinned to it (``sessions``) and how many of those are
-        still open (``active_sessions``). The picture itself (persona,
-        config, knowledge) is ``kernel.get_revision(symbiote_id, label)``."""
-        return self._storage.fetch_all(
-            "SELECT r.id, r.label, r.note, r.created_at, r.retired_at, "
+        still open (``active_sessions``). ``is_default`` marks the
+        symbiote's default revision. The picture itself (persona, config,
+        knowledge) is ``kernel.get_revision(symbiote_id, label)``."""
+        rows = self._storage.fetch_all(
+            "SELECT r.id, r.label, r.note, r.created_at, r.retired_at, r.is_default, "
             "(SELECT COUNT(*) FROM revision_knowledge k WHERE k.revision_id = r.id) "
             "AS knowledge_count, "
             "(SELECT COUNT(*) FROM sessions s WHERE s.symbiote_id = r.symbiote_id "
@@ -349,6 +358,9 @@ class KernelInspector:
             "ORDER BY r.created_at DESC, r.rowid DESC",
             (symbiote_id,),
         )
+        for row in rows:
+            row["is_default"] = bool(row.get("is_default") or 0)
+        return rows
 
     # ── approvals that wait for a person ───────────────────────────────
 

@@ -48,6 +48,12 @@ class DuplicateEntityError(SymbioteError):
         super().__init__(f"{entity_type} {entity_id!r} already exists")
 
 
+class DelegationRefusedError(SymbioteError):
+    """Raised by ``spawn`` when the calling session only delegates to a
+    revision (``delegation="strict"``) and the target symbiote has none to
+    answer with. The message is what the model reads."""
+
+
 class StorageIntegrityError(SymbioteError):
     """Raised by a storage adapter when a write violates a constraint
     (unique key, foreign key, NOT NULL).

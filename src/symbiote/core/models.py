@@ -48,6 +48,13 @@ class Session(BaseModel):
     # The revision of the symbiote's configuration this session is pinned
     # to (see ``symbiote.core.revisions``). None: the current configuration.
     revision: str | None = None
+    # The tools this session narrows itself to (see
+    # ``symbiote.core.session_scope``). None: no restriction; an empty list:
+    # no tool. Only narrows what the configuration authorizes.
+    tools_allowed: list[str] | None = None
+    # ``"open"`` (default): a symbiote this session delegates to may answer
+    # with its current configuration. ``"strict"``: only from a revision.
+    delegation: str = "open"
     status: str = "active"
     started_at: datetime = Field(default_factory=_utcnow)
     ended_at: datetime | None = None

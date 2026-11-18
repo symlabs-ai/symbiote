@@ -554,6 +554,16 @@ ALTER TABLE turn_contexts ADD COLUMN revision TEXT COLLATE "C";
 ALTER TABLE llm_usage ADD COLUMN revision TEXT COLLATE "C";
 """
 
+# 12: the tools a session narrows itself to, its delegation mode, and the
+# default revision of a symbiote.
+_V12_SESSION_SCOPE = """
+ALTER TABLE sessions ADD COLUMN tools_allowed TEXT COLLATE "C";
+
+ALTER TABLE sessions ADD COLUMN delegation TEXT COLLATE "C";
+
+ALTER TABLE symbiote_revisions ADD COLUMN is_default INTEGER DEFAULT 0;
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "baseline", _V1_BASELINE),
     (2, "session_locks", _V2_SESSION_LOCKS),
@@ -566,6 +576,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (9, "pending_approvals", _V9_PENDING_APPROVALS),
     (10, "turn_budget", _V10_TURN_BUDGET),
     (11, "revisions", _V11_REVISIONS),
+    (12, "session_scope", _V12_SESSION_SCOPE),
 )
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

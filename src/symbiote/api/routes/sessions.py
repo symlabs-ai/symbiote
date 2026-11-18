@@ -34,7 +34,10 @@ from symbiote.api.schemas import (
     MessageResponse,
     ResolveApprovalRequest,
     SessionResponse,
+    SetDefaultRevisionRequest,
+    SetSessionDelegationRequest,
     SetSessionRevisionRequest,
+    SetSessionToolsRequest,
 )
 from symbiote.core.exceptions import (
     DuplicateEntityError,
@@ -57,6 +60,21 @@ router = APIRouter()
 # ── Session endpoints ────────────────────────────────────────────────────
 
 
+def _session_response(sess: Any, *, summary: bool = True) -> SessionResponse:
+    return SessionResponse(
+        id=sess.id,
+        symbiote_id=sess.symbiote_id,
+        goal=sess.goal,
+        external_key=sess.external_key,
+        subject_key=sess.subject_key,
+        revision=sess.revision,
+        tools_allowed=sess.tools_allowed,
+        delegation=sess.delegation,
+        status=sess.status,
+        summary=sess.summary if summary else None,
+    )
+
+
 @router.post("/sessions", status_code=201, response_model=SessionResponse)
 def create_session(
     body: CreateSessionRequest,
@@ -72,6 +90,8 @@ def create_session(
             goal=body.goal,
             subject_key=body.subject_key,
             revision=body.revision,
+            tools_allowed=body.tools_allowed,
+            delegation=body.delegation,
         )
     else:
         sess = kernel.start_session(
@@ -79,16 +99,10 @@ def create_session(
             goal=body.goal,
             subject_key=body.subject_key,
             revision=body.revision,
+            tools_allowed=body.tools_allowed,
+            delegation=body.delegation,
         )
-    return SessionResponse(
-        id=sess.id,
-        symbiote_id=sess.symbiote_id,
-        goal=sess.goal,
-        external_key=sess.external_key,
-        subject_key=sess.subject_key,
-        revision=sess.revision,
-        status=sess.status,
-    )
+    return _session_response(sess, summary=False)
 
 
 @router.put("/sessions/{session_id}/revision", response_model=SessionResponse)
@@ -102,16 +116,34 @@ def set_session_revision(
     configuration). Takes effect on its next turn."""
     _require_session_access(kernel._storage, session_id, auth)
     sess = kernel.set_session_revision(session_id, body.revision)
-    return SessionResponse(
-        id=sess.id,
-        symbiote_id=sess.symbiote_id,
-        goal=sess.goal,
-        external_key=sess.external_key,
-        subject_key=sess.subject_key,
-        revision=sess.revision,
-        status=sess.status,
-        summary=sess.summary,
-    )
+    return _session_response(sess)
+
+
+@router.put("/sessions/{session_id}/tools", response_model=SessionResponse)
+def set_session_tools(
+    session_id: str,
+    body: SetSessionToolsRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
+) -> SessionResponse:
+    """Narrow a session to a list of tools, or lift the restriction
+    (``null``). It only narrows what the configuration authorizes. Takes
+    effect on its next turn."""
+    _require_session_access(kernel._storage, session_id, auth)
+    return _session_response(kernel.set_session_tools(session_id, body.tools_allowed))
+
+
+@router.put("/sessions/{session_id}/delegation", response_model=SessionResponse)
+def set_session_delegation(
+    session_id: str,
+    body: SetSessionDelegationRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
+) -> SessionResponse:
+    """Set a session's delegation mode (``"open"`` or ``"strict"``). Takes
+    effect on its next turn."""
+    _require_session_access(kernel._storage, session_id, auth)
+    return _session_response(kernel.set_session_delegation(session_id, body.delegation))
 
 
 # ── Revisions of a symbiote's configuration ──────────────────────────────
@@ -157,6 +189,20 @@ def get_revision(
     return revision.model_dump()
 
 
+@router.put("/symbiotes/{symbiote_id}/default-revision")
+def set_default_revision(
+    symbiote_id: str,
+    body: SetDefaultRevisionRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
+) -> dict | None:
+    """Make a revision the symbiote's default (where a delegation lands when
+    the caller's label has no match), or leave it with none (``null``)."""
+    _require_symbiote_access(kernel._storage, symbiote_id, auth)
+    revision = kernel.set_default_revision(symbiote_id, body.label)
+    return revision.model_dump() if revision is not None else None
+
+
 @router.post("/symbiotes/{symbiote_id}/revisions/{label}/retire")
 def retire_revision(
     symbiote_id: str,
@@ -180,16 +226,7 @@ def get_session(
     sess = sessions.get(session_id)
     if sess is None:
         raise HTTPException(status_code=404, detail="Session not found") from None
-    return SessionResponse(
-        id=sess.id,
-        symbiote_id=sess.symbiote_id,
-        goal=sess.goal,
-        external_key=sess.external_key,
-        subject_key=sess.subject_key,
-        revision=sess.revision,
-        status=sess.status,
-        summary=sess.summary,
-    )
+    return _session_response(sess)
 
 
 @router.get("/sessions/by-key/{external_key}", response_model=SessionResponse)
@@ -203,16 +240,7 @@ def get_session_by_key(
     if sess is None:
         raise HTTPException(status_code=404, detail="Session not found") from None
     _require_session_access(adapter, sess.id, auth)
-    return SessionResponse(
-        id=sess.id,
-        symbiote_id=sess.symbiote_id,
-        goal=sess.goal,
-        external_key=sess.external_key,
-        subject_key=sess.subject_key,
-        revision=sess.revision,
-        status=sess.status,
-        summary=sess.summary,
-    )
+    return _session_response(sess)
 
 
 @router.post(
@@ -254,16 +282,7 @@ def close_session(
         sess = kernel.close_session(session_id)
     except EntityNotFoundError:
         raise HTTPException(status_code=404, detail="Session not found") from None
-    return SessionResponse(
-        id=sess.id,
-        symbiote_id=sess.symbiote_id,
-        goal=sess.goal,
-        external_key=sess.external_key,
-        subject_key=sess.subject_key,
-        revision=sess.revision,
-        status=sess.status,
-        summary=sess.summary,
-    )
+    return _session_response(sess)
 
 
 # ── Memory endpoints ─────────────────────────────────────────────────────

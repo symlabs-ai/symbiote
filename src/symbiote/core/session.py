@@ -14,6 +14,13 @@ from symbiote.core.exceptions import (
 )
 from symbiote.core.models import Decision, Message, Session, _utcnow
 from symbiote.core.ports import StoragePort
+from symbiote.core.session_scope import (
+    DELEGATION_OPEN,
+    tools_from_json,
+    tools_to_json,
+    validate_delegation,
+    validate_tools_allowed,
+)
 from symbiote.core.subjects import validate_subject_key
 
 # ``close(summary=...)`` not given: generate the summary as always.
@@ -46,6 +53,8 @@ class SessionManager:
         external_key: str | None = None,
         subject_key: str | None = None,
         revision: str | None = None,
+        tools_allowed: list[str] | None = None,
+        delegation: str | None = None,
     ) -> Session:
         """Create a new active session and persist it.
 
@@ -53,7 +62,8 @@ class SessionManager:
         ``symbiote.core.subjects``); it cannot be changed afterwards. Raises
         ``ValidationError`` when it is empty or too long. ``revision`` is the
         label of the revision the session is pinned to (the caller checked
-        that it exists).
+        that it exists). ``tools_allowed`` and ``delegation`` are what the
+        session narrows for itself (see ``symbiote.core.session_scope``).
         """
         session = Session(
             symbiote_id=symbiote_id,
@@ -62,13 +72,15 @@ class SessionManager:
             external_key=external_key,
             subject_key=validate_subject_key(subject_key),
             revision=revision,
+            tools_allowed=validate_tools_allowed(tools_allowed),
+            delegation=validate_delegation(delegation),
             status="active",
         )
         self._storage.execute(
             "INSERT INTO sessions "
             "(id, symbiote_id, goal, workspace_id, external_key, subject_key, "
-            "status, started_at, ended_at, summary, revision) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "status, started_at, ended_at, summary, revision, tools_allowed, delegation) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 session.id,
                 session.symbiote_id,
@@ -81,8 +93,34 @@ class SessionManager:
                 None,
                 None,
                 session.revision,
+                tools_to_json(session.tools_allowed),
+                session.delegation,
             ),
         )
+        return session
+
+    def set_tools(self, session_id: str, tools_allowed: list[str] | None) -> Session:
+        """Narrow the session to these tools, or lift the restriction
+        (``None``). Raises EntityNotFoundError if not found."""
+        self._storage.execute(
+            "UPDATE sessions SET tools_allowed = ? WHERE id = ?",
+            (tools_to_json(validate_tools_allowed(tools_allowed)), session_id),
+        )
+        return self._require(session_id)
+
+    def set_delegation(self, session_id: str, delegation: str | None) -> Session:
+        """Set the session's delegation mode (``None``: ``"open"``). Raises
+        EntityNotFoundError if not found."""
+        self._storage.execute(
+            "UPDATE sessions SET delegation = ? WHERE id = ?",
+            (validate_delegation(delegation), session_id),
+        )
+        return self._require(session_id)
+
+    def _require(self, session_id: str) -> Session:
+        session = self.get(session_id)
+        if session is None:
+            raise EntityNotFoundError("Session", session_id)
         return session
 
     def set_revision(self, session_id: str, revision: str | None) -> Session:
@@ -91,10 +129,7 @@ class SessionManager:
         self._storage.execute(
             "UPDATE sessions SET revision = ? WHERE id = ?", (revision, session_id)
         )
-        session = self.get(session_id)
-        if session is None:
-            raise EntityNotFoundError("Session", session_id)
-        return session
+        return self._require(session_id)
 
     def get_or_create_by_external_key(
         self,
@@ -103,6 +138,8 @@ class SessionManager:
         goal: str | None = None,
         subject_key: str | None = None,
         revision: str | None = None,
+        tools_allowed: list[str] | None = None,
+        delegation: str | None = None,
     ) -> Session:
         """Find an active session by external_key, or create one.
 
@@ -120,17 +157,25 @@ class SessionManager:
         already exists keeps the revision it has (``Session.revision`` says
         which): a conversation in progress does not change configuration
         because a newer revision was published. ``set_revision`` moves it.
+
+        ``tools_allowed`` and ``delegation`` follow the same rule: given to
+        a session created here, kept as they are by one that already exists
+        (``set_tools`` and ``set_delegation`` change them).
         """
         subject_key = validate_subject_key(subject_key)
+        tools_allowed = validate_tools_allowed(tools_allowed)
+        delegation = validate_delegation(delegation)
         with _external_key_lock(symbiote_id, external_key):
             try:
                 return self._get_or_create_by_external_key(
-                    symbiote_id, external_key, goal, subject_key, revision
+                    symbiote_id, external_key, goal, subject_key, revision,
+                    tools_allowed, delegation,
                 )
             except StorageIntegrityError:
                 # Another process created it between our SELECT and INSERT.
                 return self._get_or_create_by_external_key(
-                    symbiote_id, external_key, goal, subject_key, revision
+                    symbiote_id, external_key, goal, subject_key, revision,
+                    tools_allowed, delegation,
                 )
 
     def _get_or_create_by_external_key(
@@ -140,6 +185,8 @@ class SessionManager:
         goal: str | None,
         subject_key: str | None = None,
         revision: str | None = None,
+        tools_allowed: list[str] | None = None,
+        delegation: str | None = None,
     ) -> Session:
         row = self._storage.fetch_one(
             "SELECT * FROM sessions WHERE external_key = ? AND symbiote_id = ? "
@@ -169,6 +216,8 @@ class SessionManager:
             external_key=external_key,
             subject_key=subject_key,
             revision=revision,
+            tools_allowed=tools_allowed,
+            delegation=delegation,
         )
 
     def find_by_external_key(self, external_key: str) -> Session | None:
@@ -341,6 +390,8 @@ class SessionManager:
             external_key=row.get("external_key"),
             subject_key=row.get("subject_key"),
             revision=row.get("revision"),
+            tools_allowed=tools_from_json(row.get("tools_allowed")),
+            delegation=row.get("delegation") or DELEGATION_OPEN,
             status=row["status"],
             started_at=datetime.fromisoformat(row["started_at"]),
             ended_at=ended_at,

@@ -19,6 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from symbiote.core.session_scope import tool_in_session
 from symbiote.core.subjects import subject_kwargs
 from symbiote.core.turn_control import check_turn
 from symbiote.core.turn_record import current_turn_record
@@ -887,7 +888,12 @@ class ToolGateway:
         authorized tool without tags (``fs_read``, ``spawn``) stays listed.
         """
         if not self._authorized_only(symbiote_id):
-            return self.get_descriptors(tags=tags)
+            # A session that narrows its tools is shown only those, whatever
+            # the visibility: the default one lists by tag, not by policy.
+            return [
+                d for d in self.get_descriptors(tags=tags)
+                if tool_in_session(symbiote_id, d.tool_id)
+            ]
         return [
             d for d in self._descriptors.values()
             if self._gate.check(symbiote_id, d.tool_id).allowed

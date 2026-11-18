@@ -190,6 +190,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "_migrate_pending_approvals",
     "_migrate_turn_budget",
     "_migrate_revisions",
+    "_migrate_session_scope",
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -785,6 +786,18 @@ class SQLiteAdapter:
             "ALTER TABLE sessions ADD COLUMN revision TEXT",
             "ALTER TABLE turn_contexts ADD COLUMN revision TEXT",
             "ALTER TABLE llm_usage ADD COLUMN revision TEXT",
+        ):
+            with contextlib.suppress(sqlite3.OperationalError):  # column already exists
+                self._conn.execute(stmt)
+        self._conn.commit()
+
+    def _migrate_session_scope(self) -> None:
+        """18: the tools a session narrows itself to, its delegation mode,
+        and the default revision of a symbiote."""
+        for stmt in (
+            "ALTER TABLE sessions ADD COLUMN tools_allowed TEXT",
+            "ALTER TABLE sessions ADD COLUMN delegation TEXT",
+            "ALTER TABLE symbiote_revisions ADD COLUMN is_default INTEGER DEFAULT 0",
         ):
             with contextlib.suppress(sqlite3.OperationalError):  # column already exists
                 self._conn.execute(stmt)

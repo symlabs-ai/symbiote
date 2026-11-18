@@ -57,6 +57,13 @@ class CreateSessionRequest(BaseModel):
     # Label of the revision of the symbiote's configuration the session is
     # pinned to. Omitted: the session reads the current configuration.
     revision: str | None = Field(default=None, min_length=1, max_length=100)
+    # The tools the session narrows itself to: it sees and may call only the
+    # ones in this list that the configuration authorizes. Omitted or null:
+    # no restriction; an empty list: no tool.
+    tools_allowed: list[str] | None = Field(default=None, max_length=1000)
+    # "strict": a symbiote this session delegates to only answers from a
+    # revision. Omitted: "open".
+    delegation: Literal["open", "strict"] | None = None
 
 
 class CreateRevisionRequest(BaseModel):
@@ -72,6 +79,24 @@ class SetSessionRevisionRequest(BaseModel):
     revision: str | None = Field(default=None, min_length=1, max_length=100)
 
 
+class SetSessionToolsRequest(BaseModel):
+    """Narrow a session to a list of tools, or lift the restriction (null)."""
+
+    tools_allowed: list[str] | None = Field(default=None, max_length=1000)
+
+
+class SetSessionDelegationRequest(BaseModel):
+    """Set a session's delegation mode."""
+
+    delegation: Literal["open", "strict"] = "open"
+
+
+class SetDefaultRevisionRequest(BaseModel):
+    """Make a revision the symbiote's default, or leave it with none (null)."""
+
+    label: str | None = Field(default=None, min_length=1, max_length=100)
+
+
 class SessionResponse(BaseModel):
     id: str
     symbiote_id: str
@@ -79,6 +104,8 @@ class SessionResponse(BaseModel):
     external_key: str | None = None
     subject_key: str | None = None
     revision: str | None = None
+    tools_allowed: list[str] | None = None
+    delegation: str = "open"
     status: str
     summary: str | None = None
 

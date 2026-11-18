@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.identity import IdentityManager
 from symbiote.core.ports import KnowledgePort, MemoryPort
+from symbiote.core.session_scope import tool_in_session
 from symbiote.core.subjects import subject_kwargs
 from symbiote.memory.working import WorkingMemory
 
@@ -296,6 +297,10 @@ class ContextAssembler:
         max_blocks = 20
         if self._environment is not None:
             loading_mode = self._environment.get_tool_loading(symbiote_id)
+            if loading_mode == "index" and not tool_in_session(symbiote_id, "get_tool_schema"):
+                # This session may not fetch schemas one by one: show it the
+                # full schemas of the tools it has, so they stay usable.
+                loading_mode = "full"
             tool_mode = self._environment.get_tool_mode(symbiote_id)
             if tool_mode == "auto":
                 tool_mode = self._resolve_auto_mode(
@@ -354,7 +359,7 @@ class ContextAssembler:
             if context_mode == "on_demand":
                 # Memory/knowledge come only through these tools in this
                 # mode, so offer them even when tool_tags would hide them.
-                tool_dicts = self._with_on_demand_tools(tool_dicts)
+                tool_dicts = self._with_on_demand_tools(symbiote_id, tool_dicts)
 
         # 6. Trim to fit budget (using configurable shares)
         persona, wm_snapshot, memories_dicts, knowledge_dicts = self._trim_to_budget(
@@ -589,21 +594,27 @@ class ContextAssembler:
                 except Exception:
                     pass
 
-            # No tools enabled → instant (no loop needed)
-            tools = self._environment.list_tools(symbiote_id)
+            # No tools enabled → instant (no loop needed). A session that
+            # narrows its tools counts only the ones it kept.
+            tools = [
+                t for t in self._environment.list_tools(symbiote_id)
+                if tool_in_session(symbiote_id, t)
+            ]
             if not tools:
                 return "instant"
 
         # Default
         return "brief"
 
-    def _with_on_demand_tools(self, tool_dicts: list[dict]) -> list[dict]:
+    def _with_on_demand_tools(self, symbiote_id: str, tool_dicts: list[dict]) -> list[dict]:
         from symbiote.environment.policies import ON_DEMAND_META_TOOLS
 
         assert self._tool_gateway is not None
         present = {t["tool_id"] for t in tool_dicts}
         extra = []
         for tool_id in ON_DEMAND_META_TOOLS:
+            if not tool_in_session(symbiote_id, tool_id):
+                continue  # this session narrowed it out
             desc = self._tool_gateway.get_descriptor(tool_id)
             if desc is not None and tool_id not in present:
                 extra.append({

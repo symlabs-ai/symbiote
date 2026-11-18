@@ -30,6 +30,7 @@ from symbiote.core.context import AssembledContext
 from symbiote.core.exceptions import ValidationError, is_transient_llm_error
 from symbiote.core.models import Message
 from symbiote.core.ports import LLMPort
+from symbiote.core.session_scope import tool_in_session
 from symbiote.core.turn_control import TurnStop, check_turn
 from symbiote.core.turn_record import turn_budget_exceeded
 from symbiote.environment.descriptors import LLMResponse, ToolCall, ToolCallResult
@@ -2072,11 +2073,28 @@ class ChatRunner:
 
         # On-demand context mode instruction
         if context.context_mode == "on_demand" and not context.relevant_memories and not context.relevant_knowledge:
-            parts.append(
-                "## Context Access\n"
-                "You have access to search_memories and search_knowledge tools. "
-                "Use them when you need historical context or domain knowledge."
-            )
+            # Name only the tools this session kept (``tools_allowed``).
+            kept = [
+                (tool_id, what)
+                for tool_id, what in (
+                    ("search_memories", "historical context"),
+                    ("search_knowledge", "domain knowledge"),
+                )
+                if tool_in_session(context.symbiote_id, tool_id)
+            ]
+            if len(kept) == 2:
+                parts.append(
+                    "## Context Access\n"
+                    "You have access to search_memories and search_knowledge tools. "
+                    "Use them when you need historical context or domain knowledge."
+                )
+            elif kept:
+                tool_id, what = kept[0]
+                parts.append(
+                    "## Context Access\n"
+                    f"You have access to the {tool_id} tool. "
+                    f"Use it when you need {what}."
+                )
 
         # Learned skills (opt-in via skill_injection_enabled). The assembler
         # has already budget-trimmed the summary; the runner only renders it.

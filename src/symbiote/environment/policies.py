@@ -19,6 +19,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 from symbiote.core.ports import StoragePort
+from symbiote.core.session_scope import tool_in_session
 from symbiote.environment.exec_context import current_tool_context
 from symbiote.environment.manager import EnvironmentManager
 
@@ -185,7 +186,16 @@ class PolicyGate:
         is on: ``get_tool_schema`` with ``tool_loading="index"``, and
         ``search_memories`` / ``search_knowledge`` with
         ``context_mode="on_demand"`` (the prompt tells the model to use them).
+
+        A session that narrows its tools (``tools_allowed``) is checked
+        first: a tool outside its list is refused here, the meta-tools of a
+        mode included, whatever the configuration authorizes.
         """
+        if not tool_in_session(symbiote_id, tool_id):
+            return PolicyResult(
+                allowed=False,
+                reason=f"Tool '{tool_id}' is not available in this conversation",
+            )
         if self._env.is_tool_enabled(symbiote_id, tool_id, workspace_id):
             return PolicyResult(allowed=True, reason=f"Tool '{tool_id}' is authorized")
         if tool_id == INDEX_META_TOOL and (

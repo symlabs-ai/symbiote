@@ -8,7 +8,9 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
+from symbiote.core.exceptions import DelegationRefusedError
 from symbiote.core.revisions import current_revision
+from symbiote.core.session_scope import DELEGATION_STRICT, current_session_scope
 from symbiote.environment.descriptors import ToolDescriptor
 from symbiote.environment.exec_context import (
     SpawnContext,
@@ -211,6 +213,12 @@ class SubagentManager:
                 error=f"Symbiota '{target_name}' not found",
             ).model_dump()
 
+        # Which configuration the target answers with, and what the calling
+        # session narrows. Raises DelegationRefusedError (the model reads why, and
+        # the audit row of this call records it) before any session exists.
+        scope = current_session_scope()
+        revision = self._delegate_revision(target)
+
         # Create isolated session (with depth tracking)
         depth_token = _spawn_depth.set(depth + 1)
         spawn_token = None
@@ -221,7 +229,15 @@ class SubagentManager:
                 symbiote_id=target.id,
                 goal=f"[subagent] {task}",
                 subject_key=self._calling_subject(),
-                revision=self._matching_revision(target.id),
+                revision=revision,
+                # The tools the calling session is narrowed to bound the whole
+                # chain, and so does its delegation mode.
+                tools_allowed=(
+                    sorted(scope.tools_allowed)
+                    if scope is not None and scope.tools_allowed is not None
+                    else None
+                ),
+                delegation=scope.delegation if scope is not None else None,
             )
             # From here on hooks, the LLM adapter and tools run for the
             # delegated symbiote: say so (``current_spawn()``).
@@ -308,21 +324,47 @@ class SubagentManager:
         parent = self._kernel.get_session(caller.session_id)
         return parent.subject_key if parent is not None else None
 
-    def _matching_revision(self, target_id: str) -> str | None:
-        """The revision the delegated symbiote works on.
+    def _delegate_revision(self, target: Any) -> str | None:
+        """The revision the delegated symbiote works on (``None``: its
+        current configuration).
 
         A session pinned to revision ``L`` delegates to the revision ``L`` of
         the other symbiote when that symbiote has one that is not retired: a
-        team published under one label answers as that label. Otherwise the
-        delegate reads its current configuration.
+        team published under one label answers as that label. When it has
+        none, to that symbiote's default revision (``set_default_revision``),
+        so the person on the other side does not get whatever is being
+        edited there. When it has no default either, to its current
+        configuration.
+
+        A session that is not pinned delegates to the current configuration.
+
+        ``delegation="strict"`` on the calling session removes the last
+        step: the delegate only answers from a revision (the default one,
+        for a session that is not pinned), and with none to answer from the
+        delegation is refused.
         """
+        scope = current_session_scope()
+        strict = scope is not None and scope.delegation == DELEGATION_STRICT
         pinned = current_revision()
-        if pinned is None:
-            return None
-        other = self._kernel.get_revision(target_id, pinned.label)
-        if other is None or other.retired_at is not None:
-            return None
-        return other.label
+        if pinned is not None:
+            same = self._kernel.get_revision(target.id, pinned.label)
+            if same is not None and same.retired_at is None:
+                return same.label
+        if pinned is not None or strict:
+            default = self._kernel.get_default_revision(target.id)
+            if default is not None:
+                return default.label
+        if strict:
+            wanted = (
+                f"no revision {pinned.label!r} and no default revision"
+                if pinned is not None else "no default revision"
+            )
+            raise DelegationRefusedError(
+                f"delegation to {target.name!r} refused: it has {wanted}, and this "
+                "conversation only delegates to a published revision. Answer "
+                "without delegating to it."
+            )
+        return None
 
     def _resolve_symbiote(self, name_or_id: str):
         """Resolve a Symbiota by name or ID."""
