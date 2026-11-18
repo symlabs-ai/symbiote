@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import uuid4
 
+from pydantic import BaseModel, ConfigDict, Field
+
+from symbiote.core.exceptions import ValidationError
 from symbiote.discovery.models import DiscoveredTool
 from symbiote.discovery.repository import DiscoveredToolRepository
 
@@ -364,28 +367,112 @@ def _tools_from_spec(
     ``operationId`` becomes the ``tool_id`` (a slug of method and path when
     absent); the parameters and the request body become its schema.
     """
-    tools: list[DiscoveredTool] = []
-    for path, method, op in _iter_operations(spec, errors):
-        op_id = op.get("operationId") or _path_to_tool_id(method, path)
-        summary = op.get("summary") or op.get("description") or f"{method.upper()} {path}"
-        parameters = _openapi_params_to_schema(
-            op.get("parameters", []), op.get("requestBody"), spec
-        )
-        tools.append(DiscoveredTool(
+    return [
+        DiscoveredTool(
             id=str(uuid4()),
             symbiote_id=symbiote_id,
-            tool_id=_slugify(op_id),
-            name=summary[:80],
-            description=op.get("description") or summary,
-            method=method.upper(),
-            url_template=f"{base_url}{_normalize_path(path)}{_query_template(op, spec)}",
-            parameters=parameters,
-            tags=op.get("tags", []),
-            risk_level=_risk_for_operation(method, op),
+            tool_id=op.tool_id,
+            name=op.name,
+            description=op.description,
+            method=op.method,
+            # ``base_url`` exactly as the caller gave it: a stored tool whose
+            # URL changes goes back to "pending".
+            url_template=f"{base_url}{op.path}",
+            parameters=op.parameters,
+            tags=op.tags,
+            risk_level=op.risk_level,
             source_path=source,
             discovered_at=now,
+        )
+        for op in _operations(spec, base_url, errors)
+    ]
+
+
+class OpenAPIOperation(BaseModel):
+    """One operation of an OpenAPI description, read as a tool.
+
+    Nothing here is stored or authorized: it is what a host needs to register
+    the operation itself (``ToolGateway.register_http_tool``, with
+    ``http_config_for``) under the id and with the credential it chooses.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    # Suggested id: a slug of the ``operationId``, or of the method and the
+    # path when there is none. Two descriptions may suggest the same id (a
+    # ``search`` in each): the host that registers several gives its own.
+    tool_id: str
+    operation_id: str | None = None
+    # A short title (the summary, at most 80 characters) and the description.
+    name: str
+    description: str
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
+    # The path with plain ``{placeholders}``, followed by the query template
+    # (``?q={q}&limit={limit}``) when the operation has query parameters.
+    path: str
+    # ``base_url`` + ``path``: what ``http_config_for`` takes as ``url``.
+    url_template: str
+    # JSON Schema of what the model fills: path, query and body parameters.
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list)
+    # ``x-risk-level`` of the operation, or a guess from the method
+    # (GET low, POST/PUT/PATCH medium, DELETE high).
+    risk_level: RiskLevel = "medium"
+
+
+def parse_openapi(
+    spec: dict,
+    base_url: str | None = None,
+    *,
+    errors: list[str] | None = None,
+) -> list[OpenAPIOperation]:
+    """The operations of an OpenAPI description (a parsed ``dict``), one
+    ``OpenAPIOperation`` each. Reads only: nothing is stored, registered or
+    authorized.
+
+    ``base_url`` is where the operations are called; by default the first
+    entry of the description's ``servers`` (an empty string when there is
+    none, which leaves ``url_template`` relative).
+
+    A malformed operation is skipped; pass a list as ``errors`` to learn
+    which ones. Raises ``ValidationError`` when ``spec`` is not an OpenAPI
+    description at all (not a ``dict``, or without ``paths``).
+
+    This is the conversion ``kernel.discover_tools(spec=...)`` stores.
+    """
+    if not isinstance(spec, dict) or "paths" not in spec:
+        raise ValidationError("not an OpenAPI description: a dict with 'paths' is expected")
+    if base_url is None:
+        servers = spec.get("servers") or [{}]
+        first = servers[0] if isinstance(servers, list) and servers else {}
+        base_url = first.get("url", "") if isinstance(first, dict) else ""
+    return _operations(spec, (base_url or "").rstrip("/"), errors)
+
+
+def _operations(
+    spec: dict, base: str, errors: list[str] | None = None
+) -> list[OpenAPIOperation]:
+    operations: list[OpenAPIOperation] = []
+    for path, method, op in _iter_operations(spec, errors):
+        raw_id = op.get("operationId")
+        operation_id = raw_id if isinstance(raw_id, str) and raw_id else None
+        summary = op.get("summary") or op.get("description") or f"{method.upper()} {path}"
+        relative = f"{_normalize_path(path)}{_query_template(op, spec)}"
+        operations.append(OpenAPIOperation(
+            tool_id=_slugify(operation_id or _path_to_tool_id(method, path)),
+            operation_id=operation_id,
+            name=summary[:80],
+            description=op.get("description") or summary,
+            method=cast(Any, method.upper()),
+            path=relative,
+            url_template=f"{base}{relative}",
+            parameters=_openapi_params_to_schema(
+                op.get("parameters", []), op.get("requestBody"), spec
+            ),
+            tags=op.get("tags", []),
+            risk_level=_risk_for_operation(method, op),
         ))
-    return tools
+    return operations
 
 
 def _slugify(s: str) -> str:

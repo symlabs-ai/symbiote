@@ -101,23 +101,12 @@ class DiscoveredToolLoader:
                 risk_level=tool.risk_level,
             )
 
-            params = tool.parameters or {}
-            body_template, optional_params, array_params = _derive_http_config(
-                tool.method, url, params
-            )
-
-            # Detect content_type from Discovery metadata
-            content_type = params.get("_content_type", "application/json")
-
-            config = HttpToolConfig(
-                method=tool.method,  # type: ignore[arg-type]
-                url_template=url,
-                allow_internal=trusted,
+            config = http_config_for(
+                tool.method,
+                url,
+                tool.parameters or {},
                 header_factory=header_factory if trusted else None,
-                body_template=body_template,
-                optional_params=optional_params,
-                array_params=array_params,
-                content_type=content_type,
+                allow_internal=trusted,
             )
             self._gateway.register_http_tool(descriptor, config)
             registered.append(tool.tool_id)
@@ -131,6 +120,51 @@ def _origin(url: str) -> tuple[str, str, int | None]:
     parts = urlsplit(url)
     default = {"http": 80, "https": 443}.get(parts.scheme)
     return (parts.scheme, (parts.hostname or "").lower(), parts.port or default)
+
+
+def http_config_for(
+    method: str,
+    url: str,
+    parameters: dict | None = None,
+    *,
+    headers: dict[str, str] | None = None,
+    header_factory: Callable[[], dict[str, str]] | None = None,
+    allow_internal: bool = False,
+    timeout: float = 30.0,
+) -> HttpToolConfig:
+    """The ``HttpToolConfig`` of an HTTP operation, from its method, its URL
+    template and the JSON Schema of its parameters (as ``parse_openapi``
+    gives them): which parameters go in the body, which are optional in the
+    query, and which are lists.
+
+    Builds only: nothing is registered or authorized. A host registers the
+    result with ``ToolGateway.register_http_tool`` under the id it chooses,
+    and the rules of encoding, origin and network are applied when the tool
+    runs, by the gateway.
+
+    ``headers`` and ``header_factory`` are the credential of this one tool:
+    the factory is called on every request. ``allow_internal`` lets the tool
+    reach loopback and private addresses; leave it ``False`` for an API that
+    is not the host's own.
+    """
+    parameters = parameters or {}
+    method = method.upper()
+    body_template, optional_params, array_params = _derive_http_config(
+        method, url, parameters
+    )
+    return HttpToolConfig(
+        method=method,  # type: ignore[arg-type]
+        url_template=url,
+        headers=dict(headers or {}),
+        header_factory=header_factory,
+        allow_internal=allow_internal,
+        timeout=timeout,
+        body_template=body_template,
+        optional_params=optional_params,
+        array_params=array_params,
+        # Set by the conversion when the body is not JSON (a form, a file).
+        content_type=parameters.get("_content_type", "application/json"),
+    )
 
 
 def _derive_http_config(
