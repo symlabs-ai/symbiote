@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.12] - 2026-11-18
+
 Três pedidos de hosts que põem um symbiote para atender outras pessoas ou que gerenciam as próprias integrações (B-96 a B-98; vieram da equipe do SymbiOS).
 
 **Mudança de comportamento para hosts:** nenhuma para quem não restringe as tools de uma sessão, não define revisão padrão e não pede delegação estrita. O banco ganha a migração 18 (PostgreSQL 12). Sessões e as linhas de `list_sessions` ganham as chaves `tools_allowed` e `delegation`; revisões e as linhas de `list_revisions` ganham `is_default`. Uma chamada que esperou por uma pessoa (`resolve_pending`) passa a rodar como a sessão que pediu: sob a revisão a que ela está presa e dentro das tools a que ela está restrita naquele momento (antes, a política era conferida contra a configuração atual mesmo para sessão presa).

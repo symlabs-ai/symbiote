@@ -1,6 +1,6 @@
 # Resposta do Symbiote aos pedidos 17 a 19 do SymbiOS
 
-Data: 2026-11-18 · Base: Symbiote v0.8.11 · Entrega: na release seguinte à v0.8.11
+Data: 2026-11-18 · Base: Symbiote v0.8.11 · Entrega: Symbiote v0.8.12
 
 Os três pedidos entraram na engine, com as quatro decisões como vocês responderam. Nenhum foi rejeitado. A referência completa está em `docs/HOST_INTEGRATION.md`, nas seções "Narrowing a session's tools", "Delegation between symbiotes published at different times" e "Registering the operations yourself".
 

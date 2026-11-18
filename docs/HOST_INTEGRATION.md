@@ -464,7 +464,7 @@ uses neither the spending ceiling nor revisions. What a host may notice:
 - `POST /sessions` goes through the kernel: an unknown `symbiote_id` is a 404
   as before, and `revision` is checked.
 
-### Upgrading from 0.8.11
+### Upgrading to 0.8.12
 
 Migration 18 (PostgreSQL 12). Nothing changes for a host that does not narrow
 a session's tools, set a default revision or ask for strict delegation. What a
