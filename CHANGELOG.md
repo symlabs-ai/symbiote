@@ -5,6 +5,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+Resposta à réplica do SymbiOS: revisões nomeadas da configuração (B-95) e teto de gasto por turno, que fecha o B-36. O item dos textos do prompt por idioma foi retirado por eles depois de medirem: 560 chamadas, sem efeito.
+
+**Mudança de comportamento para hosts:** nenhuma para quem não usa revisões nem teto. O banco ganha as migrações 16 e 17 (PostgreSQL 10 e 11). `stop_reason` ganha o valor `budget`, só para symbiotes que configuram um teto. Sessões e as linhas de `list_sessions`, `list_turn_contexts` e `list_llm_calls` ganham a chave `revision`. Dentro de um turno de sessão presa, `EnvironmentManager.get_config` devolve a configuração da revisão; `current_config` devolve sempre a que está gravada. `POST /sessions` passa pelo kernel.
+
+### Novas funcionalidades
+
+- feat(revisions): sessão presa a uma revisão nomeada da configuração (B-95). `kernel.create_revision(symbiote_id, label, note=)` tira um retrato imutável do que está configurado: persona (nome, papel, persona), `EnvironmentConfig` com a lista de tools, e os itens de conhecimento, copiados. `start_session(..., revision=label)` prende a sessão: os turnos dela leem a revisão nos três pontos por onde toda leitura já passa (`EnvironmentManager.get_config`, `IdentityManager.get`, `KnowledgeService.query`), então a política de tools da sessão presa é a da revisão, nos dois sentidos. Sem `revision`, nada muda. Ficam fora da revisão, compartilhados por todas as sessões: memórias, skills, usuários finais, textos do harness e a definição das tools; o que acontece depois do encerramento (resumo, reflexão, dream) segue a configuração atual. Um rótulo nunca é reaproveitado. `get_or_create_session` não troca a revisão de uma sessão que já existe; `set_session_revision` troca; `retire_revision` fecha a revisão para sessões novas. Uma sessão presa delega para a revisão de mesmo rótulo do outro symbiote, quando existe. A revisão fica registrada na sessão, em `turn_contexts` e em `llm_usage` (`inspector.list_sessions(revision=)`, `usage_by("revision")`, `list_revisions`). Rotas `POST` / `GET /symbiotes/{id}/revisions`, `.../{label}`, `.../{label}/retire`, `PUT /sessions/{id}/revision`, e os métodos equivalentes no SDK.
+- feat(budget): teto de gasto por turno (B-36). `EnvironmentConfig.max_turn_tokens` e `max_turn_llm_calls`, desligados (`0`) por padrão. A conta é a do próprio turno: toda chamada ao modelo feita para ele, inclusive as de um symbiote delegado. Conferido antes de cada rodada do loop: no teto, nenhuma chamada nova começa (nem a chamada extra de resposta do limite de iterações) e o turno termina com `stop_reason="budget"` e um texto fixo. Em `long_run`, nenhum bloco novo começa, o avaliador é pulado e a resposta é o status dos blocos. `max_turn_tokens` conta o que o adapter informou, então depende de adapter que informa uso; `max_turn_llm_calls` funciona sempre.
+
+### Outros
+
+- docs: seções "Spending ceiling of a turn" e "Revisions: changing a symbiote while it serves people" em `docs/HOST_INTEGRATION.md`.
+
 ## [v0.8.10] - 2026-11-17
 
 Pedidos de hosts atendidos na engine (B-36, B-80 a B-93; vieram da equipe do SymbiOS e entraram no que serve a qualquer host), e a engine deixa de depender do SymGateway para buscar na web.

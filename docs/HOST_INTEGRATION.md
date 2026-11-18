@@ -448,6 +448,24 @@ may notice:
 
 ---
 
+### Upgrading from 0.8.10
+
+Migrations 16 and 17 (PostgreSQL 10 and 11). Nothing changes for a host that
+uses neither the spending ceiling nor revisions. What a host may notice:
+
+- `stop_reason` has a new value, `budget`, only for symbiotes that set a
+  ceiling.
+- Sessions, `inspector.list_sessions`, `list_turn_contexts` and
+  `list_llm_calls` rows have a `revision` key (`None` unless the session is
+  pinned).
+- `EnvironmentManager.get_config` (and every `get_*` of it) returns the
+  config of the revision inside a turn of a pinned session;
+  `current_config` always returns what is stored now.
+- `POST /sessions` goes through the kernel: an unknown `symbiote_id` is a 404
+  as before, and `revision` is checked.
+
+---
+
 ## Tool Registration
 
 ### HTTP Tools
@@ -892,13 +910,13 @@ outcome = await kernel.turn_async(session.id, text, on_token=send)
 | `stagnation` | the same successful call was repeated |
 | `circuit_breaker` | a tool failed three times in a row |
 | `timeout` | the loop ran past its time limit |
+| `budget` | the turn reached its spending ceiling (`max_turn_tokens` / `max_turn_llm_calls`) |
 | `on_after_tool_result` | the host's `on_after_tool_result` hook ended the turn |
 | `block_failure` | a `long_run` project ended with blocks not completed |
 
 For `max_iterations`, `stagnation` and `circuit_breaker` the text is the
 forced final answer described above; for `on_after_tool_result`, what the
-hook returned; for `timeout`, whatever text the model had written before the
-limit (it may be empty); for `block_failure`, the reply composed from the
+hook returned; for `timeout` and `budget`, a fixed notice; for `block_failure`, the reply composed from the
 blocks that completed. The same reason is
 stored in `execution_traces.stop_reason`. A turn that does not return raises
 as `message()` does (`TurnCancelledError`, `SessionLockLostError`,
@@ -1389,6 +1407,115 @@ if spawn is not None:
     spawn.root_symbiote_id, spawn.root_session_id       # the turn your host started
     spawn.depth                                         # 1, or 2 when the delegate delegates again
 ```
+
+---
+
+## Spending ceiling of a turn
+
+`max_tool_iterations` limits the rounds of a turn, not what they cost: a turn
+with large documents or long tool results can cost many times the usual in a
+few rounds. Two per-symbiote ceilings, both off (`0`) by default:
+
+```python
+kernel.environment.configure(
+    symbiote_id=sym.id,
+    max_turn_llm_calls=8,      # always works
+    max_turn_tokens=60_000,    # needs an LLM adapter that reports usage
+)
+
+outcome = kernel.turn(session.id, text)
+if outcome.stop_reason == "budget":
+    ...   # outcome.text is a fixed notice; outcome.usage says what was spent
+```
+
+- **What is counted:** every model call made for the turn so far, the ones of
+  a symbiote it delegated to (`spawn`) included, and the tokens their adapters
+  reported (see below). With an adapter that reports no usage,
+  `max_turn_tokens` has nothing to count; `max_turn_llm_calls` does not depend
+  on it.
+- **When it is checked:** before each round of the tool loop. The first call
+  always runs, and a single call can take the turn past the ceiling: the
+  ceiling stops the next call, it does not cut one short.
+- **What stops:** no further model call starts, including the extra call that
+  writes an answer when `max_tool_iterations` is reached. Tool calls the model
+  had already asked for in the last round still run. The turn returns a fixed
+  text and `stop_reason="budget"`; the host decides what to show.
+- **`long_run`:** the ceiling covers the whole project. No further block
+  starts, the evaluator is skipped and the reply is the status of the blocks,
+  not a composed answer.
+- It is per turn, not per session or per day: a host that needs those adds
+  them up from `inspector.usage_totals`.
+
+---
+
+## Revisions: changing a symbiote while it serves people
+
+A change to the persona, the tools or the config applies at once to every
+conversation, including the ones in the middle. A revision is a named,
+immutable picture of what is configured; a session pinned to it keeps reading
+it, whatever is edited afterwards.
+
+```python
+# 1. Configure as usual, then take the picture.
+kernel.update_symbiote(sym.id, persona={...})
+kernel.environment.configure(symbiote_id=sym.id, tools=[...])
+kernel.knowledge.register_source(sym.id, "policy", content=text)
+kernel.create_revision(sym.id, "2026-11-a", note="refund policy reviewed")
+
+# 2. Serve people on it. Keep editing: they do not see it.
+session = kernel.start_session(sym.id, subject_key="customer:42", revision="2026-11-a")
+draft = kernel.start_session(sym.id)          # no revision: the current configuration
+
+# 3. Later.
+kernel.list_revisions(sym.id)                 # newest first
+kernel.inspector.list_revisions(sym.id)       # with the sessions pinned to each
+kernel.set_session_revision(session.id, "2026-11-b")   # or None: back to current
+kernel.retire_revision(sym.id, "2026-11-a")   # no new session; the pinned ones go on
+```
+
+**What a revision holds:** the name, role and persona; the whole
+`EnvironmentConfig`, with its list of tools; the knowledge entries, copied
+(removing an entry later does not take it out of the revision).
+
+**What it does not hold**, and every session shares: memories, skills, end
+users (`subject_key`), the harness texts, and the definitions of the tools. A
+revision fixes *which* tools a session may call, not what an HTTP tool's URL
+is: to version a tool's definition, register the new one under another id.
+What happens after a session closes (summary, reflection, dream, skill
+review) follows the current configuration.
+
+**Nothing gets around the policy.** A revision is created from what the
+ordinary calls already validated and stored; there is no per-turn override. In
+a pinned session a tool the revision does not list is refused even if the
+current config allows it, and a tool it lists runs even if the current config
+no longer does.
+
+**Rules worth knowing:**
+
+- A label is never reused: `create_revision` with a label the symbiote already
+  has raises `DuplicateEntityError`.
+- `start_session(..., revision=label)` raises `EntityNotFoundError` for an
+  unknown label and `ValidationError` for a retired one.
+- `get_or_create_session(..., revision=label)` gives the revision to a session
+  it creates. A session that already exists keeps the one it has
+  (`Session.revision`): a conversation in progress does not change
+  configuration because a newer revision exists. Move it with
+  `set_session_revision`.
+- **Delegation.** A pinned session that calls `spawn` delegates to the revision
+  with the same label of the other symbiote, when it has one that is not
+  retired; otherwise the delegate reads its current configuration. Publish a
+  team by creating the same label on each member.
+- **On record.** `Session.revision`, `inspector.list_sessions(revision=...)`,
+  the `revision` of each row of `list_turn_contexts` and `list_llm_calls`, and
+  `inspector.usage_by("revision", sym.id)` to compare two revisions.
+- Inside a turn, `symbiote.core.revisions.current_revision()` returns the
+  revision in force. `kernel.environment.get_config()` returns the revision's
+  config there; `current_config()` always returns what is stored now, and
+  `configure()` always edits that.
+- `purge_symbiote` removes the revisions. Over HTTP: `POST` / `GET
+  /symbiotes/{id}/revisions`, `GET .../revisions/{label}`, `POST
+  .../revisions/{label}/retire`, `revision` on `POST /sessions`, and `PUT
+  /sessions/{id}/revision`.
 
 ---
 

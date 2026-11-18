@@ -190,6 +190,13 @@ Pedidos da equipe do SymbiOS, atendidos no que serve a qualquer host. Plano em `
 | `ForgeLLMAdapter` só envia `project_slug` ao provider `symgateway` | B-92 | done |
 | Objectives no `SymGatewayLLMAdapter` | B-93 | done |
 
+### Pós-MVP (Réplica dos hosts — 2026-11-17)
+
+| Feature | Backlog | Status |
+|---------|---------|--------|
+| Sessão presa a uma revisão nomeada da configuração: `create_revision` (retrato imutável de persona, `EnvironmentConfig` e conhecimento), `start_session(..., revision=)`, `set_session_revision`, `retire_revision`; revisão registrada na sessão, no turno e no uso | B-95 | done |
+| Teto de gasto por turno: `max_turn_tokens`, `max_turn_llm_calls`, `stop_reason="budget"` | B-36 | done |
+
 ### O que está fora do escopo
 
 - Multi-tenant completo

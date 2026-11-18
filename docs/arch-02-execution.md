@@ -225,6 +225,14 @@ sequenceDiagram
 
 Estados: `pending` → `approved` → `executed` ou `failed`; `pending` → `denied`; `pending` → `expired` (`KernelConfig.pending_approval_ttl_hours`, padrao 168, ou `defer(expires_in=...)`). Um pedido e resolvido uma unica vez. Os parametros da chamada ficam guardados como vieram so enquanto o pedido esta pendente; o que `inspector.list_pending` mostra ja vem sem os segredos conhecidos. Um pedido feito por um symbiote delegado (`spawn`) e contado a conversa que delegou.
 
+## Teto de gasto por turno
+
+`max_turn_tokens` e `max_turn_llm_calls` (por symbiote, `0` = sem teto) limitam o que um turno custa, e nao so quantas rodadas ele da. A conta e a do registro do turno: toda chamada ao modelo feita para ele, inclusive as de um symbiote delegado. O teto e conferido antes de cada rodada do loop; no teto, nenhuma chamada nova comeca e o turno termina com `stop_reason="budget"` e um texto fixo, sem a chamada extra de resposta. Em `long_run` nenhum bloco novo comeca.
+
+## Revisoes da configuracao
+
+`kernel.create_revision(symbiote_id, label)` tira um retrato imutavel de persona, `EnvironmentConfig` e conhecimento. Uma sessao aberta com `revision=label` fica presa a ele: durante os turnos dela, `EnvironmentManager.get_config`, `IdentityManager.get` e `KnowledgeService.query` devolvem o que a revisao guarda (`symbiote.core.revisions.active_revision_for`, ligado so durante o turno). Como toda leitura de configuracao passa por esses tres pontos, a politica de tools da sessao presa e a da revisao. Memorias, skills, usuarios finais, textos do harness e a definicao das tools ficam fora da revisao; o que roda depois do encerramento da sessao le a configuracao atual.
+
 ## Uso por chamada ao modelo
 
 Todo modelo que o kernel chama passa por um medidor (`symbiote.core.llm_usage`). `current_llm_call()` diz ao adapter para quem e a chamada (symbiote, sessao, finalidade) e cada chamada vira uma linha em `llm_usage` com provedor, modelo e tokens. Finalidades: `turn`, `subagent`, `reflection`, `session_summary`, `skill_review`, `dream:<fase>`, `harness`, `memory_consolidation`, `tool_resolution`, `long_run:plan`, `long_run:evaluate`, `long_run:report`. Os tokens vem do `usage` do `LLMResponse` ou de `report_usage()`, chamado pelo adapter que devolve texto puro ou faz streaming. Convencao unica: `prompt_tokens` e a entrada inteira, com o cache; `cache_read_tokens` e `cache_write_tokens` (e a escrita por duracao, `cache_write_5m_tokens` / `cache_write_1h_tokens`) sao partes dela; `usage_from_provider()` converte o que cada provedor devolve. O kernel guarda tokens, nunca preco, e nada depende de gateway. `TurnOutcome.usage` e `turn_contexts` trazem o total do turno, incluindo o que ele delegou; `kernel.inspector.usage_totals` / `usage_by` somam por symbiote, sessao, usuario final, finalidade, modelo e dia.

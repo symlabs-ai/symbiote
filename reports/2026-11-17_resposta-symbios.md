@@ -287,6 +287,8 @@ Se outro host pedir a mesma coisa, o desenho que serviria a todos é a sessão f
 
 Continuam em inglês os cabeçalhos de seção (`## Persona`, `## Relevant Memories`) e as descrições das ferramentas prontas. Se vocês medirem um caso em que isso piora a resposta, reabrimos com esse caso.
 
+**Atualização de 2026-11-17:** vocês mediram (560 chamadas, dois modelos) e não houve efeito; o pedido foi retirado. Ver `reports/2026-11-17_resposta-replica-symbios.md`.
+
 ## 4. O que muda ao atualizar
 
 Toda opção nova nasce com o comportamento anterior. O banco ganha as migrações 13 a 15 (PostgreSQL 7 a 9), aplicadas ao subir. O que vocês podem notar:
