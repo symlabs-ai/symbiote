@@ -196,6 +196,9 @@ Pedidos da equipe do SymbiOS, atendidos no que serve a qualquer host. Plano em `
 |---------|---------|--------|
 | Sessão presa a uma revisão nomeada da configuração: `create_revision` (retrato imutável de persona, `EnvironmentConfig` e conhecimento), `start_session(..., revision=)`, `set_session_revision`, `retire_revision`; revisão registrada na sessão, no turno e no uso | B-95 | done |
 | Teto de gasto por turno: `max_turn_tokens`, `max_turn_llm_calls`, `stop_reason="budget"` | B-36 | done |
+| Restrição das tools de uma sessão, só para menos: `start_session(..., tools_allowed=)`, `set_session_tools`, `environment.mode_tools`; vale para as meta-tools de modo e acompanha a delegação | B-96 | done |
+| Revisão padrão por symbiote (`set_default_revision`) como destino da delegação, e delegação estrita por sessão (`delegation="strict"`) | B-97 | done |
+| Leitura pública e pura de OpenAPI: `symbiote.discovery.parse_openapi` e `http_config_for` | B-98 | done |
 
 ### O que está fora do escopo
 

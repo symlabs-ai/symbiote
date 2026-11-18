@@ -464,6 +464,22 @@ uses neither the spending ceiling nor revisions. What a host may notice:
 - `POST /sessions` goes through the kernel: an unknown `symbiote_id` is a 404
   as before, and `revision` is checked.
 
+### Upgrading from 0.8.11
+
+Migration 18 (PostgreSQL 12). Nothing changes for a host that does not narrow
+a session's tools, set a default revision or ask for strict delegation. What a
+host may notice:
+
+- Sessions and `inspector.list_sessions` rows have the keys `tools_allowed`
+  (`None`: no restriction) and `delegation` (`"open"`); revisions and
+  `inspector.list_revisions` rows have `is_default`.
+- A call that waited for a person (`resolve_pending`) now runs as the session
+  that asked: under the revision that session is pinned to, and within the
+  tools it is narrowed to at that moment. Before, policy was checked against
+  the current configuration even for a pinned session.
+- `import symbiote.discovery` now exposes `parse_openapi`, `http_config_for`
+  and `OpenAPIOperation`.
+
 ---
 
 ## Tool Registration
@@ -575,6 +591,60 @@ result = kernel.discover_tools(
 # as where the description came from.
 ```
 
+#### Registering the operations yourself (`parse_openapi`, `http_config_for`)
+
+`discover_tools` stores the operations as tools of one symbiote, and
+`load_discovered_tools` authorizes them for that symbiote with one credential
+for the whole load. That fits a host that plugs its own API into a symbiote.
+A host that manages integrations with other people's APIs (kept per workspace
+or per customer, switched on symbiote by symbiote, each with its own
+credential) needs the two steps alone. Both read and build; neither stores,
+registers or authorizes anything.
+
+```python
+from symbiote.discovery import http_config_for, parse_openapi
+from symbiote.environment.descriptors import ToolDescriptor
+
+errors: list[str] = []
+for op in parse_openapi(spec, base_url="https://api.vendor.example", errors=errors):
+    kernel.tool_gateway.register_http_tool(
+        ToolDescriptor(
+            tool_id=f"vendor__{op.tool_id}",       # your id: two descriptions may both have "search"
+            name=op.name,
+            description=op.description,
+            parameters=op.parameters,
+            tags=op.tags,
+            risk_level=op.risk_level,
+        ),
+        http_config_for(
+            op.method, op.url_template, op.parameters,
+            header_factory=lambda: {"Authorization": f"Bearer {vendor_token()}"},
+        ),
+    )
+# Nobody may call them yet: authorize per symbiote, when a person decides.
+kernel.environment.add_tools(sym.id, ["vendor__search"])
+```
+
+- `parse_openapi(spec, base_url=None, *, errors=None)` returns one
+  `OpenAPIOperation` per operation: `tool_id` (a suggested id: a slug of the
+  `operationId`, or of method and path), `operation_id`, `name`,
+  `description`, `method`, `path` (with the query template), `url_template`
+  (`base_url` + `path`), `parameters` (JSON Schema), `tags` and `risk_level`.
+  `base_url` defaults to the first entry of `servers`. A malformed operation
+  is skipped and, when you pass a list, reported in `errors`; something that
+  is not an OpenAPI description raises `ValidationError`.
+- `http_config_for(method, url, parameters, *, headers=None,
+  header_factory=None, allow_internal=False, timeout=30.0)` returns the
+  `HttpToolConfig`: which parameters go in the body, which are optional in
+  the query, which are lists. The credential is of that one tool, whatever
+  its origin. Leave `allow_internal` off for an API that is not your own: it
+  lets the tool reach loopback and private addresses.
+- The rules of encoding, origin and network still apply when the tool runs,
+  inside the gateway. It is the same conversion `discover_tools(spec=...)`
+  stores.
+- Tool ids are one namespace per kernel: registering an id again replaces the
+  tool for every symbiote. Prefix yours.
+
 #### Risk levels from discovery
 
 Discovery assigns a `risk_level` to every discovered tool and propagates it all
@@ -631,6 +701,9 @@ authorized by their mode and stay listed. `get_tool_schema` follows the same
 rule, so it never returns the schema of a tool the prompt would not list. The
 REST API takes the field in `PUT /symbiotes/{id}/config`.
 
+A session may narrow all of this for itself, whatever the visibility: see
+[Narrowing a session's tools](#narrowing-a-sessions-tools-tools_allowed).
+
 ---
 
 ## Session Management
@@ -673,6 +746,71 @@ What that summary is depends on `session_summary_mode`, per symbiote:
 ```python
 kernel.environment.configure(symbiote_id=sym.id, session_summary_mode="llm")
 ```
+
+### Narrowing a session's tools (`tools_allowed`)
+
+The same symbiote often serves different audiences: its owner, signed-in
+customers, anonymous visitors. Each may be allowed a different set of tools,
+and the host changes those rules without publishing another revision. A
+session carries the list of tools it can use:
+
+```python
+visitor = kernel.start_session(
+    sym.id, subject_key="visitor:9f2", revision="2026-11-a",
+    tools_allowed=["search_products", "search_knowledge"],
+)
+owner = kernel.start_session(sym.id)                  # no list: every authorized tool
+
+kernel.set_session_tools(visitor.id, ["search_products"])   # from the next turn on
+kernel.set_session_tools(visitor.id, None)                   # lift the restriction
+```
+
+- **It only narrows.** The session sees and may call the tools that are both
+  in its list and authorized by the configuration it reads (the revision it
+  is pinned to, or the current one). A tool in the list that the
+  configuration does not authorize stays refused: the list is not a way
+  around the policy.
+- **Out of the list, out of the prompt.** Such a tool is not shown to the
+  model, under either `tool_visibility`, and a call to it is refused by the
+  policy gate and written to the audit log as `blocked`, like any
+  unauthorized call. The model reads `Tool 'x' blocked: Tool 'x' is not
+  available in this conversation`.
+- **`None` is no restriction; `[]` is no tool at all.**
+- **It covers the tools a mode adds by itself.** `get_tool_schema`
+  (`tool_loading="index"`) and `search_memories` / `search_knowledge`
+  (`context_mode="on_demand"`) are normally allowed by their mode without
+  being in `tools`. In a narrowed session they must be in the list too, and
+  the prompt stops telling the model to use the ones that are not.
+  `kernel.environment.mode_tools(sym.id)` returns the ones the symbiote's
+  modes add, so you can include them on purpose:
+
+  ```python
+  allowed = ["search_products", *kernel.environment.mode_tools(sym.id)]
+  ```
+
+  Without `search_knowledge`, a session of an `on_demand` symbiote has no way
+  to reach the knowledge (nothing is injected in its place, since leaving it
+  out may be the point). Without `get_tool_schema`, a session of an `index`
+  symbiote is shown the full schemas of its tools instead of the index, so
+  they stay usable.
+- **It follows the delegation.** The session of a symbiote this one delegates
+  to (`spawn`) carries the same list, so the list bounds what the
+  conversation can make happen anywhere in the chain, in the intersection
+  with what each delegate is authorized to do. A tool id means the same for
+  every symbiote: to let a delegate use one of its own tools for this
+  audience, put it in the list. `spawn` itself must be in the list for the
+  delegation to happen.
+- **A call that waited for a person** (`resolve_pending`) is checked against
+  the list the session has when it finally runs.
+- **On record.** `Session.tools_allowed`, the `tools_allowed` of each row of
+  `inspector.list_sessions`, and the `blocked` rows of the audit log.
+- `get_or_create_session(..., tools_allowed=[...])` gives the list to a
+  session it creates; one that already exists keeps what it has.
+- Over HTTP: `tools_allowed` on `POST /sessions`, and `PUT
+  /sessions/{id}/tools` with `{"tools_allowed": [...]}` or `null`.
+
+A session has one more setting of the same kind, `delegation`: see
+[Revisions](#revisions-changing-a-symbiote-while-it-serves-people).
 
 ### End users: one memory partition per person (`subject_key`)
 
@@ -1503,8 +1641,8 @@ no longer does.
   `set_session_revision`.
 - **Delegation.** A pinned session that calls `spawn` delegates to the revision
   with the same label of the other symbiote, when it has one that is not
-  retired; otherwise the delegate reads its current configuration. Publish a
-  team by creating the same label on each member.
+  retired; otherwise to that symbiote's default revision; otherwise the
+  delegate reads its current configuration. See the next section.
 - **On record.** `Session.revision`, `inspector.list_sessions(revision=...)`,
   the `revision` of each row of `list_turn_contexts` and `list_llm_calls`, and
   `inspector.usage_by("revision", sym.id)` to compare two revisions.
@@ -1516,6 +1654,58 @@ no longer does.
   /symbiotes/{id}/revisions`, `GET .../revisions/{label}`, `POST
   .../revisions/{label}/retire`, `revision` on `POST /sessions`, and `PUT
   /sessions/{id}/revision`.
+
+### Delegation between symbiotes published at different times
+
+The members of a team are rarely published together, and each usually has its
+own numbering. With labels alone, a session pinned to `boss-v3` that delegates
+to a colleague finds no `boss-v3` there and gets the colleague's current
+configuration: the person on the other side sees, through the colleague,
+whatever its owner is editing.
+
+```python
+kernel.create_revision(worker.id, "worker-v7")
+kernel.set_default_revision(worker.id, "worker-v7")   # None: no default
+kernel.get_default_revision(worker.id)                # the Revision, or None
+
+public = kernel.start_session(boss.id, revision="boss-v3", delegation="strict")
+kernel.set_session_delegation(public.id, "open")      # from the next turn on
+```
+
+Where a delegation lands:
+
+| The calling session | The delegate answers with |
+|---|---|
+| pinned to `L` | its revision `L`, if it has one that is not retired; else its default revision; else its current configuration |
+| not pinned | its current configuration |
+| `delegation="strict"`, pinned to `L` | its revision `L`; else its default revision; else the delegation is **refused** |
+| `delegation="strict"`, not pinned | its default revision; else the delegation is **refused** |
+
+- **The default is only where a delegation lands.** `start_session` without
+  `revision` still reads the current configuration: that is how an owner
+  tries a draft. A host that wants the published version asks for it by
+  label.
+- **One default per symbiote.** Setting another moves it. It must be a
+  revision that takes sessions (not retired), and it cannot be retired while
+  it is the default: move the default first.
+- **`delegation` is the session's**, not the kernel's: the same symbiote
+  serves its owner, for whom reaching a colleague's draft is expected, and
+  the public, for whom it is not. It follows the delegation: the sub-session
+  is strict too.
+- **A refusal is told and recorded.** `spawn` fails with `delegation to
+  'worker' refused: it has no revision 'boss-v3' and no default revision, and
+  this conversation only delegates to a published revision`, which the model
+  reads as the tool's error; no sub-session is created, and the audit row of
+  the call has `result = 'error:DelegationRefusedError'`.
+- **On record.** The sub-session's `revision` says which one answered;
+  `is_default` is on each revision and on the rows of
+  `inspector.list_revisions`; `Session.delegation` and the `delegation` of
+  `inspector.list_sessions`.
+- Labels that are short and shared by accident (`v3` on two symbiotes) match:
+  either number per symbiote (`boss-v3`) or share a label on purpose.
+- Over HTTP: `PUT /symbiotes/{id}/default-revision` with `{"label": "..."}`
+  or `null`, `delegation` on `POST /sessions`, and `PUT
+  /sessions/{id}/delegation`.
 
 ---
 
