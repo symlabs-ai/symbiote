@@ -158,6 +158,8 @@ class ConfigRequest(BaseModel):
     max_tool_iterations: int | None = None
     tool_call_timeout: float | None = None
     loop_timeout: float | None = None
+    max_turn_tokens: int | None = None  # spending ceiling of a turn; 0 = none
+    max_turn_llm_calls: int | None = None
     memory_share: float | None = None
     knowledge_share: float | None = None
     context_mode: str | None = None  # "packed" | "on_demand"
@@ -187,6 +189,8 @@ class ConfigResponse(BaseModel):
     max_tool_iterations: int = 10
     tool_call_timeout: float = 30.0
     loop_timeout: float = 300.0
+    max_turn_tokens: int = 0
+    max_turn_llm_calls: int = 0
     memory_share: float = 0.40
     knowledge_share: float = 0.25
     context_mode: str = "packed"

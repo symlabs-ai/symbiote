@@ -42,6 +42,7 @@ from symbiote.core.llm_usage import llm_call
 from symbiote.core.models import Message
 from symbiote.core.ports import LLMPort
 from symbiote.core.turn_control import TurnStop, check_turn
+from symbiote.core.turn_record import turn_budget_exceeded
 from symbiote.runners.base import (
     BlockResult,
     LongRunPlan,
@@ -348,7 +349,14 @@ class LongRunRunner:
                 runner_type=self.runner_type,
             )
 
+        budget_reached = False
         for block_idx in range(max_blocks):
+            # The turn's spending ceiling covers the whole project: no block
+            # starts once it was reached.
+            if turn_budget_exceeded(context.max_turn_tokens, context.max_turn_llm_calls):
+                logger.info("[long-run] turn budget reached before block %d", block_idx + 1)
+                budget_reached = True
+                break
             block_def = plan.blocks[block_idx]
             block_name = block_def.get("name", f"Block {block_idx + 1}")
 
@@ -380,7 +388,13 @@ class LongRunRunner:
                 ))
 
             # ── Phase 3: Evaluate block ─────────────────────────────────
-            if context.evaluator_prompt is not None and block_result.success:
+            if (
+                context.evaluator_prompt is not None
+                and block_result.success
+                and not turn_budget_exceeded(
+                    context.max_turn_tokens, context.max_turn_llm_calls
+                )
+            ):
                 eval_result = self._evaluate_block(
                     context, plan, block_def, block_result
                 )
@@ -440,14 +454,24 @@ class LongRunRunner:
         trace.total_iterations = len(block_results)
         trace.total_tool_calls = sum(b.tool_calls for b in block_results)
         trace.total_elapsed_ms = total_elapsed
+        budget_reached = budget_reached or turn_budget_exceeded(
+            context.max_turn_tokens, context.max_turn_llm_calls
+        )
         trace.stop_reason = (
             "end_turn" if completed == max_blocks
+            else "budget" if budget_reached
             else "block_failure"
         )
 
         # Status of the blocks (handoff, errors) and the reply the user reads.
+        # With the ceiling reached there is no model call left for the reply:
+        # the user reads the status.
         output = self._build_output_summary(plan, block_results)
-        answer = self._compose_answer(context, plan, block_results) if completed else output
+        answer = (
+            self._compose_answer(context, plan, block_results)
+            if completed and not budget_reached
+            else output
+        )
 
         # Save to working memory: the conversation holds what the user read.
         if self._working_memory is not None:
@@ -645,6 +669,8 @@ class LongRunRunner:
             max_tool_iterations=context.max_tool_iterations,
             tool_call_timeout=context.tool_call_timeout,
             loop_timeout=context.loop_timeout,
+            max_turn_tokens=context.max_turn_tokens,
+            max_turn_llm_calls=context.max_turn_llm_calls,
             tool_instructions_override=context.tool_instructions_override,
             injection_stagnation_override=context.injection_stagnation_override,
             injection_circuit_breaker_override=context.injection_circuit_breaker_override,

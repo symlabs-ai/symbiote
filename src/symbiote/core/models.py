@@ -189,6 +189,15 @@ class EnvironmentConfig(BaseModel):
     max_tool_iterations: int = Field(default=10, ge=1, le=10000)
     tool_call_timeout: float = Field(default=30.0, ge=1.0, le=300.0)
     loop_timeout: float = Field(default=300.0, ge=10.0, le=3600.0)
+    # Spending ceiling of one turn (0: no ceiling). Counted over every model
+    # call made for the turn, the ones of a symbiote it delegated to
+    # included. Checked before each round of the tool loop: a turn at or
+    # past the ceiling starts no further model call and ends with
+    # ``stop_reason="budget"``. ``max_turn_tokens`` counts the tokens the
+    # LLM adapter reported, so it needs an adapter that reports usage;
+    # ``max_turn_llm_calls`` counts calls and always works.
+    max_turn_tokens: int = Field(default=0, ge=0)
+    max_turn_llm_calls: int = Field(default=0, ge=0)
     context_mode: Literal["packed", "on_demand"] = "packed"
     # Long-run mode configuration
     planner_prompt: str | None = None

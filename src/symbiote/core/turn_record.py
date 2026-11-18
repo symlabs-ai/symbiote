@@ -108,6 +108,21 @@ def current_turn_record() -> TurnRecord | None:
     return _current.get()
 
 
+def turn_budget_exceeded(max_tokens: int, max_llm_calls: int) -> bool:
+    """Whether the turn in progress reached its spending ceiling (0: none).
+
+    Counts what the turn's record holds: every model call made for it so
+    far, delegated symbiotes included, and the tokens their adapters
+    reported.
+    """
+    record = _current.get()
+    if record is None:
+        return False
+    if max_llm_calls and record.llm_calls >= max_llm_calls:
+        return True
+    return bool(max_tokens and record.total_tokens >= max_tokens)
+
+
 def open_turn_record(symbiote_id: str, session_id: str) -> tuple[TurnRecord, contextvars.Token]:
     record = TurnRecord(symbiote_id=symbiote_id, session_id=session_id, parent=_current.get())
     return record, _current.set(record)

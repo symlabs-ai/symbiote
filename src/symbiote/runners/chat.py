@@ -31,6 +31,7 @@ from symbiote.core.exceptions import ValidationError, is_transient_llm_error
 from symbiote.core.models import Message
 from symbiote.core.ports import LLMPort
 from symbiote.core.turn_control import TurnStop, check_turn
+from symbiote.core.turn_record import turn_budget_exceeded
 from symbiote.environment.descriptors import LLMResponse, ToolCall, ToolCallResult
 from symbiote.environment.exec_context import tool_exec_context
 from symbiote.environment.parser import parse_tool_calls
@@ -88,6 +89,10 @@ _MAX_LLM_RETRIES = 3
 _LOOP_TIMEOUT_TEXT = (
     "Não consegui concluir a tarefa dentro do tempo limite. "
     "Posso continuar de onde parei se você pedir."
+)
+_BUDGET_TEXT = (
+    "Parei antes de concluir porque esta resposta atingiu o limite de uso "
+    "configurado. Posso continuar se você pedir."
 )
 _NO_FINAL_ANSWER_TEXT = (
     "Não consegui chegar a uma resposta final com as ferramentas disponíveis."
@@ -739,6 +744,12 @@ class ChatRunner:
                 logger.info("[tool-loop] loop timeout exceeded (%.1fs)", loop_timeout)
                 trace.stop_reason = "timeout"
                 break
+            # ...and the spending ceiling: no further model call once the
+            # turn reached it (the first round always runs).
+            if turn_budget_exceeded(context.max_turn_tokens, context.max_turn_llm_calls):
+                logger.info("[tool-loop] turn budget reached")
+                trace.stop_reason = "budget"
+                break
 
             if self._on_progress is not None:
                 self._on_progress("iteration_start", iteration + 1, max_iters)
@@ -1257,6 +1268,8 @@ class ChatRunner:
         """
         if stop_reason == "timeout":
             replacement = _LOOP_TIMEOUT_TEXT
+        elif stop_reason == "budget":
+            replacement = _BUDGET_TEXT
         elif tools_ran and not final_text.strip():
             replacement = _NO_FINAL_ANSWER_TEXT
         else:

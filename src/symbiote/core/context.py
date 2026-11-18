@@ -55,6 +55,9 @@ class AssembledContext(BaseModel):
     max_tool_iterations: int = 10
     tool_call_timeout: float = 30.0
     loop_timeout: float = 300.0
+    # Spending ceiling of the turn (0: none); see EnvironmentConfig.
+    max_turn_tokens: int = 0
+    max_turn_llm_calls: int = 0
     # Evolvable text overrides (resolved by ContextAssembler from harness_versions)
     tool_instructions_override: str | None = None
     injection_stagnation_override: str | None = None
@@ -284,6 +287,7 @@ class ContextAssembler:
         max_tool_iterations = 10
         tool_call_timeout = 30.0
         loop_timeout = 300.0
+        max_turn_tokens = max_turn_llm_calls = 0
         context_mode = "packed"
         planner_prompt = None
         evaluator_prompt = None
@@ -304,6 +308,12 @@ class ContextAssembler:
             max_tool_iterations = self._environment.get_max_tool_iterations(symbiote_id)
             tool_call_timeout = self._environment.get_tool_call_timeout(symbiote_id)
             loop_timeout = self._environment.get_loop_timeout(symbiote_id)
+            # An environment manager written before the ceiling existed
+            # (or a stand-in for one) simply has none.
+            budget_getter = getattr(self._environment, "get_turn_budget", None)
+            budget = budget_getter(symbiote_id) if budget_getter is not None else None
+            if isinstance(budget, tuple) and len(budget) == 2:
+                max_turn_tokens, max_turn_llm_calls = int(budget[0]), int(budget[1])
             context_mode = self._environment.get_context_mode(symbiote_id)
             # Long-run fields (via getter — only resolve for long_run mode)
             if tool_mode == "long_run":
@@ -405,6 +415,8 @@ class ContextAssembler:
             max_tool_iterations=max_tool_iterations,
             tool_call_timeout=tool_call_timeout,
             loop_timeout=loop_timeout,
+            max_turn_tokens=max_turn_tokens,
+            max_turn_llm_calls=max_turn_llm_calls,
             tool_instructions_override=tool_instr_override,
             injection_stagnation_override=stag_override,
             injection_circuit_breaker_override=cb_override,

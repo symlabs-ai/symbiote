@@ -188,6 +188,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "_migrate_host_options",
     "_migrate_llm_usage",
     "_migrate_pending_approvals",
+    "_migrate_turn_budget",
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -731,6 +732,16 @@ class SQLiteAdapter:
             self._conn.execute(stmt)
         with contextlib.suppress(sqlite3.OperationalError):  # column already exists
             self._conn.execute("ALTER TABLE audit_log ADD COLUMN approval_id TEXT")
+        self._conn.commit()
+
+    def _migrate_turn_budget(self) -> None:
+        """16: spending ceiling of a turn (tokens and model calls)."""
+        for stmt in (
+            "ALTER TABLE environment_configs ADD COLUMN max_turn_tokens INTEGER DEFAULT 0",
+            "ALTER TABLE environment_configs ADD COLUMN max_turn_llm_calls INTEGER DEFAULT 0",
+        ):
+            with contextlib.suppress(sqlite3.OperationalError):  # column already exists
+                self._conn.execute(stmt)
         self._conn.commit()
 
     def execute(self, sql: str, params: tuple | None = None) -> sqlite3.Cursor:

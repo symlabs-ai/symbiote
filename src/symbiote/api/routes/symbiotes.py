@@ -171,6 +171,7 @@ def set_config(
         "tool_call_timeout", "loop_timeout", "memory_share", "knowledge_share",
         "context_mode", "prompt_caching", "learn_from_subject_sessions",
         "skill_trial_listing", "dream_llm", "session_summary_mode",
+        "max_turn_tokens", "max_turn_llm_calls",
     ):
         val = getattr(body, field_name, None)
         if val is not None:
@@ -231,6 +232,8 @@ def _build_config_response(env: EnvironmentManager, symbiote_id: str) -> ConfigR
         skill_trial_listing=cfg.skill_trial_listing,
         dream_llm=cfg.dream_llm,
         session_summary_mode=cfg.session_summary_mode,
+        max_turn_tokens=cfg.max_turn_tokens,
+        max_turn_llm_calls=cfg.max_turn_llm_calls,
         planner_prompt=lr_cfg.get("planner_prompt"),
         evaluator_prompt=lr_cfg.get("evaluator_prompt"),
         evaluator_criteria=lr_cfg.get("evaluator_criteria"),

@@ -47,6 +47,8 @@ class EnvironmentManager:
         max_tool_iterations: int | None = None,
         tool_call_timeout: float | None = None,
         loop_timeout: float | None = None,
+        max_turn_tokens: int | None = None,
+        max_turn_llm_calls: int | None = None,
         context_mode: str | None = None,
         # Long-run mode fields
         planner_prompt: str | None = None,
@@ -352,6 +354,15 @@ class EnvironmentManager:
             return 30.0
         return cfg.tool_call_timeout
 
+    def get_turn_budget(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> tuple[int, int]:
+        """Return ``(max_turn_tokens, max_turn_llm_calls)``; 0 means no ceiling."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        if cfg is None:
+            return 0, 0
+        return cfg.max_turn_tokens, cfg.max_turn_llm_calls
+
     def get_loop_timeout(
         self, symbiote_id: str, workspace_id: str | None = None
     ) -> float:
@@ -522,6 +533,8 @@ class EnvironmentManager:
             max_tool_iterations=_int(row, "max_tool_iterations", 10),
             tool_call_timeout=_float(row, "tool_call_timeout", 30.0),
             loop_timeout=_float(row, "loop_timeout", 300.0),
+            max_turn_tokens=_int(row, "max_turn_tokens", 0),
+            max_turn_llm_calls=_int(row, "max_turn_llm_calls", 0),
             context_mode=row.get("context_mode") or "packed",
             planner_prompt=row.get("planner_prompt"),
             evaluator_prompt=row.get("evaluator_prompt"),

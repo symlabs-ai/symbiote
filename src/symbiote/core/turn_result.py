@@ -25,6 +25,7 @@ STOP_REASONS: dict[str, str] = {
     "stagnation": "the same successful call was repeated",
     "circuit_breaker": "a tool failed three times in a row",
     "timeout": "the loop ran past its time limit",
+    "budget": "the turn reached its spending ceiling (max_turn_tokens / max_turn_llm_calls)",
     "on_after_tool_result": "the host's on_after_tool_result hook ended the turn",
     "block_failure": "a long_run project ended with blocks not completed",
 }

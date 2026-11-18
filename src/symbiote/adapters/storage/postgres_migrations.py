@@ -507,6 +507,12 @@ CREATE INDEX idx_pending_approvals_subject ON pending_approvals(symbiote_id, sub
 ALTER TABLE audit_log ADD COLUMN approval_id TEXT COLLATE "C";
 """
 
+_V10_TURN_BUDGET = """
+ALTER TABLE environment_configs ADD COLUMN max_turn_tokens INTEGER DEFAULT 0;
+
+ALTER TABLE environment_configs ADD COLUMN max_turn_llm_calls INTEGER DEFAULT 0;
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "baseline", _V1_BASELINE),
     (2, "session_locks", _V2_SESSION_LOCKS),
@@ -517,6 +523,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (7, "host_options", _V7_HOST_OPTIONS),
     (8, "llm_usage", _V8_LLM_USAGE),
     (9, "pending_approvals", _V9_PENDING_APPROVALS),
+    (10, "turn_budget", _V10_TURN_BUDGET),
 )
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
