@@ -480,6 +480,25 @@ host may notice:
 - `import symbiote.discovery` now exposes `parse_openapi`, `http_config_for`
   and `OpenAPIOperation`.
 
+### Upgrading to 0.8.13
+
+No migration. Without the new retention windows set, `prune()` deletes
+exactly what it deleted before. What a host may notice:
+
+- **`prune()`** returns more keys: one per table it can touch (`audit_log`,
+  `reflection_audit`, `skill_review_audit`, `pending_approvals`, `decisions`,
+  `process_instances`, `artifacts`, `session_locks`, `session_scores`), plus
+  `summaries` and `sessions`. Code that compares the whole result with a
+  fixed dictionary needs the new keys.
+- **If you remove messages for privacy**, check the session summaries: the
+  message window never removed them, and the default summary is the text of
+  the session's last five messages. Set `summary_retention_days`, or
+  `session_summary_mode="off"` so none is written. See
+  [Retention](#retention).
+- **If you keep one session open per conversation**, the message and trace
+  windows never reached it. `retention_basis="age"` makes them apply by the
+  age of each row.
+
 ---
 
 ## Tool Registration

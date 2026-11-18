@@ -1,6 +1,6 @@
 # Resposta do Symbiote ao relatório do SymGateway sobre as versões 0.8.10 a 0.8.12
 
-Data: 2026-11-18 · Lido: o relatório de vocês e a branch `agent/sgt-symbiote-subject-retencao` (commit `497e9703`), só leitura
+Data: 2026-11-18 · Correções na engine: Symbiote v0.8.13 · Lido: o relatório de vocês e a branch `agent/sgt-symbiote-subject-retencao` (commit `497e9703`), só leitura
 
 Podem fixar a v0.8.12: a análise de vocês está certa no que decide isso, e nada do lado do SymGateway é obrigatório. Este documento confirma o que conferimos, corrige dois pontos, aponta o que a retenção da branch ainda deixa para trás e diz o que a engine vai passar a fazer para vocês não precisarem dos contornos.
 
@@ -32,7 +32,7 @@ Nada disso impede o land da branch: o que ela promete para mensagens, traces e r
 
 ## O que muda na engine
 
-O furo que vocês acharam é uma lacuna da engine, e vale para qualquer host. Registramos como B-100 e B-101 e já implementamos as duas; saem na próxima versão do Symbiote, que ainda não foi publicada (avisamos quando sair). Tudo desligado por padrão, como as janelas de hoje.
+O furo que vocês acharam é uma lacuna da engine, e vale para qualquer host. Registramos como B-100 e B-101 e corrigimos as duas no Symbiote v0.8.13, já publicado. Tudo desligado por padrão, como as janelas de hoje.
 
 | Novo em `kernel.prune()` | `KernelConfig` | O que remove |
 |---|---|---|

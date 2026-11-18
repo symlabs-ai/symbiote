@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.13] - 2026-11-18
+
 Retenção: o que sobrava depois de um `prune` (B-100, B-101; achados no relatório da equipe do SymGateway). Todas as janelas novas vêm desligadas.
 
 **Mudança de comportamento para hosts:** `kernel.prune()` devolve mais entradas: uma por tabela que ele pode tocar (`audit_log`, `reflection_audit`, `skill_review_audit`, `pending_approvals`, `decisions`, `process_instances`, `artifacts`, `session_locks`, `session_scores`), mais `summaries` e `sessions`. Quem compara o resultado inteiro com um dicionário fixo precisa ajustar. Sem as janelas novas configuradas, o `prune` apaga exatamente o que apagava.
