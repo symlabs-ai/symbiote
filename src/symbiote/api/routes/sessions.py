@@ -28,11 +28,13 @@ from symbiote.api.schemas import (
     ChatRequest,
     ChatResponse,
     CreateMessageRequest,
+    CreateRevisionRequest,
     CreateSessionRequest,
     MemoryEntryResponse,
     MessageResponse,
     ResolveApprovalRequest,
     SessionResponse,
+    SetSessionRevisionRequest,
 )
 from symbiote.core.exceptions import (
     DuplicateEntityError,
@@ -60,21 +62,23 @@ def create_session(
     body: CreateSessionRequest,
     auth: Annotated[APIKey, Depends(require_auth)],
     adapter: Annotated[StoragePort, Depends(get_adapter)],
-    sessions: Annotated[SessionManager, Depends(get_session_manager)],
+    kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
 ) -> SessionResponse:
     _require_symbiote_access(adapter, body.symbiote_id, auth)
     if body.external_key:
-        sess = sessions.get_or_create_by_external_key(
+        sess = kernel.get_or_create_session(
             symbiote_id=body.symbiote_id,
             external_key=body.external_key,
             goal=body.goal,
             subject_key=body.subject_key,
+            revision=body.revision,
         )
     else:
-        sess = sessions.start(
+        sess = kernel.start_session(
             symbiote_id=body.symbiote_id,
             goal=body.goal,
             subject_key=body.subject_key,
+            revision=body.revision,
         )
     return SessionResponse(
         id=sess.id,
@@ -82,8 +86,87 @@ def create_session(
         goal=sess.goal,
         external_key=sess.external_key,
         subject_key=sess.subject_key,
+        revision=sess.revision,
         status=sess.status,
     )
+
+
+@router.put("/sessions/{session_id}/revision", response_model=SessionResponse)
+def set_session_revision(
+    session_id: str,
+    body: SetSessionRevisionRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
+) -> SessionResponse:
+    """Pin a session to another revision, or to none (``null``: the current
+    configuration). Takes effect on its next turn."""
+    _require_session_access(kernel._storage, session_id, auth)
+    sess = kernel.set_session_revision(session_id, body.revision)
+    return SessionResponse(
+        id=sess.id,
+        symbiote_id=sess.symbiote_id,
+        goal=sess.goal,
+        external_key=sess.external_key,
+        subject_key=sess.subject_key,
+        revision=sess.revision,
+        status=sess.status,
+        summary=sess.summary,
+    )
+
+
+# ── Revisions of a symbiote's configuration ──────────────────────────────
+
+
+@router.post("/symbiotes/{symbiote_id}/revisions", status_code=201)
+def create_revision(
+    symbiote_id: str,
+    body: CreateRevisionRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
+) -> dict:
+    """Take an immutable picture of the symbiote's persona, config and
+    knowledge under ``label``. A label is never overwritten (409)."""
+    _require_symbiote_access(kernel._storage, symbiote_id, auth)
+    return kernel.create_revision(symbiote_id, body.label, note=body.note).model_dump()
+
+
+@router.get("/symbiotes/{symbiote_id}/revisions")
+def list_revisions(
+    symbiote_id: str,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
+) -> list[dict]:
+    """The revisions of a symbiote, newest first, with the sessions pinned
+    to each."""
+    _require_symbiote_access(kernel._storage, symbiote_id, auth)
+    return kernel.inspector.list_revisions(symbiote_id)
+
+
+@router.get("/symbiotes/{symbiote_id}/revisions/{label}")
+def get_revision(
+    symbiote_id: str,
+    label: str,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
+) -> dict:
+    """One revision: the persona and the config as they were."""
+    _require_symbiote_access(kernel._storage, symbiote_id, auth)
+    revision = kernel.get_revision(symbiote_id, label)
+    if revision is None:
+        raise HTTPException(status_code=404, detail="Revision not found")
+    return revision.model_dump()
+
+
+@router.post("/symbiotes/{symbiote_id}/revisions/{label}/retire")
+def retire_revision(
+    symbiote_id: str,
+    label: str,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
+) -> dict:
+    """Close a revision to new sessions; the pinned ones go on."""
+    _require_symbiote_access(kernel._storage, symbiote_id, auth)
+    return kernel.retire_revision(symbiote_id, label).model_dump()
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
@@ -103,6 +186,7 @@ def get_session(
         goal=sess.goal,
         external_key=sess.external_key,
         subject_key=sess.subject_key,
+        revision=sess.revision,
         status=sess.status,
         summary=sess.summary,
     )
@@ -125,6 +209,7 @@ def get_session_by_key(
         goal=sess.goal,
         external_key=sess.external_key,
         subject_key=sess.subject_key,
+        revision=sess.revision,
         status=sess.status,
         summary=sess.summary,
     )
@@ -175,6 +260,7 @@ def close_session(
         goal=sess.goal,
         external_key=sess.external_key,
         subject_key=sess.subject_key,
+        revision=sess.revision,
         status=sess.status,
         summary=sess.summary,
     )

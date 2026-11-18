@@ -45,12 +45,15 @@ class SessionManager:
         workspace_id: str | None = None,
         external_key: str | None = None,
         subject_key: str | None = None,
+        revision: str | None = None,
     ) -> Session:
         """Create a new active session and persist it.
 
         ``subject_key`` names the end user the session belongs to (see
         ``symbiote.core.subjects``); it cannot be changed afterwards. Raises
-        ``ValidationError`` when it is empty or too long.
+        ``ValidationError`` when it is empty or too long. ``revision`` is the
+        label of the revision the session is pinned to (the caller checked
+        that it exists).
         """
         session = Session(
             symbiote_id=symbiote_id,
@@ -58,13 +61,14 @@ class SessionManager:
             workspace_id=workspace_id,
             external_key=external_key,
             subject_key=validate_subject_key(subject_key),
+            revision=revision,
             status="active",
         )
         self._storage.execute(
             "INSERT INTO sessions "
             "(id, symbiote_id, goal, workspace_id, external_key, subject_key, "
-            "status, started_at, ended_at, summary) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "status, started_at, ended_at, summary, revision) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 session.id,
                 session.symbiote_id,
@@ -76,8 +80,20 @@ class SessionManager:
                 session.started_at.isoformat(),
                 None,
                 None,
+                session.revision,
             ),
         )
+        return session
+
+    def set_revision(self, session_id: str, revision: str | None) -> Session:
+        """Pin the session to another revision, or to none (``None``: the
+        current configuration). Raises EntityNotFoundError if not found."""
+        self._storage.execute(
+            "UPDATE sessions SET revision = ? WHERE id = ?", (revision, session_id)
+        )
+        session = self.get(session_id)
+        if session is None:
+            raise EntityNotFoundError("Session", session_id)
         return session
 
     def get_or_create_by_external_key(
@@ -86,6 +102,7 @@ class SessionManager:
         external_key: str,
         goal: str | None = None,
         subject_key: str | None = None,
+        revision: str | None = None,
     ) -> Session:
         """Find an active session by external_key, or create one.
 
@@ -98,17 +115,22 @@ class SessionManager:
         ``subject_key`` raises ``ValidationError``, because the conversation
         of one end user must never continue as another's. Without
         ``subject_key`` the existing session is returned as it is.
+
+        ``revision`` is given to a session created here. A session that
+        already exists keeps the revision it has (``Session.revision`` says
+        which): a conversation in progress does not change configuration
+        because a newer revision was published. ``set_revision`` moves it.
         """
         subject_key = validate_subject_key(subject_key)
         with _external_key_lock(symbiote_id, external_key):
             try:
                 return self._get_or_create_by_external_key(
-                    symbiote_id, external_key, goal, subject_key
+                    symbiote_id, external_key, goal, subject_key, revision
                 )
             except StorageIntegrityError:
                 # Another process created it between our SELECT and INSERT.
                 return self._get_or_create_by_external_key(
-                    symbiote_id, external_key, goal, subject_key
+                    symbiote_id, external_key, goal, subject_key, revision
                 )
 
     def _get_or_create_by_external_key(
@@ -117,6 +139,7 @@ class SessionManager:
         external_key: str,
         goal: str | None,
         subject_key: str | None = None,
+        revision: str | None = None,
     ) -> Session:
         row = self._storage.fetch_one(
             "SELECT * FROM sessions WHERE external_key = ? AND symbiote_id = ? "
@@ -145,6 +168,7 @@ class SessionManager:
             goal=goal,
             external_key=external_key,
             subject_key=subject_key,
+            revision=revision,
         )
 
     def find_by_external_key(self, external_key: str) -> Session | None:
@@ -316,6 +340,7 @@ class SessionManager:
             workspace_id=row.get("workspace_id"),
             external_key=row.get("external_key"),
             subject_key=row.get("subject_key"),
+            revision=row.get("revision"),
             status=row["status"],
             started_at=datetime.fromisoformat(row["started_at"]),
             ended_at=ended_at,

@@ -7,6 +7,7 @@ from datetime import datetime
 
 from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.ports import StoragePort
+from symbiote.core.revisions import active_revision_for
 from symbiote.core.sql import contains, like_contains
 from symbiote.knowledge.models import KnowledgeEntry
 from symbiote.memory.recall import terms
@@ -101,6 +102,10 @@ class KnowledgeService:
         ``auto_recall_only`` leaves out the entries kept for search only
         (``auto_recall=False``): it is how the context of a turn is packed.
 
+        Inside a turn of a session pinned to a revision
+        (``symbiote.core.revisions``) the entries searched are the ones the
+        revision holds, as they were when it was created.
+
         Entries whose name or content contains ``theme`` come first (newest
         first). The remaining slots go to entries sharing terms with it —
         stop words, accents and common suffixes ignored, as in memory recall
@@ -111,12 +116,23 @@ class KnowledgeService:
         pattern = like_contains(theme)
         # Rows from before the column existed count as packed (NULL).
         recall = " AND COALESCE(auto_recall, 1) = 1" if auto_recall_only else ""
+        # Where the entries are: the symbiote's own, or the copy a revision keeps.
+        revision = active_revision_for(symbiote_id)
+        if revision is not None:
+            source = (
+                "SELECT entry_id AS id, symbiote_id, name, source_path, content, type, "
+                "tags_json, created_at, auto_recall FROM revision_knowledge "
+                "WHERE revision_id = ?"
+            )
+            owner = revision.id
+        else:
+            source = "SELECT * FROM knowledge_entries WHERE symbiote_id = ?"
+            owner = symbiote_id
         rows = self._storage.fetch_all(
-            "SELECT * FROM knowledge_entries "
-            f"WHERE symbiote_id = ? AND ({contains('name')} OR {contains('content')})"
+            f"{source} AND ({contains('name')} OR {contains('content')})"  # noqa: S608
             f"{recall} "
             "ORDER BY created_at DESC LIMIT ?",
-            (symbiote_id, pattern, pattern, limit),
+            (owner, pattern, pattern, limit),
         )
         results = [self._row_to_entry(r) for r in rows]
         if len(results) >= limit:
@@ -127,9 +143,8 @@ class KnowledgeService:
             return results
         seen = {e.id for e in results}
         candidates = self._storage.fetch_all(
-            f"SELECT * FROM knowledge_entries WHERE symbiote_id = ?{recall} "
-            "ORDER BY created_at DESC LIMIT ?",
-            (symbiote_id, _TERM_CANDIDATES),
+            f"{source}{recall} ORDER BY created_at DESC LIMIT ?",  # noqa: S608
+            (owner, _TERM_CANDIDATES),
         )
         scored: list[tuple[float, int, KnowledgeEntry]] = []
         for position, row in enumerate(candidates):

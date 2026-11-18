@@ -30,6 +30,8 @@ class TurnRecord:
     skills: list[str] = field(default_factory=list)
     tokens_estimate: int = 0
     assembled: bool = False
+    # Label of the revision the turn ran on (None: the current configuration).
+    revision: str | None = None
     # What the model calls made for this turn cost. The calls of a symbiote
     # this turn delegated to (``spawn``) are included: ``parent`` is the turn
     # that delegated, and every call is added up the chain.

@@ -513,6 +513,47 @@ ALTER TABLE environment_configs ADD COLUMN max_turn_tokens INTEGER DEFAULT 0;
 ALTER TABLE environment_configs ADD COLUMN max_turn_llm_calls INTEGER DEFAULT 0;
 """
 
+_V11_REVISIONS = """
+CREATE TABLE symbiote_revisions (
+    rowid BIGINT GENERATED ALWAYS AS IDENTITY,
+    id           TEXT COLLATE "C" PRIMARY KEY,
+    symbiote_id  TEXT COLLATE "C" NOT NULL,
+    label        TEXT COLLATE "C" NOT NULL,
+    note         TEXT COLLATE "C",
+    name         TEXT COLLATE "C",
+    role         TEXT COLLATE "C",
+    persona_json TEXT COLLATE "C",
+    config_json  TEXT COLLATE "C",
+    created_at   TEXT COLLATE "C" NOT NULL,
+    retired_at   TEXT COLLATE "C"
+);
+
+CREATE UNIQUE INDEX idx_revisions_symbiote_label ON symbiote_revisions(symbiote_id, label);
+
+CREATE TABLE revision_knowledge (
+    rowid BIGINT GENERATED ALWAYS AS IDENTITY,
+    id          TEXT COLLATE "C" PRIMARY KEY,
+    revision_id TEXT COLLATE "C" NOT NULL,
+    entry_id    TEXT COLLATE "C" NOT NULL,
+    symbiote_id TEXT COLLATE "C",
+    name        TEXT COLLATE "C" NOT NULL,
+    source_path TEXT COLLATE "C",
+    content     TEXT COLLATE "C",
+    type        TEXT COLLATE "C",
+    tags_json   TEXT COLLATE "C" DEFAULT '[]',
+    created_at  TEXT COLLATE "C",
+    auto_recall INTEGER DEFAULT 1
+);
+
+CREATE INDEX idx_revision_knowledge_revision ON revision_knowledge(revision_id);
+
+ALTER TABLE sessions ADD COLUMN revision TEXT COLLATE "C";
+
+ALTER TABLE turn_contexts ADD COLUMN revision TEXT COLLATE "C";
+
+ALTER TABLE llm_usage ADD COLUMN revision TEXT COLLATE "C";
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "baseline", _V1_BASELINE),
     (2, "session_locks", _V2_SESSION_LOCKS),
@@ -524,6 +565,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (8, "llm_usage", _V8_LLM_USAGE),
     (9, "pending_approvals", _V9_PENDING_APPROVALS),
     (10, "turn_budget", _V10_TURN_BUDGET),
+    (11, "revisions", _V11_REVISIONS),
 )
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

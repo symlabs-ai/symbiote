@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
+from symbiote.core.revisions import current_revision
 from symbiote.environment.descriptors import ToolDescriptor
 from symbiote.environment.exec_context import (
     SpawnContext,
@@ -220,6 +221,7 @@ class SubagentManager:
                 symbiote_id=target.id,
                 goal=f"[subagent] {task}",
                 subject_key=self._calling_subject(),
+                revision=self._matching_revision(target.id),
             )
             # From here on hooks, the LLM adapter and tools run for the
             # delegated symbiote: say so (``current_spawn()``).
@@ -305,6 +307,22 @@ class SubagentManager:
             return None
         parent = self._kernel.get_session(caller.session_id)
         return parent.subject_key if parent is not None else None
+
+    def _matching_revision(self, target_id: str) -> str | None:
+        """The revision the delegated symbiote works on.
+
+        A session pinned to revision ``L`` delegates to the revision ``L`` of
+        the other symbiote when that symbiote has one that is not retired: a
+        team published under one label answers as that label. Otherwise the
+        delegate reads its current configuration.
+        """
+        pinned = current_revision()
+        if pinned is None:
+            return None
+        other = self._kernel.get_revision(target_id, pinned.label)
+        if other is None or other.retired_at is not None:
+            return None
+        return other.label
 
     def _resolve_symbiote(self, name_or_id: str):
         """Resolve a Symbiota by name or ID."""

@@ -100,6 +100,7 @@ class SymbioteClient:
         goal: str | None = None,
         external_key: str | None = None,
         subject_key: str | None = None,
+        revision: str | None = None,
     ) -> dict:
         """Create or resume a session.
 
@@ -107,6 +108,10 @@ class SymbioteClient:
         symbiote talks to several people: the session reads the symbiote's
         shared memories plus that user's own, and what it learns is stored
         for that user alone. It cannot be changed afterwards.
+
+        ``revision`` pins a new session to a revision of the symbiote's
+        configuration (``create_revision``); a session that already exists
+        keeps the one it has.
         """
         body: dict[str, Any] = {"symbiote_id": symbiote_id}
         if goal is not None:
@@ -115,7 +120,33 @@ class SymbioteClient:
             body["external_key"] = external_key
         if subject_key is not None:
             body["subject_key"] = subject_key
+        if revision is not None:
+            body["revision"] = revision
         return self._post("/sessions", body)
+
+    # ── Revisions of the configuration ────────────────────────────────────
+
+    def create_revision(self, symbiote_id: str, label: str, *, note: str | None = None) -> dict:
+        """Take an immutable picture of the Symbiota's persona, config and
+        knowledge under ``label``."""
+        body: dict[str, Any] = {"label": label}
+        if note is not None:
+            body["note"] = note
+        return self._post(f"/symbiotes/{symbiote_id}/revisions", body)
+
+    def list_revisions(self, symbiote_id: str) -> list[dict]:
+        """The revisions of a Symbiota, newest first."""
+        return self._get(f"/symbiotes/{symbiote_id}/revisions")
+
+    def retire_revision(self, symbiote_id: str, label: str) -> dict:
+        """Close a revision to new sessions."""
+        return self._post(f"/symbiotes/{symbiote_id}/revisions/{label}/retire", {})
+
+    def set_session_revision(self, session_id: str, revision: str | None) -> dict:
+        """Pin a session to another revision, or to none (``None``)."""
+        resp = self._client.put(f"/sessions/{session_id}/revision", json={"revision": revision})
+        resp.raise_for_status()
+        return resp.json()
 
     def get_session(self, session_id: str) -> dict:
         """Get session details."""

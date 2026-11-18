@@ -490,6 +490,7 @@ def test_the_record_holds_no_conversation_text(shop) -> None:
         "model", "prompt_tokens", "completion_tokens", "total_tokens",
         "cache_read_tokens", "cache_write_tokens", "cache_write_5m_tokens",
         "cache_write_1h_tokens", "reasoning_tokens", "elapsed_ms", "success", "created_at",
+        "revision",
     }
     assert "4111" not in json.dumps(row)
 

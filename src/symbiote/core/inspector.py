@@ -62,16 +62,19 @@ class KernelInspector:
         *,
         status: str | None = None,
         subject_key: str | None | AnySubject = ANY_SUBJECT,
+        revision: str | None = None,
         limit: int = 50,
     ) -> list[dict]:
         """Sessions, newest first, with the symbiote's name and the score (if any).
 
         ``subject_key`` keeps the sessions of one end user; ``None`` keeps
-        the ones without an end user. By default, all of them.
+        the ones without an end user. By default, all of them. ``revision``
+        keeps the sessions pinned to that revision; each row says which one
+        it is pinned to (``None``: the current configuration).
         """
         sql = (
             "SELECT s.id, s.symbiote_id, sym.name AS symbiote_name, s.goal, s.status, "
-            "s.external_key, s.subject_key, s.started_at, s.ended_at, s.summary, "
+            "s.external_key, s.subject_key, s.revision, s.started_at, s.ended_at, s.summary, "
             "sc.auto_score, sc.user_score, sc.final_score, sc.stop_reason "
             "FROM sessions s JOIN symbiotes sym ON sym.id = s.symbiote_id "
             "LEFT JOIN session_scores sc ON sc.session_id = s.id"
@@ -89,6 +92,9 @@ class KernelInspector:
         elif not isinstance(subject_key, AnySubject):
             conditions.append("s.subject_key = ?")
             params.append(subject_key)
+        if revision is not None:
+            conditions.append("s.revision = ?")
+            params.append(revision)
         if conditions:
             sql += " WHERE " + " AND ".join(conditions)
         sql += " ORDER BY s.started_at DESC, s.rowid DESC LIMIT ?"
@@ -256,7 +262,7 @@ class KernelInspector:
             "SELECT id, session_id, symbiote_id, memories_json, knowledge_json, "
             "skills_json, tokens_estimate, created_at, "
             "llm_calls, prompt_tokens, completion_tokens, total_tokens, "
-            "cache_read_tokens, cache_write_tokens "
+            "cache_read_tokens, cache_write_tokens, revision "
             f"FROM turn_contexts WHERE {column} = ? "
             "ORDER BY created_at DESC, rowid DESC LIMIT ?",
             (value, limit),
@@ -324,6 +330,26 @@ class KernelInspector:
         rows = self._storage.fetch_all(sql, tuple(params))
         return [_decode(r, "ops_json") for r in rows]
 
+    # ── revisions of the configuration ─────────────────────────────────
+
+    def list_revisions(self, symbiote_id: str) -> list[dict]:
+        """The revisions of a symbiote, newest first, each with how many
+        sessions are pinned to it (``sessions``) and how many of those are
+        still open (``active_sessions``). The picture itself (persona,
+        config, knowledge) is ``kernel.get_revision(symbiote_id, label)``."""
+        return self._storage.fetch_all(
+            "SELECT r.id, r.label, r.note, r.created_at, r.retired_at, "
+            "(SELECT COUNT(*) FROM revision_knowledge k WHERE k.revision_id = r.id) "
+            "AS knowledge_count, "
+            "(SELECT COUNT(*) FROM sessions s WHERE s.symbiote_id = r.symbiote_id "
+            "AND s.revision = r.label) AS sessions, "
+            "(SELECT COUNT(*) FROM sessions s WHERE s.symbiote_id = r.symbiote_id "
+            "AND s.revision = r.label AND s.status = 'active') AS active_sessions "
+            "FROM symbiote_revisions r WHERE r.symbiote_id = ? "
+            "ORDER BY r.created_at DESC, r.rowid DESC",
+            (symbiote_id,),
+        )
+
     # ── approvals that wait for a person ───────────────────────────────
 
     def list_pending(
@@ -373,6 +399,9 @@ class KernelInspector:
         "model": "u.model",
         "day": "SUBSTR(u.created_at, 1, 10)",
         "subject": "s.subject_key",
+        # The revision the call ran on; for a call made outside a turn
+        # (reflection, summary), the one its conversation is pinned to.
+        "revision": "COALESCE(u.revision, s.revision)",
     }
     _USAGE_SUMS = (
         "COUNT(*) AS llm_calls, "
@@ -520,7 +549,7 @@ class KernelInspector:
             "SELECT u.id, u.symbiote_id, u.session_id, u.root_session_id, u.purpose, "
             "u.provider, u.model, u.prompt_tokens, u.completion_tokens, u.total_tokens, "
             "u.cache_read_tokens, u.cache_write_tokens, u.cache_write_5m_tokens, "
-            "u.cache_write_1h_tokens, u.reasoning_tokens, "
+            "u.cache_write_1h_tokens, u.reasoning_tokens, u.revision, "
             f"u.elapsed_ms, u.success, u.created_at{self._USAGE_FROM}{where} "  # noqa: S608
             "ORDER BY u.created_at DESC, u.rowid DESC LIMIT ?",
             (*params, limit),

@@ -45,6 +45,9 @@ class Session(BaseModel):
     # The end user this session belongs to (see ``symbiote.core.subjects``).
     # Set when the session starts and never changed. None: no end user.
     subject_key: str | None = None
+    # The revision of the symbiote's configuration this session is pinned
+    # to (see ``symbiote.core.revisions``). None: the current configuration.
+    revision: str | None = None
     status: str = "active"
     started_at: datetime = Field(default_factory=_utcnow)
     ended_at: datetime | None = None

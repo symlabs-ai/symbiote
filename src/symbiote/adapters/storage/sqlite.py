@@ -189,6 +189,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "_migrate_llm_usage",
     "_migrate_pending_approvals",
     "_migrate_turn_budget",
+    "_migrate_revisions",
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -739,6 +740,51 @@ class SQLiteAdapter:
         for stmt in (
             "ALTER TABLE environment_configs ADD COLUMN max_turn_tokens INTEGER DEFAULT 0",
             "ALTER TABLE environment_configs ADD COLUMN max_turn_llm_calls INTEGER DEFAULT 0",
+        ):
+            with contextlib.suppress(sqlite3.OperationalError):  # column already exists
+                self._conn.execute(stmt)
+        self._conn.commit()
+
+    def _migrate_revisions(self) -> None:
+        """17: named revisions of a symbiote's configuration, the knowledge
+        each one holds, and the revision a session, a turn and a model call
+        ran on."""
+        for stmt in (
+            """CREATE TABLE IF NOT EXISTS symbiote_revisions (
+                id TEXT PRIMARY KEY,
+                symbiote_id TEXT NOT NULL,
+                label TEXT NOT NULL,
+                note TEXT,
+                name TEXT,
+                role TEXT,
+                persona_json TEXT,
+                config_json TEXT,
+                created_at TEXT NOT NULL,
+                retired_at TEXT
+            )""",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_revisions_symbiote_label "
+            "ON symbiote_revisions(symbiote_id, label)",
+            """CREATE TABLE IF NOT EXISTS revision_knowledge (
+                id TEXT PRIMARY KEY,
+                revision_id TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                symbiote_id TEXT,
+                name TEXT NOT NULL,
+                source_path TEXT,
+                content TEXT,
+                type TEXT,
+                tags_json TEXT DEFAULT '[]',
+                created_at TEXT,
+                auto_recall INTEGER DEFAULT 1
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_revision_knowledge_revision "
+            "ON revision_knowledge(revision_id)",
+        ):
+            self._conn.execute(stmt)
+        for stmt in (
+            "ALTER TABLE sessions ADD COLUMN revision TEXT",
+            "ALTER TABLE turn_contexts ADD COLUMN revision TEXT",
+            "ALTER TABLE llm_usage ADD COLUMN revision TEXT",
         ):
             with contextlib.suppress(sqlite3.OperationalError):  # column already exists
                 self._conn.execute(stmt)

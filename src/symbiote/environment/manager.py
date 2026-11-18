@@ -9,6 +9,7 @@ from typing import Any
 from symbiote.core.exceptions import StorageIntegrityError, ValidationError
 from symbiote.core.models import EnvironmentConfig
 from symbiote.core.ports import StoragePort
+from symbiote.core.revisions import active_revision_for
 
 # Serialises read-modify-write of environment configs in this process (one
 # lock for every manager: the API builds a manager per request). Across
@@ -194,7 +195,7 @@ class EnvironmentManager:
     ) -> list[str]:
         """Authorize *tool_ids* in one step (no lost update); returns the list."""
         with _CONFIG_LOCK:
-            current = self.list_tools(symbiote_id, workspace_id)
+            current = self._current_tools(symbiote_id, workspace_id)
             merged = current + [t for t in dict.fromkeys(tool_ids) if t not in current]
             self.configure(symbiote_id=symbiote_id, workspace_id=workspace_id, tools=merged)
             return merged
@@ -205,7 +206,7 @@ class EnvironmentManager:
         """Revoke *tool_ids* in one step (no lost update); returns the list."""
         with _CONFIG_LOCK:
             drop = set(tool_ids)
-            kept = [t for t in self.list_tools(symbiote_id, workspace_id) if t not in drop]
+            kept = [t for t in self._current_tools(symbiote_id, workspace_id) if t not in drop]
             self.configure(symbiote_id=symbiote_id, workspace_id=workspace_id, tools=kept)
             return kept
 
@@ -241,13 +242,43 @@ class EnvironmentManager:
     def get_config(
         self, symbiote_id: str, workspace_id: str | None = None
     ) -> EnvironmentConfig | None:
-        """Fetch config. If workspace_id given, try workspace-specific first, fall back to symbiote-level."""
+        """The config that governs the symbiote right now.
+
+        Inside a turn of a session pinned to a revision
+        (``symbiote.core.revisions``) it is the config of that revision, as
+        it was when the revision was created (``None`` when the symbiote had
+        none then). Everywhere else it is the current config: the
+        workspace's own when ``workspace_id`` is given and has one, else the
+        symbiote's. Every ``get_*`` reader of this class goes through here.
+        """
+        revision = active_revision_for(symbiote_id)
+        if revision is not None:
+            if revision.config is None:
+                return None
+            return EnvironmentConfig(
+                **{
+                    **revision.config,
+                    "symbiote_id": symbiote_id,
+                    "workspace_id": None,
+                }
+            )
+        return self.current_config(symbiote_id, workspace_id)
+
+    def current_config(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> EnvironmentConfig | None:
+        """The config as it is stored now, whatever revision a turn is
+        pinned to: what ``configure`` edits and what a new revision copies."""
         if workspace_id is not None:
             cfg = self._fetch_exact(symbiote_id, workspace_id)
             if cfg is not None:
                 return cfg
         # Fall back to symbiote-level (workspace_id IS NULL)
         return self._fetch_exact(symbiote_id, None)
+
+    def _current_tools(self, symbiote_id: str, workspace_id: str | None) -> list[str]:
+        cfg = self.current_config(symbiote_id, workspace_id)
+        return list(cfg.tools) if cfg is not None else []
 
     def list_tools(
         self, symbiote_id: str, workspace_id: str | None = None

@@ -54,6 +54,22 @@ class CreateSessionRequest(BaseModel):
     # shared memories plus this user's own, and what it learns is stored for
     # this user alone. An opaque value chosen by the host; cannot be changed.
     subject_key: str | None = Field(default=None, min_length=1, max_length=MAX_KEY_CHARS)
+    # Label of the revision of the symbiote's configuration the session is
+    # pinned to. Omitted: the session reads the current configuration.
+    revision: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class CreateRevisionRequest(BaseModel):
+    """Take a picture of the symbiote's configuration under a label."""
+
+    label: str = Field(min_length=1, max_length=100)
+    note: str | None = Field(default=None, max_length=MAX_TEXT_CHARS)
+
+
+class SetSessionRevisionRequest(BaseModel):
+    """Pin a session to another revision, or to none (null)."""
+
+    revision: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class SessionResponse(BaseModel):
@@ -62,6 +78,7 @@ class SessionResponse(BaseModel):
     goal: str | None = None
     external_key: str | None = None
     subject_key: str | None = None
+    revision: str | None = None
     status: str
     summary: str | None = None
 

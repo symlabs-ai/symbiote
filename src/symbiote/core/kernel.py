@@ -51,6 +51,13 @@ from symbiote.core.ports import (
 )
 from symbiote.core.redaction import RedactingStorage, Redactor
 from symbiote.core.reflection import ReflectionEngine
+from symbiote.core.revisions import (
+    Revision,
+    RevisionStore,
+    active_revision_for,
+    bind_revision,
+    reset_revision,
+)
 from symbiote.core.scoring import compute_auto_score, compute_final_score
 from symbiote.core.session import SessionManager
 from symbiote.core.session_lock import (
@@ -332,6 +339,9 @@ class SymbioteKernel:
         self._tool_gateway.secrets_hook = self._learn_secret_params
         self._policy_gate.params_filter = self._mask_secret_params
 
+        # Named revisions of a symbiote's configuration (sessions pin one).
+        self._revisions = RevisionStore(self._storage)
+
         # Tool calls that wait for a person (``ApprovalDecision.defer``).
         self._approvals = PendingApprovalStore(
             self._storage,
@@ -510,6 +520,8 @@ class SymbioteKernel:
         from uuid import uuid4
 
         turn = current_turn_record()
+        # The revision the call ran on (only calls of a pinned turn have one).
+        pinned = active_revision_for(record.symbiote_id) if record.symbiote_id else None
         if turn is not None:
             turn.add_usage(
                 record.prompt_tokens,
@@ -524,8 +536,8 @@ class SymbioteKernel:
                 "(id, symbiote_id, session_id, root_session_id, purpose, provider, model, "
                 "prompt_tokens, completion_tokens, total_tokens, elapsed_ms, success, "
                 "created_at, cache_read_tokens, cache_write_tokens, "
-                "cache_write_5m_tokens, cache_write_1h_tokens, reasoning_tokens) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "cache_write_5m_tokens, cache_write_1h_tokens, reasoning_tokens, revision) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     str(uuid4()),
                     record.symbiote_id,
@@ -545,6 +557,7 @@ class SymbioteKernel:
                     record.cache_write_5m_tokens,
                     record.cache_write_1h_tokens,
                     record.reasoning_tokens,
+                    pinned.label if pinned is not None else None,
                 ),
             )
         except Exception:
@@ -885,9 +898,17 @@ class SymbioteKernel:
         goal: str | None = None,
         external_key: str | None = None,
         subject_key: str | None = None,
+        revision: str | None = None,
     ) -> Session:
         """Start a session. Raises EntityNotFoundError for an unknown symbiote
         (instead of a bare FOREIGN KEY IntegrityError).
+
+        ``revision`` pins the session to a revision of the symbiote's
+        configuration (``create_revision``): its turns read the persona, the
+        config with its tools and the knowledge of that revision, whatever is
+        edited afterwards. Without it (the default) the session reads the
+        current configuration. Raises ``EntityNotFoundError`` for an unknown
+        label and ``ValidationError`` for a retired one.
 
         ``subject_key`` names the end user on the other side when the
         symbiote talks to several people: an opaque string the host chooses
@@ -901,14 +922,96 @@ class SymbioteKernel:
         ``EnvironmentConfig.learn_from_subject_sessions``. Raises
         ``ValidationError`` for an empty or too long key.
         """
-        if self._identity.get(symbiote_id) is None:
+        if self._identity.get_current(symbiote_id) is None:
             raise EntityNotFoundError("Symbiote", symbiote_id)
         return self._sessions.start(
             symbiote_id=symbiote_id,
             goal=goal,
             external_key=external_key,
             subject_key=subject_key,
+            revision=self._open_revision(symbiote_id, revision),
         )
+
+    def _open_revision(self, symbiote_id: str, label: str | None) -> str | None:
+        """The label a new session may be pinned to (it exists and was not
+        retired), or ``None`` for no revision."""
+        if label is None:
+            return None
+        return self._revisions.require_open(symbiote_id, label).label
+
+    # ── revisions of the configuration ────────────────────────────────
+
+    def create_revision(
+        self, symbiote_id: str, label: str, *, note: str | None = None
+    ) -> Revision:
+        """Take an immutable picture of what the symbiote is configured as
+        right now, under ``label``: the persona (name, role, persona), the
+        ``EnvironmentConfig`` with its list of tools, and the knowledge
+        entries. Sessions started with ``revision=label`` read it.
+
+        Nothing is edited here: the picture holds what the ordinary calls
+        (``update_symbiote``, ``environment.configure``,
+        ``knowledge.register_source``) already validated and stored. Not
+        part of a revision, and shared by every session: memories, skills,
+        end users, the harness texts and the definitions of the tools.
+
+        Raises ``EntityNotFoundError`` for an unknown symbiote,
+        ``DuplicateEntityError`` when the label is taken (a revision is never
+        overwritten) and ``ValidationError`` for an empty or too long label.
+        """
+        symbiote = self._identity.get_current(symbiote_id)
+        if symbiote is None:
+            raise EntityNotFoundError("Symbiote", symbiote_id)
+        config = self._environment.current_config(symbiote_id)
+        return self._revisions.create(
+            symbiote_id=symbiote_id,
+            label=label,
+            note=note,
+            name=symbiote.name,
+            role=symbiote.role,
+            persona=dict(symbiote.persona_json),
+            config=config.model_dump() if config is not None else None,
+            knowledge=self._knowledge.list_by_symbiote(symbiote_id),
+        )
+
+    def get_revision(self, symbiote_id: str, label: str) -> Revision | None:
+        """One revision of a symbiote, or ``None``."""
+        return self._revisions.get(symbiote_id, label)
+
+    def list_revisions(self, symbiote_id: str) -> list[Revision]:
+        """The revisions of a symbiote, newest first."""
+        return self._revisions.list_for(symbiote_id)
+
+    def retire_revision(self, symbiote_id: str, label: str) -> Revision:
+        """Close a revision to new sessions. The sessions already pinned to
+        it go on reading it; move one with ``set_session_revision``. Raises
+        ``EntityNotFoundError`` for an unknown label."""
+        return self._revisions.retire(symbiote_id, label)
+
+    def set_session_revision(self, session_id: str, revision: str | None) -> Session:
+        """Pin a session to another revision, or to none (``None``: the
+        current configuration). Takes effect on the session's next turn.
+        Raises ``EntityNotFoundError`` for an unknown session or label and
+        ``ValidationError`` for a retired label."""
+        session = self._sessions.get(session_id)
+        if session is None:
+            raise EntityNotFoundError("Session", session_id)
+        return self._sessions.set_revision(
+            session_id, self._open_revision(session.symbiote_id, revision)
+        )
+
+    def _bind_session_revision(
+        self, symbiote_id: str, label: str | None, record: TurnRecord
+    ) -> contextvars.Token:
+        """Make the session's revision the one of the turn in progress."""
+        revision = self._revisions.get(symbiote_id, label) if label else None
+        if label and revision is None:
+            logging.getLogger(__name__).warning(
+                "revision %r of symbiote %s is gone; the turn reads the current "
+                "configuration", label, symbiote_id,
+            )
+        record.revision = revision.label if revision is not None else None
+        return bind_revision(revision)
 
     def get_or_create_session(
         self,
@@ -916,18 +1019,26 @@ class SymbioteKernel:
         external_key: str,
         goal: str | None = None,
         subject_key: str | None = None,
+        revision: str | None = None,
     ) -> Session:
         """Find or create a session by external key (e.g. user_id:url_key).
 
         ``subject_key`` (see ``start_session``) is given to a session created
         here. A session that already exists keeps its own; asking for it with
         a different ``subject_key`` raises ``ValidationError``.
+
+        ``revision`` (see ``start_session``) is given to a session created
+        here too. A session that already exists keeps the revision it has,
+        which ``Session.revision`` shows: a conversation in progress does not
+        change configuration because a newer revision exists. Move it with
+        ``set_session_revision``.
         """
         return self._sessions.get_or_create_by_external_key(
             symbiote_id=symbiote_id,
             external_key=external_key,
             goal=goal,
             subject_key=subject_key,
+            revision=self._open_revision(symbiote_id, revision),
         )
 
     def get_session(self, session_id: str) -> Session | None:
@@ -1109,7 +1220,7 @@ class SymbioteKernel:
         llm_config: dict | None = None,
     ) -> tuple[str | TurnReply, LoopTrace | None]:
         row = self._storage.fetch_one(
-            "SELECT symbiote_id FROM sessions WHERE id = ?", (session_id,)
+            "SELECT symbiote_id, revision FROM sessions WHERE id = ?", (session_id,)
         )
         if row is None:
             raise EntityNotFoundError("Session", session_id)
@@ -1120,6 +1231,8 @@ class SymbioteKernel:
         # tool path copies contextvars into worker threads, so this propagates.
         _scope_token = _set_active_symbiote(symbiote_id)
         record, record_token = open_turn_record(symbiote_id, session_id)
+        # The revision the session is pinned to governs this turn's reads.
+        revision_token = self._bind_session_revision(symbiote_id, row.get("revision"), record)
         try:
             # Skills written by other replicas since this one's last turn.
             self._sync_skills(symbiote_id)
@@ -1168,6 +1281,7 @@ class SymbioteKernel:
             usage_out = _turn_usage_out.get()
             if usage_out is not None:
                 usage_out.append(record.usage())
+            reset_revision(revision_token)
             _reset_active_symbiote(_scope_token)
 
     async def message_async(
@@ -1273,7 +1387,7 @@ class SymbioteKernel:
         llm_config: dict | None = None,
     ) -> tuple[str | TurnReply, LoopTrace | None]:
         row = self._storage.fetch_one(
-            "SELECT symbiote_id FROM sessions WHERE id = ?", (session_id,)
+            "SELECT symbiote_id, revision FROM sessions WHERE id = ?", (session_id,)
         )
         if row is None:
             raise EntityNotFoundError("Session", session_id)
@@ -1281,6 +1395,7 @@ class SymbioteKernel:
 
         _scope_token = _set_active_symbiote(symbiote_id)
         record, record_token = open_turn_record(symbiote_id, session_id)
+        revision_token = self._bind_session_revision(symbiote_id, row.get("revision"), record)
         try:
             if self._skills_sync is not None:  # disk and database I/O: off the loop
                 await asyncio.to_thread(self._sync_skills, symbiote_id)
@@ -1322,6 +1437,7 @@ class SymbioteKernel:
             usage_out = _turn_usage_out.get()
             if usage_out is not None:
                 usage_out.append(record.usage())
+            reset_revision(revision_token)
             _reset_active_symbiote(_scope_token)
 
     def _record_cancelled_turn(
@@ -1581,8 +1697,8 @@ class SymbioteKernel:
                 "(id, session_id, symbiote_id, memories_json, knowledge_json, "
                 "skills_json, tokens_estimate, created_at, "
                 "llm_calls, prompt_tokens, completion_tokens, total_tokens, "
-                "cache_read_tokens, cache_write_tokens) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "cache_read_tokens, cache_write_tokens, revision) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     str(uuid4()),
                     record.session_id,
@@ -1598,6 +1714,7 @@ class SymbioteKernel:
                     record.total_tokens,
                     record.cache_read_tokens,
                     record.cache_write_tokens,
+                    record.revision,
                 ),
             )
         except Exception:
@@ -2473,6 +2590,8 @@ class SymbioteKernel:
         "session_locks",
     )
     _PURGE_BY_SYMBIOTE = (
+        "revision_knowledge",
+        "symbiote_revisions",
         "pending_approvals",
         "llm_usage",
         "turn_contexts",
@@ -2541,6 +2660,7 @@ class SymbioteKernel:
 
         if not dry_run:
             self._quiesce_symbiote(symbiote_id)
+            self._revisions.forget(symbiote_id)
             session_ids = [
                 r["id"] for r in self._storage.fetch_all(sessions, (symbiote_id,))
             ]

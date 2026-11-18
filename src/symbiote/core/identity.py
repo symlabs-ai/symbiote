@@ -9,6 +9,7 @@ from uuid import uuid4
 from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.models import Symbiote
 from symbiote.core.ports import StoragePort
+from symbiote.core.revisions import active_revision_for
 
 
 def _utcnow() -> datetime:
@@ -63,7 +64,27 @@ class IdentityManager:
         return sym
 
     def get(self, symbiote_id: str) -> Symbiote | None:
-        """Fetch a symbiote by ID, returning None if not found."""
+        """Fetch a symbiote by ID, returning None if not found.
+
+        Inside a turn of a session pinned to a revision
+        (``symbiote.core.revisions``), the name, the role and the persona
+        are the ones of that revision.
+        """
+        symbiote = self.get_current(symbiote_id)
+        revision = active_revision_for(symbiote_id)
+        if symbiote is None or revision is None:
+            return symbiote
+        return symbiote.model_copy(
+            update={
+                "name": revision.name,
+                "role": revision.role,
+                "persona_json": dict(revision.persona),
+            }
+        )
+
+    def get_current(self, symbiote_id: str) -> Symbiote | None:
+        """The symbiote as it is stored now, whatever revision a turn is
+        pinned to."""
         row = self._storage.fetch_one(
             "SELECT * FROM symbiotes WHERE id = ?", (symbiote_id,)
         )
