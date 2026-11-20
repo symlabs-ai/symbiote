@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.15] - 2026-11-20
+
 Duas primitivas para o host iniciar um turno por conta própria (B-102, B-103; saíram do pedido de "esperar e acordar" da equipe do SymbiOS). A espera, a fila de eventos e o agendamento continuam com o host: a engine não ganha thread nem timer.
 
 **Migração:** 19 no SQLite e 13 no PostgreSQL (coluna `messages.origin`). Nada muda para quem não passa `origin`.
