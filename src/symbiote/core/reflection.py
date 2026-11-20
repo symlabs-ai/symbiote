@@ -38,6 +38,7 @@ from symbiote.core._review_prompts import (
 )
 from symbiote.core.llm_usage import llm_call
 from symbiote.core.models import MemoryEntry, MemoryType
+from symbiote.core.origin import speaker
 from symbiote.core.ports import LLMPort, MemoryPort, MessagePort, StoragePort
 from symbiote.core.subjects import subject_kwargs
 
@@ -429,8 +430,8 @@ class ReflectionEngine:
         """
         facts: list[dict] = []
         for msg in messages:
-            if msg.get("role", "user") != "user":
-                continue
+            if msg.get("role", "user") != "user" or msg.get("origin"):
+                continue  # nor an input the host wrote (a wake, a webhook)
             content = msg["content"]
             if self._is_noise(content) or len(content) > _MAX_KEYWORD_FACT_CHARS:
                 continue
@@ -546,7 +547,8 @@ class ReflectionEngine:
         total = 0
         # Prefer most recent messages if we have to truncate
         for msg in reversed(messages):
-            line = f"[{msg.get('role', '?')}]: {msg.get('content', '')}"
+            who = speaker(msg.get("role", "?"), msg.get("origin"))
+            line = f"[{who}]: {msg.get('content', '')}"
             if total + len(line) > budget_chars:
                 break
             lines.append(line)

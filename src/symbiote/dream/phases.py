@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from symbiote.core.models import MemoryEntry
+from symbiote.core.origin import speaker
 from symbiote.core.subjects import learning_sessions_clause
 from symbiote.dream.models import DreamContext, DreamPhaseResult
 from symbiote.skills import usage as skill_usage
@@ -629,14 +630,17 @@ class EvaluatePhase:
             final_score = float(score_row.get("final_score", 0))
 
             messages = ctx.storage.fetch_all(
-                "SELECT role, content FROM messages "
+                "SELECT role, content, origin FROM messages "
                 "WHERE session_id = ? ORDER BY created_at LIMIT 20",
                 (session_id,),
             )
             if not messages:
                 continue
 
-            convo = "\n".join(f"[{m['role']}] {m['content'][:200]}" for m in messages)
+            convo = "\n".join(
+                f"[{speaker(m['role'], m.get('origin'))}] {m['content'][:200]}"
+                for m in messages
+            )
             prompt = _EVALUATE_PROMPT.format(
                 score=final_score, conversation=convo, language_rule=_language_rule(ctx)
             )

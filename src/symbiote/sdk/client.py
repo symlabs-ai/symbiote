@@ -202,16 +202,21 @@ class SymbioteClient:
         content: str,
         extra_context: dict | None = None,
         generation_settings: dict | None = None,
+        origin: str | None = None,
     ) -> dict:
         """Send a message and get an LLM response.
 
-        This is the main method for conversational interaction.
+        This is the main method for conversational interaction. ``origin``
+        names who wrote ``content`` when the person did not (a turn the
+        caller starts by itself: ``"wake"``, ``"webhook"``).
         """
         body: dict[str, Any] = {"content": content}
         if extra_context is not None:
             body["extra_context"] = extra_context
         if generation_settings is not None:
             body["generation_settings"] = generation_settings
+        if origin is not None:
+            body["origin"] = origin
         return self._post(f"/sessions/{session_id}/chat", body)
 
     def chat_stream(
@@ -220,6 +225,7 @@ class SymbioteClient:
         content: str,
         extra_context: dict | None = None,
         generation_settings: dict | None = None,
+        origin: str | None = None,
     ) -> Iterator[dict]:
         """``chat`` over Server-Sent Events.
 
@@ -236,6 +242,8 @@ class SymbioteClient:
             body["extra_context"] = extra_context
         if generation_settings is not None:
             body["generation_settings"] = generation_settings
+        if origin is not None:
+            body["origin"] = origin
         with self._client.stream(
             "POST", f"/sessions/{session_id}/chat/stream", json=body
         ) as resp:

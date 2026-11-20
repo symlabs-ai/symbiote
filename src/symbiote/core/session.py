@@ -13,6 +13,7 @@ from symbiote.core.exceptions import (
     ValidationError,
 )
 from symbiote.core.models import Decision, Message, Session, _utcnow
+from symbiote.core.origin import normalize_origin
 from symbiote.core.ports import StoragePort
 from symbiote.core.session_scope import (
     DELEGATION_OPEN,
@@ -289,16 +290,37 @@ class SessionManager:
     # ── Messages ───────────────────────────────────────────────────────
 
     def add_message(
-        self, session_id: str, role: Literal["user", "assistant", "system"], content: str
+        self,
+        session_id: str,
+        role: Literal["user", "assistant", "system"],
+        content: str,
+        *,
+        origin: str | None = None,
     ) -> Message:
-        """Persist a message linked to the given session."""
+        """Persist a message linked to the given session.
+
+        ``origin`` names who wrote an input that the person did not write
+        (``symbiote.core.origin``); ``None``, the default, is the person.
+        """
         self._assert_session_exists(session_id)
 
-        msg = Message(session_id=session_id, role=role, content=content)
+        msg = Message(
+            session_id=session_id,
+            role=role,
+            content=content,
+            origin=normalize_origin(origin),
+        )
         self._storage.execute(
-            "INSERT INTO messages (id, session_id, role, content, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (msg.id, msg.session_id, msg.role, msg.content, msg.created_at.isoformat()),
+            "INSERT INTO messages (id, session_id, role, content, created_at, origin) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                msg.id,
+                msg.session_id,
+                msg.role,
+                msg.content,
+                msg.created_at.isoformat(),
+                msg.origin,
+            ),
         )
         return msg
 
@@ -405,6 +427,7 @@ class SessionManager:
             session_id=row["session_id"],
             role=row["role"],
             content=row["content"],
+            origin=row.get("origin"),
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 

@@ -240,7 +240,10 @@ class MessagePort(Protocol):
     ) -> list[dict]:
         """Return messages for a session as dicts with 'role' and 'content', chronological order.
 
-        With *since*, only messages created after that ISO timestamp."""
+        With *since*, only messages created after that ISO timestamp. A
+        dict may also carry 'origin': who wrote an input that the person did
+        not write (``kernel.message(..., origin=...)``); absent or ``None``
+        means the person."""
         ...
 
 

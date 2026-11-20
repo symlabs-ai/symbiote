@@ -17,23 +17,30 @@ class MessageRepository:
         """Return messages for a session, chronological order.
 
         With ``since`` (an ISO timestamp), only messages created after it.
-        Each dict carries ``role``, ``content`` and ``created_at``.
+        Each dict carries ``role``, ``content``, ``created_at`` and
+        ``origin`` (``None`` unless the message is an input that the person
+        did not write, see ``symbiote.core.origin``).
         """
         if since is None:
             rows = self._storage.fetch_all(
-                "SELECT role, content, created_at FROM messages "
+                "SELECT role, content, created_at, origin FROM messages "
                 "WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
                 (session_id, limit),
             )
         else:
             rows = self._storage.fetch_all(
-                "SELECT role, content, created_at FROM messages "
+                "SELECT role, content, created_at, origin FROM messages "
                 "WHERE session_id = ? AND created_at > ? "
                 "ORDER BY created_at DESC, rowid DESC LIMIT ?",
                 (session_id, since, limit),
             )
         return [
-            {"role": r["role"], "content": r["content"], "created_at": r["created_at"]}
+            {
+                "role": r["role"],
+                "content": r["content"],
+                "created_at": r["created_at"],
+                "origin": r.get("origin"),
+            }
             for r in reversed(rows)
         ]
 

@@ -10,6 +10,7 @@ from symbiote.core.exceptions import SymbioteError
 from symbiote.core.hooks import CompositeHook
 from symbiote.core.identity import IdentityManager
 from symbiote.core.models import MemoryEntry
+from symbiote.core.origin import speaker
 from symbiote.core.ports import KnowledgePort, MemoryPort
 from symbiote.core.session import SessionManager
 from symbiote.core.subjects import subject_kwargs
@@ -150,15 +151,18 @@ class CapabilitySurface:
         content: str,
         extra_context: dict | None = None,
         llm_config: dict | None = None,
+        *,
+        origin: str | None = None,
     ) -> str:
         """Build context, select ChatRunner, run, return response text.
 
         ``llm_config`` is forwarded to the runner so per-call overrides
         (e.g. ``{"mode": "high"}`` for effort escalation) reach the LLM
-        adapter via the ``config`` kwarg of ``stream()``.
+        adapter via the ``config`` kwarg of ``stream()``. ``origin`` names
+        who wrote ``content`` when the person did not (``kernel.message``).
         """
         result = self.run_chat(
-            symbiote_id, session_id, content, extra_context, llm_config
+            symbiote_id, session_id, content, extra_context, llm_config, origin=origin
         )
         if not result.success:
             raise CapabilityError("chat", result.error or "Chat runner failed")
@@ -171,6 +175,8 @@ class CapabilitySurface:
         content: str,
         extra_context: dict | None = None,
         llm_config: dict | None = None,
+        *,
+        origin: str | None = None,
     ) -> RunResult:
         """Like ``chat()`` but returns the RunResult (trace, handoff) of this
         call and does not raise when the run fails."""
@@ -183,6 +189,7 @@ class CapabilitySurface:
             symbiote_id=symbiote_id,
             user_input=content,
             extra_context=extra_context,
+            input_origin=origin,
         )
         record = current_turn_record()
         if record is not None:
@@ -204,6 +211,8 @@ class CapabilitySurface:
         extra_context: dict | None = None,
         on_token: Callable[[str], None] | None = None,
         llm_config: dict | None = None,
+        *,
+        origin: str | None = None,
     ) -> Any:
         """Async variant of chat() — uses run_async() so tool handlers can be coroutines.
 
@@ -212,9 +221,16 @@ class CapabilitySurface:
                 Requires the LLM adapter to expose a ``stream()`` method; otherwise
                 called once with the full response text.
             llm_config: Per-call LLM overrides forwarded to the runner.
+            origin: Who wrote ``content`` when the person did not.
         """
         result = await self.run_chat_async(
-            symbiote_id, session_id, content, extra_context, on_token, llm_config
+            symbiote_id,
+            session_id,
+            content,
+            extra_context,
+            on_token,
+            llm_config,
+            origin=origin,
         )
         if not result.success:
             raise CapabilityError("chat", result.error or "Chat runner failed")
@@ -228,6 +244,8 @@ class CapabilitySurface:
         extra_context: dict | None = None,
         on_token: Callable[[str], None] | None = None,
         llm_config: dict | None = None,
+        *,
+        origin: str | None = None,
     ) -> RunResult:
         """Async ``run_chat()``: returns the RunResult and does not raise on a
         failed run."""
@@ -240,6 +258,7 @@ class CapabilitySurface:
             symbiote_id=symbiote_id,
             user_input=content,
             extra_context=extra_context,
+            input_origin=origin,
         )
         record = current_turn_record()
         if record is not None:
@@ -321,7 +340,7 @@ class CapabilitySurface:
         if messages:
             parts.append("## Session Messages")
             for msg in reversed(messages):  # chronological order
-                parts.append(f"- **{msg.role}**: {msg.content}")
+                parts.append(f"- **{speaker(msg.role, msg.origin)}**: {msg.content}")
 
         if memories:
             parts.append("## Memories")

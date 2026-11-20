@@ -110,9 +110,14 @@ class KernelInspector:
         return rows
 
     def list_messages(self, session_id: str, *, limit: int = 200) -> list[dict]:
-        """The last ``limit`` messages of a session, in chronological order."""
+        """The last ``limit`` messages of a session, in chronological order.
+
+        ``origin`` is ``None`` unless the message is an input that the person
+        did not write (the ``origin`` of ``kernel.message``).
+        """
         rows = self._storage.fetch_all(
-            "SELECT id, role, content, created_at FROM messages WHERE session_id = ? "
+            "SELECT id, role, content, created_at, origin FROM messages "
+            "WHERE session_id = ? "
             "ORDER BY created_at DESC, rowid DESC LIMIT ?",
             (session_id, limit),
         )

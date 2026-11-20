@@ -73,6 +73,9 @@ class AssembledContext(BaseModel):
     extra_context: dict | None = None
     generation_settings: dict | None = None  # from GenerationSettings.to_config_dict()
     user_input: str
+    # Who wrote ``user_input`` when the person did not (the ``origin`` of
+    # ``kernel.message``); the runner says so to the model.
+    input_origin: str | None = None
     total_tokens_estimate: int = 0
     # Skill injection (opt-in per-symbiote via skill_injection_enabled).
     # ``skills_summary`` is the ``<available-skills>`` block rendered into the
@@ -190,6 +193,7 @@ class ContextAssembler:
         working_memory: WorkingMemory | None = None,
         extra_context: dict | None = None,
         tool_tags: list[str] | None = None,
+        input_origin: str | None = None,
     ) -> AssembledContext:
         """Assemble context within token budget.
 
@@ -407,6 +411,7 @@ class ContextAssembler:
         return AssembledContext(
             symbiote_id=symbiote_id,
             session_id=session_id,
+            input_origin=input_origin,
             persona=persona,
             working_memory_snapshot=wm_snapshot,
             relevant_memories=memories_dicts,

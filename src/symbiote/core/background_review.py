@@ -54,6 +54,7 @@ from symbiote.core._review_prompts import (
     render_prompt,
 )
 from symbiote.core.llm_usage import llm_call
+from symbiote.core.origin import speaker
 from symbiote.core.provenance import (
     BACKGROUND_REVIEW,
     reset_current_write_origin,
@@ -340,7 +341,8 @@ class BackgroundReviewEngine:
         lines: list[str] = []
         total = 0
         for msg in reversed(messages):
-            line = f"[{msg.get('role', '?')}]: {msg.get('content', '')}"
+            who = speaker(msg.get("role", "?"), msg.get("origin"))
+            line = f"[{who}]: {msg.get('content', '')}"
             if total + len(line) > self._max_chars:
                 break
             lines.append(line)

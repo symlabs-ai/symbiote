@@ -29,6 +29,7 @@ from symbiote.core.approvals import DEFAULT_PENDING_MESSAGE
 from symbiote.core.context import AssembledContext
 from symbiote.core.exceptions import ValidationError, is_transient_llm_error
 from symbiote.core.models import Message
+from symbiote.core.origin import label_origin, normalize_origin
 from symbiote.core.ports import LLMPort
 from symbiote.core.session_scope import tool_in_session
 from symbiote.core.turn_control import TurnStop, check_turn
@@ -1111,6 +1112,30 @@ class ChatRunner:
         # worker thread keeps other sessions on this event loop running.
         return await asyncio.to_thread(request.fn, *request.args, **request.kwargs)
 
+    def _needs_person(self, tool_id: str) -> bool:
+        """Whether the tool's descriptor sets ``requires_approval``."""
+        requires = getattr(self._tool_gateway, "requires_approval", None)
+        # ``is True``: a gateway without the method (or a test double that
+        # answers anything) keeps the old behaviour.
+        return callable(requires) and requires(tool_id) is True
+
+    def _risk_asks(self, risk: str) -> bool:
+        """Whether a tool of this risk reaches the approval threshold."""
+        order = {"low": 0, "medium": 1, "high": 2}
+        return order.get(risk, 0) >= order[self._approval_risk_threshold]
+
+    def approval_applies(self, tool_id: str) -> bool:
+        """Whether a call of ``tool_id`` made in a turn goes to a person
+        before it runs: the tool requires approval, or an approval callback
+        is installed and the tool's risk reaches its threshold."""
+        if self._tool_gateway is None:
+            return False
+        if self._needs_person(tool_id):
+            return True
+        if self._on_before_tool_call is None:
+            return False
+        return self._risk_asks(self._tool_gateway.get_risk_level(tool_id))
+
     def _check_approval(
         self,
         calls: list[ToolCall],
@@ -1150,10 +1175,7 @@ class ChatRunner:
             if self._tool_gateway is None:
                 approved.append(call)
                 continue
-            requires = getattr(self._tool_gateway, "requires_approval", None)
-            # ``is True``: a gateway without the method (or a test double that
-            # answers anything) keeps the old behaviour.
-            needs_person = callable(requires) and requires(call.tool_id) is True
+            needs_person = self._needs_person(call.tool_id)
             if self._on_before_tool_call is None:
                 if needs_person:
                     # Nobody can say yes: refuse rather than run unchecked.
@@ -1171,8 +1193,7 @@ class ChatRunner:
                     approved.append(call)
                 continue
             risk = self._tool_gateway.get_risk_level(call.tool_id)
-            risk_order = {"low": 0, "medium": 1, "high": 2}
-            if risk_order.get(risk, 0) < risk_order[self._approval_risk_threshold] and not needs_person:
+            if not self._risk_asks(risk) and not needs_person:
                 approved.append(call)
                 continue
             authorize = getattr(self._tool_gateway, "authorize", None)
@@ -1895,7 +1916,10 @@ class ChatRunner:
         # 2. Conversation history from working memory
         if self._working_memory is not None:
             for msg in self._working_memory.recent_messages:
-                messages.append({"role": msg.role, "content": msg.content})
+                content = msg.content
+                if msg.role == "user":
+                    content = label_origin(content, getattr(msg, "origin", None))
+                messages.append({"role": msg.role, "content": content})
 
         # 3. Conversation history from extra_context (when working_memory is not used)
         #    The host passes "conversation_history" either as a list of
@@ -1907,8 +1931,10 @@ class ChatRunner:
             if history:
                 messages.extend(self._history_messages(history))
 
-        # 4. Current user input (with ephemeral runtime context for the LLM)
-        user_content = context.user_input
+        # 4. Current input (with ephemeral runtime context for the LLM). When
+        #    the person did not write it, one line says so: it sits in the
+        #    user position only because providers alternate user and assistant.
+        user_content = label_origin(context.user_input, context.input_origin)
         if self._runtime_context != "off":
             user_content = inject_runtime_context(
                 user_content,
@@ -1927,7 +1953,9 @@ class ChatRunner:
         A list of ``{"role": "user" | "assistant", "content": str}`` is taken
         as it is: nothing inside a content is read as a role label, and blank
         lines and indentation are kept. Turns with an empty content are left
-        out (providers refuse empty messages).
+        out (providers refuse empty messages). A user turn may carry
+        ``"origin"`` (what ``Message.origin`` holds): the model is then told
+        that the user did not write it, as it was in the turn it started.
 
         A string is parsed as "Label: content" lines. That form cannot tell a
         label from a line of a message that merely starts like one ("User: "
@@ -1959,8 +1987,17 @@ class ChatRunner:
                     f"conversation_history[{index}].content must be a string, "
                     f"got {type(content).__name__}"
                 )
-            if content.strip():
-                messages.append({"role": role, "content": content})
+            if not content.strip():
+                continue
+            if role == "user" and turn.get("origin") is not None:
+                try:
+                    origin = normalize_origin(turn.get("origin"))
+                except ValidationError as exc:
+                    raise ValidationError(
+                        f"conversation_history[{index}].origin: {exc}"
+                    ) from None
+                content = label_origin(content, origin)
+            messages.append({"role": role, "content": content})
         return messages
 
     @staticmethod

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import logging
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,7 @@ from symbiote.core.identity import IdentityManager
 from symbiote.core.inspector import KernelInspector
 from symbiote.core.llm_usage import LLMCallRecord, llm_call, metered
 from symbiote.core.models import Session, Symbiote
+from symbiote.core.origin import normalize_origin
 from symbiote.core.ports import (
     LLMPort,
     SessionLockPort,
@@ -104,7 +106,7 @@ from symbiote.environment.exec_context import (
 )
 from symbiote.environment.http_tool_store import HttpToolRepository
 from symbiote.environment.manager import EnvironmentManager
-from symbiote.environment.policies import ApprovalDecision, PolicyGate
+from symbiote.environment.policies import ApprovalDecision, PolicyGate, ToolResult
 from symbiote.environment.tools import ToolGateway, ToolGuard
 from symbiote.harness.versions import HarnessVersionRepository
 from symbiote.knowledge.service import KnowledgeService
@@ -1152,6 +1154,7 @@ class SymbioteKernel:
         llm_config: dict | None = None,
         *,
         host_context: Mapping[str, Any] | None = None,
+        origin: str | None = None,
     ) -> str | TurnReply:
         """Add user message, run chat capability, add assistant message, return response.
 
@@ -1178,9 +1181,18 @@ class SymbioteKernel:
                 (the LLM adapter, hooks) reads it with
                 ``current_host_context()``. Concurrent turns never see each
                 other's.
+            origin: Who wrote ``content`` when it was not the person on the
+                other side: a short label the host chooses (``"wake"``,
+                ``"webhook"``, ``"schedule"``) for a turn it starts by
+                itself. The message is stored with it (``Message.origin``),
+                the model is told that the user did not write the text, and
+                the reflection does not take it for something the user said.
+                ``None`` (the default): the person wrote it. Raises
+                ``ValidationError`` for anything but a label of 1 to 64
+                letters, digits, ``_``, ``.``, ``:`` or ``-``.
         """
         return self._message_locked(
-            session_id, content, extra_context, llm_config, host_context
+            session_id, content, extra_context, llm_config, host_context, origin
         )[0]
 
     def turn(
@@ -1191,6 +1203,7 @@ class SymbioteKernel:
         llm_config: dict | None = None,
         *,
         host_context: Mapping[str, Any] | None = None,
+        origin: str | None = None,
     ) -> TurnOutcome:
         """Run a turn exactly like ``message()`` and return a :class:`TurnOutcome`.
 
@@ -1204,7 +1217,7 @@ class SymbioteKernel:
         token = _turn_usage_out.set(usage)
         try:
             reply, trace = self._message_locked(
-                session_id, content, extra_context, llm_config, host_context
+                session_id, content, extra_context, llm_config, host_context, origin
             )
         finally:
             _turn_usage_out.reset(token)
@@ -1217,8 +1230,10 @@ class SymbioteKernel:
         extra_context: dict | None,
         llm_config: dict | None,
         host_context: Mapping[str, Any] | None,
+        origin: str | None = None,
     ) -> tuple[str | TurnReply, LoopTrace | None]:
         """One turn under the session lock: the reply and its loop trace."""
+        origin = normalize_origin(origin)  # refused before anything is held
         host_token = bind_host_context(host_context)
         try:
             ttl, wait = self._lock_ttl(), self._config.session_lock_wait
@@ -1228,7 +1243,8 @@ class SymbioteKernel:
             lease, control_token = self._begin_turn(session_id, token, ttl)
             try:
                 return self._message_inner(
-                    session_id, content, extra_context, llm_config=llm_config
+                    session_id, content, extra_context,
+                    llm_config=llm_config, origin=origin,
                 )
             except TurnStop as stop:
                 raise self._stop_error(session_id, stop) from None
@@ -1316,6 +1332,7 @@ class SymbioteKernel:
         content: str,
         extra_context: dict | None = None,
         llm_config: dict | None = None,
+        origin: str | None = None,
     ) -> tuple[str | TurnReply, LoopTrace | None]:
         row = self._storage.fetch_one(self._SESSION_SCOPE_SQL, (session_id,))
         if row is None:
@@ -1342,9 +1359,11 @@ class SymbioteKernel:
                 session_id, symbiote_id, extra_context
             )
 
-            user_message = self._sessions.add_message(session_id, "user", content)
+            user_message = self._sessions.add_message(
+                session_id, "user", content, origin=origin
+            )
 
-            turn_messages = [{"role": "user", "content": content}]
+            turn_messages = self._turn_messages(content, origin)
             if self._hooks.hooks:
                 self._tool_gateway.run_coroutine_sync(
                     self._hooks.before_turn(turn_messages)
@@ -1354,6 +1373,7 @@ class SymbioteKernel:
                     symbiote_id, session_id, content,
                     extra_context=extra_context,
                     llm_config=llm_config,
+                    origin=origin,
                 )
                 response = self._finish_turn(session_id, symbiote_id, result)
                 self._approval_outcomes_told(told)
@@ -1390,6 +1410,7 @@ class SymbioteKernel:
         llm_config: dict | None = None,
         *,
         host_context: Mapping[str, Any] | None = None,
+        origin: str | None = None,
     ) -> str | TurnReply:
         """Async variant of message() — supports async tool handlers and on_token streaming.
 
@@ -1400,11 +1421,12 @@ class SymbioteKernel:
         Uses per-session async locking: concurrent requests on the same session
         are serialized, while different sessions process in parallel.
 
-        ``llm_config`` and ``host_context`` mirror the sync ``message()``
-        semantics.
+        ``llm_config``, ``host_context`` and ``origin`` mirror the sync
+        ``message()`` semantics.
         """
         reply, _trace = await self._message_async_locked(
-            session_id, content, extra_context, on_token, llm_config, host_context
+            session_id, content, extra_context, on_token, llm_config, host_context,
+            origin,
         )
         return reply
 
@@ -1417,6 +1439,7 @@ class SymbioteKernel:
         llm_config: dict | None = None,
         *,
         host_context: Mapping[str, Any] | None = None,
+        origin: str | None = None,
     ) -> TurnOutcome:
         """Async variant of ``turn()``: runs like ``message_async()`` and
         returns a :class:`TurnOutcome`."""
@@ -1424,7 +1447,8 @@ class SymbioteKernel:
         token = _turn_usage_out.set(usage)
         try:
             reply, trace = await self._message_async_locked(
-                session_id, content, extra_context, on_token, llm_config, host_context
+                session_id, content, extra_context, on_token, llm_config,
+                host_context, origin,
             )
         finally:
             _turn_usage_out.reset(token)
@@ -1438,8 +1462,10 @@ class SymbioteKernel:
         on_token: Callable[[str], None] | None,
         llm_config: dict | None,
         host_context: Mapping[str, Any] | None,
+        origin: str | None = None,
     ) -> tuple[str | TurnReply, LoopTrace | None]:
         """One async turn under the session lock: the reply and its trace."""
+        origin = normalize_origin(origin)  # refused before anything is held
         host_token = bind_host_context(host_context)
         try:
             lock = self._session_lock
@@ -1456,7 +1482,8 @@ class SymbioteKernel:
             lease, control_token = self._begin_turn(session_id, token, ttl)
             try:
                 return await self._message_async_inner(
-                    session_id, content, extra_context, on_token, llm_config=llm_config
+                    session_id, content, extra_context, on_token,
+                    llm_config=llm_config, origin=origin,
                 )
             except TurnStop as stop:
                 raise self._stop_error(session_id, stop) from None
@@ -1482,6 +1509,7 @@ class SymbioteKernel:
         extra_context: dict | None = None,
         on_token: Callable[[str], None] | None = None,
         llm_config: dict | None = None,
+        origin: str | None = None,
     ) -> tuple[str | TurnReply, LoopTrace | None]:
         row = self._storage.fetch_one(self._SESSION_SCOPE_SQL, (session_id,))
         if row is None:
@@ -1503,9 +1531,11 @@ class SymbioteKernel:
                 session_id, symbiote_id, extra_context
             )
 
-            user_message = self._sessions.add_message(session_id, "user", content)
+            user_message = self._sessions.add_message(
+                session_id, "user", content, origin=origin
+            )
 
-            turn_messages = [{"role": "user", "content": content}]
+            turn_messages = self._turn_messages(content, origin)
             await self._hooks.before_turn(turn_messages)
             try:
                 result = await self._capabilities.run_chat_async(
@@ -1515,6 +1545,7 @@ class SymbioteKernel:
                     extra_context=extra_context,
                     on_token=on_token,
                     llm_config=llm_config,
+                    origin=origin,
                 )
                 response = self._finish_turn(session_id, symbiote_id, result)
                 self._approval_outcomes_told(told)
@@ -1534,6 +1565,15 @@ class SymbioteKernel:
                 usage_out.append(record.usage())
             self._unbind_session(scope_tokens)
             _reset_active_symbiote(_scope_token)
+
+    @staticmethod
+    def _turn_messages(content: str, origin: str | None) -> list[dict]:
+        """The input of a turn as the turn hooks get it; ``origin`` is there
+        only when the person did not write it."""
+        message: dict[str, Any] = {"role": "user", "content": content}
+        if origin is not None:
+            message["origin"] = origin
+        return [message]
 
     def _record_cancelled_turn(
         self, session_id: str, symbiote_id: str, stop: TurnStop
@@ -1622,6 +1662,138 @@ class SymbioteKernel:
         if not result.success:
             raise CapabilityError("chat", result.error or "Chat runner failed")
         return response
+
+    # ── a tool call as the session, outside a turn ──────────────────────
+
+    def run_tool(
+        self,
+        session_id: str,
+        tool_id: str,
+        params: dict | None = None,
+        *,
+        host_context: Mapping[str, Any] | None = None,
+        timeout: float | None = None,
+    ) -> ToolResult:
+        """Run one tool call as ``session_id``, outside a turn.
+
+        For what a host does on a conversation's behalf between turns:
+        asking whether a job the symbiote started has finished, refreshing
+        something on a schedule. No model is called and nothing is added to
+        the conversation; the host decides what to do with the result
+        (usually: start a turn with ``origin=``).
+
+        The call is checked as one the symbiote makes in a turn of that
+        session: the session's revision and the tools it is narrowed to
+        (``tools_allowed``), policy, the tool guard, the tool hooks and the
+        audit log all apply. ``host_context`` is bound for the call as in
+        ``message()``: the context of earlier turns is not kept. ``timeout``
+        defaults to the symbiote's ``tool_call_timeout``.
+
+        A call that a turn would take to a person first is not run: a tool
+        whose descriptor sets ``requires_approval``, or one whose risk
+        reaches the threshold of the installed approval callback. The result
+        says so and the refusal is audited. Approval belongs to a turn, where
+        somebody is asked; an approved request runs with
+        ``resolve_pending``.
+
+        Returns the ``ToolResult`` (``success``, ``output``, ``error``); a
+        refused or failed call comes back as a result, not as an exception.
+        Raises ``EntityNotFoundError`` for an unknown session. The session
+        lock is not taken: the call may run while a turn of the session
+        runs, as the calls of that turn do among themselves.
+        """
+        params = dict(params or {})
+        with self._as_session(session_id, host_context) as symbiote_id:
+            refusal = self._needs_a_turn(symbiote_id, session_id, tool_id, params)
+            if refusal is not None:
+                return refusal
+            return self._tool_gateway.execute(
+                symbiote_id,
+                session_id,
+                tool_id,
+                params,
+                timeout=self._tool_timeout(symbiote_id, timeout),
+            )
+
+    async def run_tool_async(
+        self,
+        session_id: str,
+        tool_id: str,
+        params: dict | None = None,
+        *,
+        host_context: Mapping[str, Any] | None = None,
+        timeout: float | None = None,
+    ) -> ToolResult:
+        """Async variant of ``run_tool()``: awaits coroutine handlers."""
+        params = dict(params or {})
+        with self._as_session(session_id, host_context) as symbiote_id:
+            refusal = self._needs_a_turn(symbiote_id, session_id, tool_id, params)
+            if refusal is not None:
+                return refusal
+            return await self._tool_gateway.execute_async(
+                symbiote_id,
+                session_id,
+                tool_id,
+                params,
+                timeout=self._tool_timeout(symbiote_id, timeout),
+            )
+
+    @contextlib.contextmanager
+    def _as_session(
+        self, session_id: str, host_context: Mapping[str, Any] | None
+    ) -> Iterator[str]:
+        """What runs inside runs as the session, outside a turn: its
+        symbiote, its revision, the tools it is narrowed to and
+        ``host_context``. Yields the symbiote's id."""
+        row = self._storage.fetch_one(self._SESSION_SCOPE_SQL, (session_id,))
+        if row is None:
+            raise EntityNotFoundError("Session", session_id)
+        symbiote_id = row["symbiote_id"]
+        symbiote_token = _set_active_symbiote(symbiote_id)
+        scope_tokens = self._bind_session(session_id, row)
+        host_token = bind_host_context(host_context)
+        try:
+            yield symbiote_id
+        finally:
+            reset_host_context(host_token)
+            self._unbind_session(scope_tokens)
+            _reset_active_symbiote(symbiote_token)
+
+    def _tool_timeout(self, symbiote_id: str, timeout: float | None) -> float:
+        if timeout is not None:
+            return timeout
+        cfg = self._environment.get_config(symbiote_id)
+        return cfg.tool_call_timeout if cfg else 30.0
+
+    def _needs_a_turn(
+        self, symbiote_id: str, session_id: str, tool_id: str, params: dict
+    ) -> ToolResult | None:
+        """The refusal of a call that a turn would take to a person before
+        running it, or ``None`` when the call may run without one."""
+        runner = self._runner_registry.select("chat")
+        asks = (
+            runner.approval_applies(tool_id)
+            if isinstance(runner, ChatRunner)
+            else self._tool_gateway.requires_approval(tool_id)
+        )
+        if not asks:
+            return None
+        self._policy_gate._write_audit(
+            symbiote_id=symbiote_id,
+            session_id=session_id,
+            tool_id=tool_id,
+            action="blocked",
+            params=params,
+            result="blocked:needs approval",
+        )
+        return ToolResult(
+            success=False,
+            tool_id=tool_id,
+            error=(
+                f"Tool '{tool_id}' runs only after a person approves the call, "
+                "and nobody is asked outside a turn: it was not executed."
+            ),
+        )
 
     # ── approvals that wait for a person ────────────────────────────────
 

@@ -5,6 +5,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+Duas primitivas para o host iniciar um turno por conta própria (B-102, B-103; saíram do pedido de "esperar e acordar" da equipe do SymbiOS). A espera, a fila de eventos e o agendamento continuam com o host: a engine não ganha thread nem timer.
+
+**Migração:** 19 no SQLite e 13 no PostgreSQL (coluna `messages.origin`). Nada muda para quem não passa `origin`.
+
+### Novas funcionalidades
+
+- feat(kernel): origem da entrada de um turno (B-102). `message`, `turn`, `message_async` e `turn_async` aceitam `origin="wake"` (ou outro rótulo do host) para um turno que não começa com algo que a pessoa escreveu. A mensagem é gravada com a origem (`Message.origin`, `inspector.list_messages`, `MessagePort.get_messages`, export em markdown), o modelo lê o texto sob a linha `[Not written by the user. Source: wake]`, o gancho `before_turn` recebe a chave `origin`, e a reflexão por palavras-chave deixa de tratar esse texto como fala do usuário. Um turno de `conversation_history` com a chave `origin` recebe a mesma linha.
+- feat(kernel): `kernel.run_tool` / `run_tool_async` (B-103) executam uma chamada de tool como a sessão, fora de um turno: valem a revisão da sessão, o `tools_allowed`, a política, o tool guard, os ganchos e a auditoria; nenhum modelo é chamado e nada entra na conversa. Uma chamada que num turno iria para aprovação de uma pessoa não é executada.
+- feat(api): `POST /sessions/{id}/chat` e `/chat/stream` aceitam `origin`; as listagens de mensagens devolvem a origem. `SymbioteClient.chat` e `chat_stream` ganham o parâmetro.
+
+### Outros
+
+- docs: seção "Turns the host starts" em `docs/HOST_INTEGRATION.md`, com a receita de "esperar e acordar" montada pelo host; o exemplo de `conversation_history` passa a usar `inspector.list_messages` (o anterior lia um atributo que o retorno não tem).
+
 ## [v0.8.14] - 2026-11-18
 
 ### Correções

@@ -69,6 +69,10 @@ class Message(BaseModel):
     session_id: str
     role: Literal["user", "assistant", "system"]
     content: str
+    # Who wrote an input that the person did not write (a label chosen by
+    # the host, see ``symbiote.core.origin``). ``None``: the person, or a
+    # message that is not the input of a turn.
+    origin: str | None = None
     created_at: datetime = Field(default_factory=_utcnow)
 
 

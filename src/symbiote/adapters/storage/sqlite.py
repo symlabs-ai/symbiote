@@ -191,6 +191,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "_migrate_turn_budget",
     "_migrate_revisions",
     "_migrate_session_scope",
+    "_migrate_message_origin",
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -801,6 +802,12 @@ class SQLiteAdapter:
         ):
             with contextlib.suppress(sqlite3.OperationalError):  # column already exists
                 self._conn.execute(stmt)
+        self._conn.commit()
+
+    def _migrate_message_origin(self) -> None:
+        """19: who wrote the input of a turn when the person did not."""
+        with contextlib.suppress(sqlite3.OperationalError):  # column already exists
+            self._conn.execute("ALTER TABLE messages ADD COLUMN origin TEXT")
         self._conn.commit()
 
     def execute(self, sql: str, params: tuple | None = None) -> sqlite3.Cursor:

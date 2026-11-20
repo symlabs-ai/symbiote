@@ -110,7 +110,13 @@ def api_session_messages(
     _require_session_access(adapter, session_id, auth)
     msgs = sessions.get_messages(session_id, limit=limit)
     return [
-        {"id": m.id, "role": m.role, "content": m.content, "created_at": m.created_at.isoformat()}
+        {
+            "id": m.id,
+            "role": m.role,
+            "content": m.content,
+            "created_at": m.created_at.isoformat(),
+            "origin": m.origin,
+        }
         for m in reversed(msgs)  # chronological order
     ]
 

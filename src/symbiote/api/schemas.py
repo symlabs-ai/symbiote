@@ -120,6 +120,8 @@ class MessageResponse(BaseModel):
     role: str
     content: str
     created_at: str
+    # Who wrote an input that the person did not write; None: the person.
+    origin: str | None = None
 
 
 class MemoryEntryResponse(BaseModel):
@@ -159,6 +161,11 @@ class ChatRequest(BaseModel):
     content: str = Field(max_length=MAX_MESSAGE_CHARS)
     extra_context: dict | None = None
     generation_settings: dict | None = None
+    # Who wrote ``content`` when the person did not ("wake", "webhook"): a
+    # label of letters, digits, "_", ".", ":" or "-".
+    origin: str | None = Field(
+        default=None, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    )
 
 
 class ChatResponse(BaseModel):

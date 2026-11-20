@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+from symbiote.core.origin import speaker
 from symbiote.core.ports import StoragePort
 
 
@@ -54,7 +55,8 @@ class ExportService:
             for msg in messages:
                 created = datetime.fromisoformat(msg["created_at"])
                 ts = created.strftime("%Y-%m-%d %H:%M:%S")
-                lines.append(f"**{msg['role']}** ({ts}):")
+                who = speaker(msg["role"], msg.get("origin"))
+                lines.append(f"**{who}** ({ts}):")
                 lines.append(f"> {msg['content']}")
                 lines.append("")
         else:

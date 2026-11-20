@@ -40,6 +40,7 @@ from symbiote.agent_protocols import (
 from symbiote.core.context import AssembledContext
 from symbiote.core.llm_usage import llm_call
 from symbiote.core.models import Message
+from symbiote.core.origin import label_origin
 from symbiote.core.ports import LLMPort
 from symbiote.core.turn_control import TurnStop, check_turn
 from symbiote.core.turn_record import turn_budget_exceeded
@@ -560,7 +561,10 @@ class LongRunRunner:
 
         messages = [
             {"role": "system", "content": planner_prompt},
-            {"role": "user", "content": context.user_input},
+            {
+                "role": "user",
+                "content": label_origin(context.user_input, context.input_origin),
+            },
         ]
 
         check_turn()  # no model call starts once the turn has to stop

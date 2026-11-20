@@ -564,6 +564,11 @@ ALTER TABLE sessions ADD COLUMN delegation TEXT COLLATE "C";
 ALTER TABLE symbiote_revisions ADD COLUMN is_default INTEGER DEFAULT 0;
 """
 
+# 13: who wrote the input of a turn when the person did not.
+_V13_MESSAGE_ORIGIN = """
+ALTER TABLE messages ADD COLUMN origin TEXT COLLATE "C";
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "baseline", _V1_BASELINE),
     (2, "session_locks", _V2_SESSION_LOCKS),
@@ -577,6 +582,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (10, "turn_budget", _V10_TURN_BUDGET),
     (11, "revisions", _V11_REVISIONS),
     (12, "session_scope", _V12_SESSION_SCOPE),
+    (13, "message_origin", _V13_MESSAGE_ORIGIN),
 )
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

@@ -499,6 +499,17 @@ exactly what it deleted before. What a host may notice:
   windows never reached it. `retention_basis="age"` makes them apply by the
   age of each row.
 
+### Upgrading to 0.8.15
+
+Migration 19 (PostgreSQL 13): the column `messages.origin`. Nothing changes
+for a host that does not pass `origin`. What a host may notice:
+
+- `Message`, `inspector.list_messages` rows and the dicts of
+  `MessagePort.get_messages` have the key `origin` (`None` unless the host
+  started that turn with one). A host with its own `MessagePort` does not
+  need to return it.
+- `ChatRunner.approval_applies(tool_id)` is new; `kernel.run_tool` uses it.
+
 ---
 
 ## Tool Registration
@@ -936,13 +947,11 @@ internal runner **without** working-memory wired. So multi-turn recall is the
 ```python
 # Fetch the recent transcript and inject it each turn so the bot remembers.
 def build_history(kernel, session_id, n=12):
-    # get_messages returns NEWEST-FIRST (ORDER BY created_at DESC), so reverse
-    # to chronological order.
-    msgs = kernel._message_repo.get_messages(session_id, limit=n)
+    # list_messages returns the last n messages in chronological order.
     return [
-        {"role": m.role, "content": m.content}
-        for m in reversed(msgs)
-        if m.role in ("user", "assistant")
+        {"role": m["role"], "content": m["content"], "origin": m["origin"]}
+        for m in kernel.inspector.list_messages(session_id, limit=n)
+        if m["role"] in ("user", "assistant")
     ]
 
 response = kernel.message(
@@ -960,6 +969,9 @@ response = kernel.message(
   whose content is empty are left out.
 - The order is yours: the kernel does not sort, merge or deduplicate turns,
   and it appends the current user message after them.
+- A user turn may carry `origin` (what `list_messages` returns for it): the
+  model is then told that the user did not write that text. See
+  [Turns the host starts](#turns-the-host-starts).
 
 **Text form (older hosts).** A string of `"Label: content"` lines, parsed by
 `ChatRunner._parse_conversation_history`:
@@ -1564,6 +1576,96 @@ if spawn is not None:
     spawn.root_symbiote_id, spawn.root_session_id       # the turn your host started
     spawn.depth                                         # 1, or 2 when the delegate delegates again
 ```
+
+---
+
+## Turns the host starts
+
+A turn usually answers something a person wrote. A host may also start one by
+itself: a job the symbiote was waiting for finished, a webhook arrived, a
+scheduled check came due. Two primitives cover it. The scheduling, the queue
+of events and the waiting belong to the host: the kernel starts no thread and
+no timer for a symbiote that is not in a turn.
+
+### `origin`: an input nobody typed
+
+```python
+kernel.message(
+    session_id,
+    "The export you were waiting for finished: 3 files, no errors.",
+    origin="wake",
+)
+```
+
+`origin` is a label the host chooses (`"wake"`, `"webhook"`, `"schedule"`):
+1 to 64 letters, digits, `_`, `.`, `:` or `-`. `message`, `turn`,
+`message_async` and `turn_async` take it; `None` (the default) is the person.
+Anything else raises `ValidationError` before the turn starts. The turn is an
+ordinary one: same lock, same hooks, same streaming, same `cancel_turn`.
+
+What the label changes:
+
+| Where | With `origin="wake"` |
+|---|---|
+| Stored message | `role` stays `"user"` (providers alternate user and assistant); `origin` is `"wake"`. `Message.origin`, `inspector.list_messages`, `MessagePort.get_messages` and the markdown export return it, so a host draws the message as an event, not as something the person said |
+| What the model reads | The text under the line `[Not written by the user. Source: wake]`. The stored content is the text as the host wrote it |
+| Later turns | A user turn of `conversation_history` that carries `"origin"` gets the same line. Forward the key as `list_messages` returns it |
+| `before_turn` hook | The message dict has `"origin": "wake"` |
+| Learning | The keyword reflection reads only what the person wrote; the transcripts given to the reflection, skill review and dream models name the message `[wake]` instead of `[user]` |
+
+Over HTTP, `POST /sessions/{id}/chat` and `/chat/stream` take `origin` in the
+body and the message listings return it; `SymbioteClient.chat(...,
+origin=...)` sends it.
+
+### `run_tool`: one tool call as the session, outside a turn
+
+```python
+result = kernel.run_tool(
+    session_id, "job_status", {"job": "exec-2ad2"}, host_context={"user": user_id}
+)
+if result.success and result.output["status"] in ("succeeded", "failed"):
+    kernel.message(session_id, f"The job ended: {result.output}", origin="wake")
+```
+
+`run_tool` (and `run_tool_async`, which awaits coroutine handlers) runs one
+call with the rules of that conversation and calls no model:
+
+- **Same checks as in a turn.** The session's revision, the tools it is
+  narrowed to (`tools_allowed`), policy, the tool guard, the tool hooks and
+  the audit log. Calling `kernel.tool_gateway.execute` yourself skips the
+  first two: it reads the current configuration and ignores `tools_allowed`.
+- **`host_context`** is bound for the call, as in `message()`. The context of
+  earlier turns is not kept: pass what the tool needs (a credential, the
+  caller) again.
+- **Nothing is added to the conversation.** No message, no trace. What to do
+  with the result is the host's decision.
+- **Approval stays in a turn.** A call a turn would take to a person first is
+  not run: a tool with `requires_approval`, or one whose risk reaches the
+  threshold of the installed approval callback. The result says so and the
+  refusal is in `audit_log` (`blocked:needs approval`). Nobody is asked.
+- **Result, not exception.** A refused, unknown or failing call comes back as
+  `ToolResult(success=False, error=...)`. Only an unknown session raises
+  (`EntityNotFoundError`).
+- **No session lock.** The call may run while a turn of the session runs.
+  `timeout` defaults to the symbiote's `tool_call_timeout`.
+
+### Building "wait and wake" on top
+
+The kernel has no wait: a host builds it with a tool of its own, its own
+table and its own schedule.
+
+1. Register a `wait` tool (`register_descriptor(..., pass_context=True)`).
+   Its handler stores what the symbiote waits for (an event name, a tool to
+   ask with a condition, or a time), the deadline and the session, and
+   answers at once; the turn ends normally.
+2. From your schedule, ask the tools that are being waited on with
+   `run_tool`. A model call is spent only when something changed.
+3. When the event arrives, the condition holds or the deadline passes, start
+   the turn with `origin="wake"` and a note saying what was awaited, what
+   happened and what the symbiote meant to do next. If the session is busy
+   the turn waits for the lock (`session_lock_wait`) like any other.
+4. Tell the model in the persona that, when something keeps running, it
+   leaves a wait and ends the turn, instead of asking to be called back.
 
 ---
 

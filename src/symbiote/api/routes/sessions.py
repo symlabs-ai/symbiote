@@ -265,6 +265,7 @@ def add_message(
         role=msg.role,
         content=msg.content,
         created_at=msg.created_at.isoformat(),
+        origin=msg.origin,
     )
 
 
@@ -351,6 +352,7 @@ def chat(
         extra_context=body.extra_context,
         # Per-call LLM overrides (e.g. temperature), as the SDK sends them.
         llm_config=body.generation_settings,
+        origin=body.origin,
     )
     return ChatResponse(
         response=response if isinstance(response, str) else dict(response),
@@ -468,6 +470,7 @@ async def _chat_events(
                 extra_context=body.extra_context,
                 on_token=queue.put_nowait,  # called on this event loop
                 llm_config=body.generation_settings,
+                origin=body.origin,
             )
         finally:
             queue.put_nowait(_STREAM_DONE)
