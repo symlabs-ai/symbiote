@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.16] - 2026-11-20
+
 ### Correções
 
 - fix(kernel): `run_tool` / `run_tool_async` recusavam toda chamada que o callback de aprovação veria num turno, sem consultá-lo; com `risk_threshold="low"`, todas as tools (B-105, relato do SymbiOS). Agora o callback é consultado, depois da política e do guard: `True` executa, `False` recusa (`denied` na auditoria) e `ApprovalDecision.defer` recusa sem criar pedido pendente. `ToolExecContext.outside_turn` (novo) vale `True` nessas chamadas, para o callback, o guard e o handler, de modo que um callback que esperaria uma pessoa responda na hora. Tool com `requires_approval` continua sem rodar fora de um turno. **Para hosts:** um callback que bloqueia esperando uma pessoa precisa checar `ctx.outside_turn`.
