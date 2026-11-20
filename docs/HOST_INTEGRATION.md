@@ -510,6 +510,20 @@ for a host that does not pass `origin`. What a host may notice:
   need to return it.
 - `ChatRunner.approval_applies(tool_id)` is new; `kernel.run_tool` uses it.
 
+### Upgrading to 0.8.16
+
+No migration. One change, in `kernel.run_tool` / `run_tool_async` (new in
+0.8.15):
+
+- **The approval callback is now asked.** In 0.8.15 `run_tool` refused every
+  call the callback would be asked about in a turn, without asking it; with
+  `risk_threshold="low"` that was every tool. Now it asks the callback and
+  runs the call only when it approves. If your callback can block waiting
+  for a person, make it check `ctx.outside_turn` (new field of
+  `ToolExecContext`, `True` in a `run_tool` call) and return
+  `ApprovalDecision.defer(...)` or `False` there. Tools with
+  `requires_approval` are still never run outside a turn.
+
 ---
 
 ## Tool Registration
@@ -1639,10 +1653,35 @@ call with the rules of that conversation and calls no model:
   caller) again.
 - **Nothing is added to the conversation.** No message, no trace. What to do
   with the result is the host's decision.
-- **Approval stays in a turn.** A call a turn would take to a person first is
-  not run: a tool with `requires_approval`, or one whose risk reaches the
-  threshold of the installed approval callback. The result says so and the
-  refusal is in `audit_log` (`blocked:needs approval`). Nobody is asked.
+- **Approval: your callback is asked, a person is not.** The approval
+  callback is asked about the calls it is asked about in a turn (risk at or
+  above its threshold), after policy and the guard. It is your rule and often
+  answers without asking anybody. For it, for the guard and for the handler,
+  `ToolExecContext.outside_turn` is `True`: nobody is following a turn, so a
+  callback that would wait for a person must answer at once instead.
+
+  | The callback answers | The call |
+  |---|---|
+  | `True` / `ApprovalDecision.approve()` | runs |
+  | `False` / `ApprovalDecision.deny(reason)` | is refused; `audit_log` has `denied:<reason>` |
+  | `ApprovalDecision.defer(reason)` | is refused (`blocked:needs approval`); no pending approval is recorded outside a turn |
+  | raises | is refused |
+
+  A tool whose descriptor sets `requires_approval` is never run by
+  `run_tool`, and the callback is not asked: only a person's yes runs it, in
+  a turn or through `resolve_pending`. The callback runs on the calling
+  thread (a worker thread in `run_tool_async`).
+
+  ```python
+  def approval_gate(tool_id, params, risk, ctx):
+      if my_rules_allow(tool_id, ctx):
+          return True
+      if ctx.outside_turn:              # nobody to ask: do not wait
+          return ApprovalDecision.defer("needs the owner")
+      return ask_the_owner_and_wait(tool_id, params)
+
+  kernel.set_approval_callback(approval_gate, pass_context=True, risk_threshold="low")
+  ```
 - **Result, not exception.** A refused, unknown or failing call comes back as
   `ToolResult(success=False, error=...)`. Only an unknown session raises
   (`EntityNotFoundError`).

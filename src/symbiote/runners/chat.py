@@ -1136,6 +1136,16 @@ class ChatRunner:
             return False
         return self._risk_asks(self._tool_gateway.get_risk_level(tool_id))
 
+    def ask_approval(self, tool_id: str, params: dict) -> ApprovalDecision:
+        """What the installed approval callback answers for one call
+        (approve when none is installed). The caller binds the call's
+        ``ToolExecContext``; the callback may block."""
+        callback = self._on_before_tool_call
+        if callback is None or self._tool_gateway is None:
+            return ApprovalDecision.approve()
+        risk = self._tool_gateway.get_risk_level(tool_id)
+        return as_approval_decision(callback(tool_id, params, risk))
+
     def _check_approval(
         self,
         calls: list[ToolCall],

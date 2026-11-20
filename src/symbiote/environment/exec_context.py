@@ -48,12 +48,18 @@ class ToolExecContext:
     ``approval_id`` is set when the call is the execution of a request that
     waited for approval (``kernel.resolve_pending``): a person already said
     yes to exactly this call, outside any turn.
+
+    ``outside_turn`` is True when the host made the call with
+    ``kernel.run_tool``: no model asked for it and nobody is following a
+    turn. An approval callback or a tool guard that would ask a person has
+    to answer at once instead (deny, or defer).
     """
 
     symbiote_id: str
     session_id: str | None = None
     host: Mapping[str, Any] = field(default=_EMPTY_HOST)
     approval_id: str | None = None
+    outside_turn: bool = False
 
 
 _current: contextvars.ContextVar[ToolExecContext | None] = contextvars.ContextVar(
@@ -61,6 +67,10 @@ _current: contextvars.ContextVar[ToolExecContext | None] = contextvars.ContextVa
 )
 _host: contextvars.ContextVar[Mapping[str, Any]] = contextvars.ContextVar(
     "symbiote_host_context", default=_EMPTY_HOST
+)
+# True while ``kernel.run_tool`` runs a call, and in whatever that call starts.
+_outside_turn: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "symbiote_outside_turn", default=False
 )
 
 
@@ -133,6 +143,22 @@ def reset_host_context(token: contextvars.Token | None) -> None:
         _host.reset(token)
 
 
+def bind_outside_turn() -> contextvars.Token:
+    """Mark what runs from here on as a call made outside a turn
+    (``ToolExecContext.outside_turn``); returns a reset token."""
+    return _outside_turn.set(True)
+
+
+def reset_outside_turn(token: contextvars.Token) -> None:
+    """Undo ``bind_outside_turn`` (call in a ``finally`` block)."""
+    _outside_turn.reset(token)
+
+
+def is_outside_turn() -> bool:
+    """Whether the code running was started by ``kernel.run_tool``."""
+    return _outside_turn.get()
+
+
 @contextmanager
 def tool_exec_context(
     symbiote_id: str, session_id: str | None, approval_id: str | None = None
@@ -143,6 +169,7 @@ def tool_exec_context(
             session_id=session_id,
             host=_host.get(),
             approval_id=approval_id,
+            outside_turn=_outside_turn.get(),
         )
     )
     try:
@@ -155,11 +182,14 @@ __all__ = [
     "SpawnContext",
     "ToolExecContext",
     "bind_host_context",
+    "bind_outside_turn",
     "bind_spawn",
     "current_host_context",
     "current_spawn",
     "current_tool_context",
+    "is_outside_turn",
     "reset_spawn",
     "reset_host_context",
+    "reset_outside_turn",
     "tool_exec_context",
 ]

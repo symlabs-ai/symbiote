@@ -97,12 +97,15 @@ from symbiote.discovery.loader import DiscoveredToolLoader
 from symbiote.discovery.repository import DiscoveredToolRepository
 from symbiote.dream.engine import DreamEngine
 from symbiote.dream.models import DreamReport
-from symbiote.environment.descriptors import HttpToolConfig, ToolDescriptor
+from symbiote.environment.descriptors import HttpToolConfig, ToolCall, ToolDescriptor
 from symbiote.environment.exec_context import (
     bind_host_context,
+    bind_outside_turn,
     current_spawn,
     current_tool_context,
     reset_host_context,
+    reset_outside_turn,
+    tool_exec_context,
 )
 from symbiote.environment.http_tool_store import HttpToolRepository
 from symbiote.environment.manager import EnvironmentManager
@@ -1689,12 +1692,18 @@ class SymbioteKernel:
         ``message()``: the context of earlier turns is not kept. ``timeout``
         defaults to the symbiote's ``tool_call_timeout``.
 
-        A call that a turn would take to a person first is not run: a tool
-        whose descriptor sets ``requires_approval``, or one whose risk
-        reaches the threshold of the installed approval callback. The result
-        says so and the refusal is audited. Approval belongs to a turn, where
-        somebody is asked; an approved request runs with
-        ``resolve_pending``.
+        Approval: the installed approval callback (``set_approval_callback``)
+        is asked about the calls it is asked about in a turn, those whose
+        risk reaches its threshold, after policy and the tool guard accepted
+        the call. It is the host's rule and often answers without asking
+        anybody; ``ToolExecContext.outside_turn`` is True for it, for the
+        guard and for the handler, so a callback that would wait for a
+        person answers at once instead. ``True`` runs the call, ``False``
+        refuses it, and ``ApprovalDecision.defer`` refuses it too: no
+        pending approval is recorded outside a turn. A tool whose descriptor
+        sets ``requires_approval`` is never run here: nobody is there to say
+        yes. Every refusal is audited. The callback runs on the calling
+        thread (a worker thread in ``run_tool_async``).
 
         Returns the ``ToolResult`` (``success``, ``output``, ``error``); a
         refused or failed call comes back as a result, not as an exception.
@@ -1704,7 +1713,9 @@ class SymbioteKernel:
         """
         params = dict(params or {})
         with self._as_session(session_id, host_context) as symbiote_id:
-            refusal = self._needs_a_turn(symbiote_id, session_id, tool_id, params)
+            refusal, guard_checked = self._cleared_outside_turn(
+                symbiote_id, session_id, tool_id, params
+            )
             if refusal is not None:
                 return refusal
             return self._tool_gateway.execute(
@@ -1713,6 +1724,7 @@ class SymbioteKernel:
                 tool_id,
                 params,
                 timeout=self._tool_timeout(symbiote_id, timeout),
+                _guard_checked=guard_checked,
             )
 
     async def run_tool_async(
@@ -1727,7 +1739,10 @@ class SymbioteKernel:
         """Async variant of ``run_tool()``: awaits coroutine handlers."""
         params = dict(params or {})
         with self._as_session(session_id, host_context) as symbiote_id:
-            refusal = self._needs_a_turn(symbiote_id, session_id, tool_id, params)
+            # Off the event loop: the guard and the approval callback may block.
+            refusal, guard_checked = await asyncio.to_thread(
+                self._cleared_outside_turn, symbiote_id, session_id, tool_id, params
+            )
             if refusal is not None:
                 return refusal
             return await self._tool_gateway.execute_async(
@@ -1736,6 +1751,7 @@ class SymbioteKernel:
                 tool_id,
                 params,
                 timeout=self._tool_timeout(symbiote_id, timeout),
+                _guard_checked=guard_checked,
             )
 
     @contextlib.contextmanager
@@ -1744,7 +1760,8 @@ class SymbioteKernel:
     ) -> Iterator[str]:
         """What runs inside runs as the session, outside a turn: its
         symbiote, its revision, the tools it is narrowed to and
-        ``host_context``. Yields the symbiote's id."""
+        ``host_context``, marked as such
+        (``ToolExecContext.outside_turn``). Yields the symbiote's id."""
         row = self._storage.fetch_one(self._SESSION_SCOPE_SQL, (session_id,))
         if row is None:
             raise EntityNotFoundError("Session", session_id)
@@ -1752,9 +1769,11 @@ class SymbioteKernel:
         symbiote_token = _set_active_symbiote(symbiote_id)
         scope_tokens = self._bind_session(session_id, row)
         host_token = bind_host_context(host_context)
+        outside_token = bind_outside_turn()
         try:
             yield symbiote_id
         finally:
+            reset_outside_turn(outside_token)
             reset_host_context(host_token)
             self._unbind_session(scope_tokens)
             _reset_active_symbiote(symbiote_token)
@@ -1765,19 +1784,74 @@ class SymbioteKernel:
         cfg = self._environment.get_config(symbiote_id)
         return cfg.tool_call_timeout if cfg else 30.0
 
-    def _needs_a_turn(
+    def _cleared_outside_turn(
         self, symbiote_id: str, session_id: str, tool_id: str, params: dict
-    ) -> ToolResult | None:
-        """The refusal of a call that a turn would take to a person before
-        running it, or ``None`` when the call may run without one."""
+    ) -> tuple[ToolResult | None, bool]:
+        """The approval step of a call made outside a turn.
+
+        Returns the refusal (``None`` when the call may run) and whether the
+        tool guard was already consulted for it. A tool that requires
+        approval is refused: nobody is there to say yes. A call the approval
+        callback is asked about in a turn goes to that same callback, after
+        policy and the guard: it is the host's rule and may answer without
+        asking anybody. Only its approval runs the call; a deferral is a
+        refusal, and no pending approval is recorded.
+        """
+        gateway = self._tool_gateway
+        if not gateway.has_tool(tool_id):
+            return None, False  # execution reports that it is not registered
+        if gateway.requires_approval(tool_id):
+            return self._waits_for_a_person(symbiote_id, session_id, tool_id, params), False
         runner = self._runner_registry.select("chat")
-        asks = (
-            runner.approval_applies(tool_id)
-            if isinstance(runner, ChatRunner)
-            else self._tool_gateway.requires_approval(tool_id)
+        if not isinstance(runner, ChatRunner) or not runner.approval_applies(tool_id):
+            return None, False
+        refusal = gateway.authorize(
+            symbiote_id, session_id, ToolCall(tool_id=tool_id, params=params)
         )
-        if not asks:
-            return None
+        if refusal is not None:
+            return refusal, False
+        try:
+            with tool_exec_context(symbiote_id, session_id):
+                decision = runner.ask_approval(tool_id, params)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "approval callback failed for %s outside a turn; call denied", tool_id
+            )
+            decision = ApprovalDecision.deny("the host's approval callback failed")
+        if decision.outcome == "approve":
+            return None, True
+        if decision.outcome == "defer":
+            return (
+                self._waits_for_a_person(
+                    symbiote_id, session_id, tool_id, params, decision.reason
+                ),
+                False,
+            )
+        reason = decision.reason or "denied by approval callback"
+        self._policy_gate._write_audit(
+            symbiote_id=symbiote_id,
+            session_id=session_id,
+            tool_id=tool_id,
+            action="denied",
+            params=params,
+            result=f"denied:{reason[:200]}",
+        )
+        return (
+            ToolResult(
+                success=False, tool_id=tool_id, error=f"Tool call denied: {reason}"
+            ),
+            False,
+        )
+
+    def _waits_for_a_person(
+        self,
+        symbiote_id: str,
+        session_id: str,
+        tool_id: str,
+        params: dict,
+        reason: str = "",
+    ) -> ToolResult:
+        """The audited refusal of a call that only a person can allow."""
         self._policy_gate._write_audit(
             symbiote_id=symbiote_id,
             session_id=session_id,
@@ -1786,14 +1860,13 @@ class SymbioteKernel:
             params=params,
             result="blocked:needs approval",
         )
-        return ToolResult(
-            success=False,
-            tool_id=tool_id,
-            error=(
-                f"Tool '{tool_id}' runs only after a person approves the call, "
-                "and nobody is asked outside a turn: it was not executed."
-            ),
+        error = (
+            f"Tool '{tool_id}' runs only after a person approves the call, "
+            "and nobody is asked outside a turn: it was not executed."
         )
+        if reason:
+            error += f" Reason: {reason}"
+        return ToolResult(success=False, tool_id=tool_id, error=error)
 
     # ── approvals that wait for a person ────────────────────────────────
 

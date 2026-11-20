@@ -20,7 +20,7 @@ from symbiote.core.hooks import BaseHook
 from symbiote.core.session_scope import current_session_scope
 from symbiote.environment.descriptors import ToolDescriptor
 from symbiote.environment.exec_context import current_host_context, current_tool_context
-from symbiote.environment.policies import ToolDecision
+from symbiote.environment.policies import ApprovalDecision, ToolDecision
 from symbiote.skills.scope import get_active_symbiote
 from tests.support import ScriptedLLM, add_tool, make_kernel
 
@@ -233,7 +233,7 @@ def test_an_unknown_session_raises(jobs) -> None:
         asyncio.run(jobs.kernel.run_tool_async("no-such-session", "status"))
 
 
-# ── what a turn would take to a person is not run ────────────────────────
+# ── approval: the host's callback is asked, a person is not ───────────────
 
 
 def _risky(kernel, symbiote_id: str, tool_id: str, ran: list[str], **descriptor) -> None:
@@ -247,15 +247,196 @@ def _risky(kernel, symbiote_id: str, tool_id: str, ran: list[str], **descriptor)
     kernel.environment.configure(symbiote_id=symbiote_id, tools=tools)
 
 
-def test_a_tool_that_requires_approval_is_not_run(jobs) -> None:
+def test_a_callback_installed_for_every_risk_does_not_refuse_every_tool(jobs) -> None:
+    """The host's callback is its rule for every call and mostly says yes
+    without asking anybody (report 25: with ``risk_threshold="low"`` every
+    call was refused because a callback existed)."""
+    k = jobs.kernel
+    k.set_approval_callback(lambda *a: True, pass_context=True, risk_threshold="low")
+
+    result = k.run_tool(jobs.session.id, "status", {"job": "exec-1"})
+
+    assert result.success is True
+    assert result.output == {"status": "running", "job": "exec-1"}
+    assert jobs.audit() == [("status", "execute", "success")]
+
+
+def test_the_callback_is_told_that_the_call_is_outside_a_turn(jobs) -> None:
+    k, seen = jobs.kernel, []
+
+    def callback(tool_id: str, params: dict, risk: str, ctx) -> bool:
+        seen.append((tool_id, params, risk, ctx.session_id, dict(ctx.host), ctx.outside_turn))
+        return True
+
+    k.set_approval_callback(callback, pass_context=True, risk_threshold="low")
+
+    k.run_tool(jobs.session.id, "status", {"job": "x"}, host_context={"user": "ana"})
+
+    assert seen == [
+        ("status", {"job": "x"}, "low", jobs.session.id, {"user": "ana"}, True)
+    ]
+
+
+def test_in_a_turn_the_same_callback_sees_outside_turn_false(tmp_path: Path) -> None:
+    def script(_i, messages):
+        if "[Tool" in str(messages[-1]["content"]):
+            return "done"
+        return '```tool_call\n{"tool": "status", "params": {}}\n```'
+
+    j, seen = Jobs(tmp_path, llm=ScriptedLLM(script)), []
+    j.kernel.set_approval_callback(
+        lambda _t, _p, _r, ctx: seen.append(ctx.outside_turn) or True,
+        pass_context=True,
+        risk_threshold="low",
+    )
+
+    j.kernel.message(j.session.id, "how is the job?")
+    j.kernel.run_tool(j.session.id, "status")
+
+    assert seen == [False, True]
+    j.kernel.shutdown()
+
+
+def test_the_handler_and_the_guard_see_it_too(jobs) -> None:
+    k, seen = jobs.kernel, []
+    add_tool(
+        k, jobs.sym.id, "probe",
+        lambda _p: seen.append(("handler", current_tool_context().outside_turn)),
+    )
+
+    def guard(tool_id: str, params: dict, ctx) -> ToolDecision:
+        seen.append(("guard", ctx.outside_turn))
+        return ToolDecision.allow()
+
+    k.set_tool_guard(guard)
+
+    k.run_tool(jobs.session.id, "probe")
+
+    assert seen == [("guard", True), ("handler", True)]
+    assert current_tool_context() is None
+
+
+def test_a_denial_of_the_callback_refuses_the_call(jobs) -> None:
     k, ran = jobs.kernel, []
+    _risky(k, jobs.sym.id, "delete_all", ran, risk_level="high")
+    k.set_approval_callback(lambda *a: ApprovalDecision.deny("automations are paused"))
+
+    result = k.run_tool(jobs.session.id, "delete_all")
+
+    assert result.success is False
+    assert result.error == "Tool call denied: automations are paused"
+    assert ran == []
+    assert jobs.audit() == [
+        ("delete_all", "denied", "denied:automations are paused")
+    ]
+
+
+def test_a_plain_false_refuses_it_as_well(jobs) -> None:
+    k, ran = jobs.kernel, []
+    _risky(k, jobs.sym.id, "delete_all", ran, risk_level="high")
+    k.set_approval_callback(lambda *a: False)
+
+    result = k.run_tool(jobs.session.id, "delete_all")
+
+    assert (result.success, ran) == (False, [])
+    assert "denied" in result.error
+
+
+def test_a_deferral_refuses_it_and_records_no_pending_approval(jobs) -> None:
+    k, ran = jobs.kernel, []
+    _risky(k, jobs.sym.id, "delete_all", ran, risk_level="high")
+    k.set_approval_callback(lambda *a: ApprovalDecision.defer("the owner has to confirm"))
+
+    result = k.run_tool(jobs.session.id, "delete_all")
+
+    assert result.success is False
+    assert "person approves" in result.error
+    assert "the owner has to confirm" in result.error
+    assert ran == []
+    assert jobs.audit() == [("delete_all", "blocked", "blocked:needs approval")]
+    assert k.inspector.list_pending(jobs.sym.id) == []
+
+
+def test_a_call_under_the_threshold_does_not_reach_the_callback(jobs) -> None:
+    k, ran, asked = jobs.kernel, [], []
+    _risky(k, jobs.sym.id, "rename", ran, risk_level="medium")
+    k.set_approval_callback(lambda *a: asked.append(a) or False)  # threshold: high
+
+    assert k.run_tool(jobs.session.id, "rename").success is True
+    assert (ran, asked) == (["rename"], [])
+
+
+def test_policy_and_the_guard_come_before_the_callback(jobs) -> None:
+    k, asked = jobs.kernel, []
+    k.set_approval_callback(lambda *a: asked.append(a) or True, risk_threshold="low")
+
+    blocked = k.run_tool(jobs.session.id, "ghost")  # not authorized
+    k.set_tool_guard(lambda *_a: ToolDecision.deny("the workspace is paused"))
+    vetoed = k.run_tool(jobs.session.id, "status")
+
+    assert "blocked" in blocked.error
+    assert "the workspace is paused" in vetoed.error
+    assert asked == []
+    assert jobs.seen == []
+
+
+def test_the_guard_is_asked_once_for_an_approved_call(jobs) -> None:
+    k, asked = jobs.kernel, []
+
+    def guard(tool_id: str, params: dict, ctx) -> ToolDecision:
+        asked.append(tool_id)
+        return ToolDecision.allow()
+
+    k.set_tool_guard(guard)
+    k.set_approval_callback(lambda *a: True, risk_threshold="low")
+
+    assert k.run_tool(jobs.session.id, "status").success is True
+    assert asked == ["status"]
+
+
+def test_a_callback_that_raises_denies_the_call(jobs) -> None:
+    def broken(*_a):
+        raise RuntimeError("broker unreachable")
+
+    jobs.kernel.set_approval_callback(broken, risk_threshold="low")
+
+    result = jobs.kernel.run_tool(jobs.session.id, "status")
+
+    assert result.success is False
+    assert "approval callback failed" in result.error
+    assert jobs.seen == []
+
+
+def test_the_async_variant_asks_the_callback_off_the_event_loop(jobs) -> None:
+    import threading
+
+    k, threads = jobs.kernel, []
+
+    def callback(tool_id: str, params: dict, risk: str, ctx) -> bool:
+        threads.append((threading.current_thread() is threading.main_thread(), ctx.outside_turn))
+        return True
+
+    k.set_approval_callback(callback, pass_context=True, risk_threshold="low")
+
+    result = asyncio.run(k.run_tool_async(jobs.session.id, "status", {"job": "x"}))
+
+    assert result.success is True
+    assert threads == [(False, True)]
+    assert jobs.seen[0]["session"] == jobs.session.id
+
+
+def test_a_tool_that_requires_approval_is_never_run(jobs) -> None:
+    """``requires_approval`` is the tool's own rule: only a person's yes
+    runs it, and outside a turn nobody is there. The callback is not asked."""
+    k, ran, asked = jobs.kernel, [], []
     _risky(k, jobs.sym.id, "wire", ran, requires_approval=True)
+    k.set_approval_callback(lambda *a: asked.append(a) or True, risk_threshold="low")
 
     result = k.run_tool(jobs.session.id, "wire", {"amount": 10})
 
     assert result.success is False
     assert "person approves" in result.error
-    assert ran == []
+    assert (ran, asked) == ([], [])
     assert jobs.audit() == [("wire", "blocked", "blocked:needs approval")]
 
 
@@ -268,36 +449,21 @@ def test_nor_is_it_run_when_the_kernel_has_no_model(tmp_path: Path) -> None:
     j.kernel.shutdown()
 
 
-def test_a_risk_the_approval_callback_asks_about_is_not_run(jobs) -> None:
-    k, ran, asked = jobs.kernel, [], []
-    _risky(k, jobs.sym.id, "delete_all", ran, risk_level="high")
-    _risky(k, jobs.sym.id, "rename", ran, risk_level="medium")
-    k.set_approval_callback(lambda *a: asked.append(a) or True)
-
-    refused = k.run_tool(jobs.session.id, "delete_all")
-    allowed = k.run_tool(jobs.session.id, "rename")
-
-    assert refused.success is False
-    assert allowed.success is True
-    assert ran == ["rename"]
-    assert asked == []  # nobody is asked outside a turn
-
-
-def test_the_threshold_of_the_callback_is_the_one_that_counts(jobs) -> None:
-    k, ran = jobs.kernel, []
-    _risky(k, jobs.sym.id, "rename", ran, risk_level="medium")
-    k.set_approval_callback(lambda *a: True, risk_threshold="medium")
-
-    assert k.run_tool(jobs.session.id, "rename").success is False
-    assert ran == []
-
-
 def test_without_a_callback_a_high_risk_tool_runs_as_it_does_in_a_turn(jobs) -> None:
     k, ran = jobs.kernel, []
     _risky(k, jobs.sym.id, "delete_all", ran, risk_level="high")
 
     assert k.run_tool(jobs.session.id, "delete_all").success is True
     assert ran == ["delete_all"]
+
+
+def test_an_unknown_tool_is_not_taken_to_the_callback(jobs) -> None:
+    k, asked = jobs.kernel, []
+    k.set_approval_callback(lambda *a: asked.append(a) or True, risk_threshold="low")
+
+    result = k.run_tool(jobs.session.id, "nope")
+
+    assert (result.success, result.error, asked) == (False, "Tool not registered", [])
 
 
 # ── next to a turn ───────────────────────────────────────────────────────

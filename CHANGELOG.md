@@ -5,6 +5,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+### Correções
+
+- fix(kernel): `run_tool` / `run_tool_async` recusavam toda chamada que o callback de aprovação veria num turno, sem consultá-lo; com `risk_threshold="low"`, todas as tools (B-105, relato do SymbiOS). Agora o callback é consultado, depois da política e do guard: `True` executa, `False` recusa (`denied` na auditoria) e `ApprovalDecision.defer` recusa sem criar pedido pendente. `ToolExecContext.outside_turn` (novo) vale `True` nessas chamadas, para o callback, o guard e o handler, de modo que um callback que esperaria uma pessoa responda na hora. Tool com `requires_approval` continua sem rodar fora de um turno. **Para hosts:** um callback que bloqueia esperando uma pessoa precisa checar `ctx.outside_turn`.
+
 ## [v0.8.15] - 2026-11-20
 
 Duas primitivas para o host iniciar um turno por conta própria (B-102, B-103; saíram do pedido de "esperar e acordar" da equipe do SymbiOS). A espera, a fila de eventos e o agendamento continuam com o host: a engine não ganha thread nem timer.

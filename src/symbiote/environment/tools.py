@@ -32,6 +32,7 @@ from symbiote.environment.exec_context import (
     ToolExecContext,
     current_host_context,
     current_tool_context,
+    is_outside_turn,
     tool_exec_context,
 )
 from symbiote.environment.policies import (
@@ -366,6 +367,7 @@ class ToolGateway:
             symbiote_id=symbiote_id,
             session_id=session_id,
             host=current_host_context(),
+            outside_turn=is_outside_turn(),
         )
 
     @staticmethod
