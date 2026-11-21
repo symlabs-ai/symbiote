@@ -118,6 +118,18 @@ def _forge_scraper(options: SearchOptions) -> Any:
     return ForgeScraperProvider(options=options)
 
 
+def _duckduckgo(options: SearchOptions) -> Any:
+    from symbiote.browser.search.providers.engine_readers import DuckDuckGoReader
+
+    return DuckDuckGoReader(options=options)
+
+
+def _yahoo(options: SearchOptions) -> Any:
+    from symbiote.browser.search.providers.engine_readers import YahooReader
+
+    return YahooReader(options=options)
+
+
 def _http_extract(options: SearchOptions) -> Any:
     from symbiote.browser.search.providers.http_extract import HttpExtract
 
@@ -138,6 +150,10 @@ register_crawl_provider("firecrawl", _firecrawl_via_gateway)
 # Direct: no gateway.
 register_search_provider("brave_api", _brave_api)
 register_search_provider("searxng", _searxng)
+# Direct, reading an engine's results page: best effort, the host's choice
+# (see providers/engine_readers.py before using them).
+register_search_provider("duckduckgo", _duckduckgo)
+register_search_provider("yahoo", _yahoo)
 register_extract_provider("forge_scraper", _forge_scraper)
 register_extract_provider("http", _http_extract)
 

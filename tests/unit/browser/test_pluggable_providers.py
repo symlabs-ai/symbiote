@@ -158,7 +158,7 @@ def test_an_unknown_name_says_what_is_registered(kernel) -> None:
 
 def test_names_shipped_with_the_package() -> None:
     assert registry.provider_names("search") == [
-        "brave", "brave_api", "searxng", "symgateway_objective",
+        "brave", "brave_api", "duckduckgo", "searxng", "symgateway_objective", "yahoo",
     ]
     assert registry.provider_names("extract") == ["firecrawl", "forge_scraper", "http"]
     assert registry.provider_names("crawl") == ["firecrawl"]

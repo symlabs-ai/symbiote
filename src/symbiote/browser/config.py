@@ -54,6 +54,11 @@ class SearchOptions(BaseModel):
     """How long the content returned by the ``http`` extractor may be. A
     longer page keeps its beginning and its end, with a line saying how much
     was left out. ``0``: no limit."""
+    min_relevance: float = 0.5
+    """For the search engine readers (``duckduckgo``, ``yahoo``): the share
+    of the query's words that must show in the first results. Below it the
+    list is taken for a refusal (results about something else) and the next
+    provider is tried. ``0`` turns the check off."""
     cache_ttl_seconds: float = 0.0
     """Keep the answers of ``web_search`` and ``web_extract`` in memory for
     this long, so the same query or address asked again in the meantime does

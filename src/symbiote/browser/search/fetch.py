@@ -231,7 +231,18 @@ def _http_fetcher(options: Any) -> HttpFetcher:
     )
 
 
+def _chrome_fetcher(options: Any) -> Any:
+    from symbiote.browser.search.fetch_chrome import ChromeLikeFetcher
+
+    return ChromeLikeFetcher(
+        timeout=float(getattr(options, "timeout_seconds", 30.0)),
+        max_bytes=int(getattr(options, "max_page_bytes", DEFAULT_MAX_BYTES)),
+    )
+
+
 register_fetcher("http", _http_fetcher)
+# Looks like Chrome on the wire; needs the [web] extra. Only by name.
+register_fetcher("chrome", _chrome_fetcher)
 
 
 __all__ = [

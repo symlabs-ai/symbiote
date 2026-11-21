@@ -50,6 +50,11 @@ browser = [
 stealth = [
     "playwright-stealth>=1.0.0",
 ]
+web = [
+    # The "chrome" fetcher of symbiote.browser: opens connections the way
+    # Chrome does (TLS and HTTP/2), for the search engine readers.
+    "curl_cffi>=0.7.0",
+]
 
 [project.scripts]
 symbiote = "symbiote.cli.main:app"
@@ -80,7 +85,7 @@ warn_unused_configs = true
 module = [
     "yaml", "forge_llm", "forge_llm.*", "forge_scraper",
     "playwright", "playwright.*", "psycopg", "psycopg.*",
-    "psycopg_pool", "psycopg_pool.*", "tomli",
+    "psycopg_pool", "psycopg_pool.*", "tomli", "curl_cffi", "curl_cffi.*",
 ]
 ignore_missing_imports = true
 
