@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.17] - 2026-11-21
+
 **Migração:** 20 no SQLite e 14 no PostgreSQL (coluna `sessions.learn`, `1` em toda sessão existente). Nada muda para quem não passa `learn=False`.
 
 ### Novas funcionalidades
