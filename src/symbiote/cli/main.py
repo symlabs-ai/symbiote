@@ -235,14 +235,24 @@ def session_find(
 @session_app.command("close")
 def session_close(
     session_id: str = typer.Argument(help="Session ID"),
+    no_learn: bool = typer.Option(
+        False,
+        "--no-learn",
+        help="Only close: no score, summary, reflection or skill review; "
+        "the session is marked and feeds no learning.",
+    ),
 ) -> None:
     """Close a session (runs reflection, generates summary)."""
     kernel = _make_kernel()
     try:
-        session = kernel.close_session(session_id=session_id)
+        session = kernel.close_session(session_id=session_id, learn=not no_learn)
+        detail = (
+            "Closed without learning."
+            if no_learn
+            else f"Summary: {_e(session.summary or 'No messages')}"
+        )
         console.print(Panel(
-            f"Session [cyan]{_e(session.id)}[/cyan] closed.\n"
-            f"Summary: {_e(session.summary or 'No messages')}",
+            f"Session [cyan]{_e(session.id)}[/cyan] closed.\n{detail}",
             title="Session Closed",
         ))
     except SymbioteError as exc:

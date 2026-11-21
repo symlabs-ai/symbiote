@@ -5,6 +5,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+**Migração:** 20 no SQLite e 14 no PostgreSQL (coluna `sessions.learn`, `1` em toda sessão existente). Nada muda para quem não passa `learn=False`.
+
+### Novas funcionalidades
+
+- feat(kernel): encerrar uma sessão sem aprender com ela (B-106, pedido do SymbiOS). `kernel.close_session(session_id, learn=False)` só fecha: não calcula nota, não gera resumo, não roda a reflexão, a memória de falha, a memória de handoff nem a revisão de procedimentos, e não dispara o sonho. A sessão fica marcada (`Session.learn`, coluna `sessions.learn`) e deixa de alimentar o que se aprende do symbiota como um todo: pontos das versões do harness, tuner, evolver, a contagem e as fases `mine` e `evaluate` do sonho, e a revisão de procedimentos. Mensagens e traces ficam guardados; o que foi aprendido durante a conversa e uma nota que a sessão já tinha não são desfeitos. A marca vale até a sessão, reaberta, ser fechada de novo com aprendizado.
+- feat(api): `POST /sessions/{id}/close?learn=false`; a resposta de sessão e `inspector.list_sessions` devolvem `learn`. `SymbioteClient.close_session(session_id, learn=False)` e `symbiote session close <id> --no-learn`.
+
+### Outros
+
+- docs: "Closing a session without learning from it" e "Upgrading to 0.8.17" em `docs/HOST_INTEGRATION.md`.
+
 ## [v0.8.16] - 2026-11-20
 
 ### Correções

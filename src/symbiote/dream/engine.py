@@ -72,8 +72,11 @@ class DreamEngine:
         last_dream_at = self._last_dream_at(symbiote_id)
         since = last_dream_at.isoformat() if last_dream_at else "1970-01-01"
         row = self._storage.fetch_one(
+            # A session closed with ``close_session(learn=False)`` is not
+            # one to dream about.
             "SELECT COUNT(*) AS cnt FROM sessions "
-            "WHERE symbiote_id = ? AND status = 'closed' AND ended_at > ?",
+            "WHERE symbiote_id = ? AND status = 'closed' AND ended_at > ? "
+            "AND COALESCE(learn, 1) != 0",
             (symbiote_id, since),
         )
         count = int(row["cnt"]) if row else 0

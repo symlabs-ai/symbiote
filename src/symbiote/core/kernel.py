@@ -74,7 +74,7 @@ from symbiote.core.session_scope import (
     tools_from_json,
 )
 from symbiote.core.subjects import (
-    learns_from_subjects,
+    session_feeds_learning,
     subject_kwargs,
     subject_of_session,
     validate_subject_key,
@@ -2107,11 +2107,31 @@ class SymbioteKernel:
                 "close_session: %s step failed; continuing", name
             )
 
-    def close_session(self, session_id: str) -> Session:
-        """Run reflection, compute score, persist failure memory, then close."""
+    def close_session(self, session_id: str, *, learn: bool = True) -> Session:
+        """Close a session. By default, learn from it first: score, failure
+        memory, summary, reflection, handoff and skill review, then the dream.
+
+        ``learn=False`` only closes: none of those steps runs and no summary
+        is stored. The session is marked (``Session.learn`` is ``False``) and
+        nothing learned for the symbiote as a whole reads it from then on:
+        harness scores, tuner, evolver, the dream (its count of new sessions
+        and its phases) and skill review. Messages and traces are kept, and
+        what was learned while the conversation ran is not undone. The mark
+        lasts until the session, reopened, is closed again with learning.
+        """
         row = self._storage.fetch_one(
-            "SELECT symbiote_id FROM sessions WHERE id = ?", (session_id,)
+            "SELECT symbiote_id, learn FROM sessions WHERE id = ?", (session_id,)
         )
+        if not learn:
+            # A long-run handoff waiting for the close would become a memory.
+            with self._handoffs_lock:
+                self._handoffs.pop(session_id, None)
+            return self._sessions.close(session_id, summary=None, learn=False)
+        if row is not None and row.get("learn") == 0:
+            # Closed without learning before, then reopened: it counts again
+            # from here, so the steps below (harness score, skill review)
+            # already see it.
+            self._sessions.set_learn(session_id, True)
         # ``text`` is set only when the symbiote's summary mode is not the
         # default: the summary is then written once here and handed to the
         # reflection and to the stored session (``None``: no summary).
@@ -3533,12 +3553,11 @@ class SymbioteKernel:
         """Whether a session counts for what is learned for the symbiote as
         a whole (harness scores, tuner, evolver, dream, skill review).
 
-        Always for a session without an end user; for the session of an end
-        user, only when ``learn_from_subject_sessions`` is on.
+        Never for a session closed with ``close_session(learn=False)``.
+        Otherwise always for a session without an end user; for the session
+        of an end user, only when ``learn_from_subject_sessions`` is on.
         """
-        if subject_of_session(self._storage, session_id) is None:
-            return True
-        return learns_from_subjects(self._storage, symbiote_id)
+        return session_feeds_learning(self._storage, session_id, symbiote_id)
 
     def _generate_failure_memory(
         self, session_id: str, symbiote_id: str, trace: LoopTrace | None

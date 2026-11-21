@@ -60,7 +60,7 @@ from symbiote.core.provenance import (
     reset_current_write_origin,
     set_current_write_origin,
 )
-from symbiote.core.subjects import learns_from_subjects, subject_of_session
+from symbiote.core.subjects import session_feeds_learning
 from symbiote.skills.store import (
     SkillError,
     SkillsStore,
@@ -289,20 +289,19 @@ class BackgroundReviewEngine:
                 del self._active[session_id]
 
     def _is_excluded(self, session_id: str, symbiote_id: str) -> bool:
-        """True for the session of an end user (``subject_key``) of a
-        symbiote that does not learn from those sessions
-        (``learn_from_subject_sessions`` off): what one visitor did must not
-        become a skill every other session gets. Needs the storage; without
-        it nothing is excluded."""
+        """True for a session the symbiote does not learn from: one closed
+        with ``close_session(learn=False)``, or the session of an end user
+        (``subject_key``) of a symbiote that does not learn from those
+        sessions (``learn_from_subject_sessions`` off): what one visitor did
+        must not become a skill every other session gets. Needs the storage;
+        without it nothing is excluded."""
         if self._storage is None:
             return False
         try:
-            if subject_of_session(self._storage, session_id) is None:
-                return False
-            return not learns_from_subjects(self._storage, symbiote_id)
+            return not session_feeds_learning(self._storage, session_id, symbiote_id)
         except Exception as exc:
-            # Not knowing whose session it is, do not learn from it.
-            _log.warning("skill review: cannot tell the session's subject: %s", exc)
+            # Not knowing whether the session may be learned from, do not.
+            _log.warning("skill review: cannot tell if the session is learned from: %s", exc)
             return True
 
     def _write_audit(

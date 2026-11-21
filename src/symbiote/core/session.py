@@ -259,13 +259,24 @@ class SessionManager:
 
         return session
 
+    def set_learn(self, session_id: str, learn: bool) -> None:
+        """Mark whether the symbiote learns from the session (``Session.learn``)."""
+        self._storage.execute(
+            "UPDATE sessions SET learn = ? WHERE id = ?", (int(learn), session_id)
+        )
+
     def close(
-        self, session_id: str, *, summary: str | None | object = _GENERATE
+        self,
+        session_id: str,
+        *,
+        summary: str | None | object = _GENERATE,
+        learn: bool = True,
     ) -> Session:
         """Close a session — set status, ended_at, and generate summary.
 
         ``summary`` replaces the generated one: a text written by the caller,
-        or ``None`` to store no summary.
+        or ``None`` to store no summary. ``learn`` is stored as the session's
+        mark (``Session.learn``).
         """
         row = self._storage.fetch_one(
             "SELECT * FROM sessions WHERE id = ?", (session_id,)
@@ -278,13 +289,19 @@ class SessionManager:
             summary = self._generate_summary(session_id)
 
         self._storage.execute(
-            "UPDATE sessions SET status = 'closed', ended_at = ?, summary = ? WHERE id = ?",
-            (now.isoformat(), summary, session_id),
+            "UPDATE sessions SET status = 'closed', ended_at = ?, summary = ?, learn = ? "
+            "WHERE id = ?",
+            (now.isoformat(), summary, int(learn), session_id),
         )
 
         session = self._row_to_session(row)
         return session.model_copy(
-            update={"status": "closed", "ended_at": now, "summary": summary}
+            update={
+                "status": "closed",
+                "ended_at": now,
+                "summary": summary,
+                "learn": learn,
+            }
         )
 
     # ── Messages ───────────────────────────────────────────────────────
@@ -418,6 +435,7 @@ class SessionManager:
             started_at=datetime.fromisoformat(row["started_at"]),
             ended_at=ended_at,
             summary=row.get("summary"),
+            learn=row.get("learn") != 0,
         )
 
     @staticmethod

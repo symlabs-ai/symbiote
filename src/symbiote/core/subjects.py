@@ -48,6 +48,9 @@ ANY_SUBJECT: Final = AnySubject()
 # Sessions that belong to an end user.
 _SUBJECT_SESSIONS = "SELECT id FROM sessions WHERE subject_key IS NOT NULL"
 
+# Sessions closed with ``close_session(learn=False)``.
+_NO_LEARNING_SESSIONS = "SELECT id FROM sessions WHERE learn = 0"
+
 
 def validate_subject_key(value: Any) -> str | None:
     """Return ``value`` if it can name an end user; ``None`` stays ``None``.
@@ -109,19 +112,44 @@ def learns_from_subjects(storage: StoragePort, symbiote_id: str) -> bool:
     return bool(row and row.get("flag"))
 
 
+def session_feeds_learning(
+    storage: StoragePort, session_id: str, symbiote_id: str
+) -> bool:
+    """Whether a session counts for what is learned for the symbiote as a
+    whole (harness scores, tuner, evolver, dream, skill review).
+
+    Never for a session closed with ``close_session(learn=False)``, until it
+    is closed again with learning. Otherwise always for a session without an
+    end user and, for the session of an end user, only when
+    ``learn_from_subject_sessions`` is on.
+    """
+    row = storage.fetch_one(
+        "SELECT subject_key, learn FROM sessions WHERE id = ?", (session_id,)
+    )
+    if row is None:
+        return True
+    if row.get("learn") == 0:
+        return False
+    if not row.get("subject_key"):
+        return True
+    return learns_from_subjects(storage, symbiote_id)
+
+
 def learning_sessions_clause(
     storage: StoragePort, symbiote_id: str, column: str = "session_id"
 ) -> str:
     """SQL condition for the readers that learn from a symbiote's sessions
     (parameter tuner, harness evolver, the dream's ``mine`` and ``evaluate``).
 
-    Empty when the symbiote learns from its end users' sessions; otherwise
-    `` AND <column> NOT IN (...)``, which leaves those sessions out.
-    ``column`` comes from the caller's own SQL, never from user input.
+    `` AND <column> NOT IN (...)``: always leaves out the sessions closed
+    with ``close_session(learn=False)`` and, unless the symbiote learns from
+    its end users' sessions, those sessions too. ``column`` comes from the
+    caller's own SQL, never from user input.
     """
+    clause = f" AND {column} NOT IN ({_NO_LEARNING_SESSIONS})"
     if learns_from_subjects(storage, symbiote_id):
-        return ""
-    return f" AND {column} NOT IN ({_SUBJECT_SESSIONS})"
+        return clause
+    return f"{clause} AND {column} NOT IN ({_SUBJECT_SESSIONS})"
 
 
 __all__ = [
@@ -130,6 +158,7 @@ __all__ = [
     "MAX_SUBJECT_KEY_CHARS",
     "learning_sessions_clause",
     "learns_from_subjects",
+    "session_feeds_learning",
     "subject_kwargs",
     "subject_of_session",
     "validate_subject_key",

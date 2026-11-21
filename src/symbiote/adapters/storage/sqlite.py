@@ -192,6 +192,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "_migrate_revisions",
     "_migrate_session_scope",
     "_migrate_message_origin",
+    "_migrate_session_learn",
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -808,6 +809,13 @@ class SQLiteAdapter:
         """19: who wrote the input of a turn when the person did not."""
         with contextlib.suppress(sqlite3.OperationalError):  # column already exists
             self._conn.execute("ALTER TABLE messages ADD COLUMN origin TEXT")
+        self._conn.commit()
+
+    def _migrate_session_learn(self) -> None:
+        """20: whether the symbiote learns from a session (0: it was closed
+        with ``close_session(learn=False)``)."""
+        with contextlib.suppress(sqlite3.OperationalError):  # column already exists
+            self._conn.execute("ALTER TABLE sessions ADD COLUMN learn INTEGER DEFAULT 1")
         self._conn.commit()
 
     def execute(self, sql: str, params: tuple | None = None) -> sqlite3.Cursor:

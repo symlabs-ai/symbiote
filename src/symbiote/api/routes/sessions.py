@@ -72,6 +72,7 @@ def _session_response(sess: Any, *, summary: bool = True) -> SessionResponse:
         delegation=sess.delegation,
         status=sess.status,
         summary=sess.summary if summary else None,
+        learn=sess.learn,
     )
 
 
@@ -275,12 +276,14 @@ def close_session(
     auth: Annotated[APIKey, Depends(require_auth)],
     adapter: Annotated[StoragePort, Depends(get_adapter)],
     kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
+    learn: Annotated[bool, Query()] = True,
 ) -> SessionResponse:
     """Close a session through the kernel: score, failure memory, reflection,
-    handoff, skill review and dream run exactly as in kernel.close_session()."""
+    handoff, skill review and dream run exactly as in kernel.close_session().
+    ``?learn=false`` closes it without any of them and marks the session."""
     _require_session_access(adapter, session_id, auth)
     try:
-        sess = kernel.close_session(session_id)
+        sess = kernel.close_session(session_id, learn=learn)
     except EntityNotFoundError:
         raise HTTPException(status_code=404, detail="Session not found") from None
     return _session_response(sess)

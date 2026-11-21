@@ -524,6 +524,20 @@ No migration. One change, in `kernel.run_tool` / `run_tool_async` (new in
   `ApprovalDecision.defer(...)` or `False` there. Tools with
   `requires_approval` are still never run outside a turn.
 
+### Upgrading to 0.8.17
+
+Migration 20 (PostgreSQL 14): the column `sessions.learn`, `1` for every
+existing session. Nothing changes for a host that does not pass
+`learn=False` to `close_session`. What a host may notice:
+
+- `Session`, the rows of `inspector.list_sessions` and the HTTP session
+  response have the key `learn` (`True` unless the session was closed with
+  `learn=False`).
+- A host that closed sessions through the private
+  `kernel._sessions.close(session_id, summary=None)` to skip the learning
+  can call `kernel.close_session(session_id, learn=False)` instead; see
+  "Closing a session without learning from it".
+
 ---
 
 ## Tool Registration
@@ -790,6 +804,55 @@ What that summary is depends on `session_summary_mode`, per symbiote:
 ```python
 kernel.environment.configure(symbiote_id=sym.id, session_summary_mode="llm")
 ```
+
+### Closing a session without learning from it
+
+Some conversations are worth keeping but not worth learning from: a test, a
+conversation that went wrong, a subject that must not become memory.
+
+```python
+closed = kernel.close_session(session.id, learn=False)
+# closed.learn is False, closed.summary is None
+```
+
+With `learn=False` the session is only closed. None of the steps of a normal
+close runs: no score, no summary, no reflection (so no new memories), no
+failure memory, no handoff memory, no skill review, and this close does not
+start a dream cycle. No model is called.
+
+The session is marked: `Session.learn` is `False`, and so is `learn` in the
+rows of `inspector.list_sessions` and in the HTTP session response (column
+`sessions.learn`). Nothing learned for the symbiote as a whole reads a marked
+session:
+
+| Reader | What it leaves out |
+| --- | --- |
+| Harness version scores | the session adds no score to the active versions |
+| Parameter tuner, harness evolver | its traces and its score |
+| Dream | it does not count towards `dream_min_sessions`; `mine` and `evaluate` do not read its traces, score or messages |
+| Skill review | no pass over it, at the close or later |
+
+What stays as it is:
+
+- The messages, the traces, the turn records and the audit rows. The
+  retention windows treat it like any other closed session.
+- What the symbiote learned while the conversation ran, such as a memory the
+  model stored with a tool or a skill review that ran in the middle of it.
+- A score the session already had (from an earlier normal close, or from
+  `report_feedback`, which can still be called for it). It remains in
+  `inspector.list_scores`; the readers above skip it.
+
+The mark belongs to the session and lasts until the session is closed with
+learning. A marked session that is reopened (`get_or_create_session` with its
+external key) stays marked while it is open, and the next close decides:
+`close_session(id, learn=False)` keeps the mark; `close_session(id)` lifts it
+and learns from the session as a whole, the earlier messages included. A host
+that wants a conversation to stay out for good closes it with `learn=False`
+every time, and `Session.learn` says which sessions those are.
+
+Over HTTP it is `POST /sessions/{id}/close?learn=false`, in the SDK
+`client.close_session(session_id, learn=False)`, and in the CLI
+`symbiote session close <SESSION_ID> --no-learn`.
 
 ### Narrowing a session's tools (`tools_allowed`)
 

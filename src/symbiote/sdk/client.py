@@ -190,9 +190,12 @@ class SymbioteClient:
         """Get session details."""
         return self._get(f"/sessions/{session_id}")
 
-    def close_session(self, session_id: str) -> dict:
-        """Close a session."""
-        return self._post(f"/sessions/{session_id}/close", {})
+    def close_session(self, session_id: str, *, learn: bool = True) -> dict:
+        """Close a session. ``learn=False`` closes it without scoring,
+        summarizing or reflecting, and marks it (``learn`` in the response)
+        so the Symbiota learns nothing from it."""
+        path = f"/sessions/{session_id}/close"
+        return self._post(path if learn else f"{path}?learn=false", {})
 
     # ── Chat ──────────────────────────────────────────────────────────────
 

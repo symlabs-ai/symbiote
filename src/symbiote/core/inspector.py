@@ -73,12 +73,13 @@ class KernelInspector:
         keeps the sessions pinned to that revision; each row says which one
         it is pinned to (``None``: the current configuration), the tools it
         is narrowed to (``tools_allowed``; ``None``: no restriction) and its
-        ``delegation`` mode.
+        ``delegation`` mode. ``learn`` is ``False`` for a session closed with
+        ``close_session(learn=False)``.
         """
         sql = (
             "SELECT s.id, s.symbiote_id, sym.name AS symbiote_name, s.goal, s.status, "
             "s.external_key, s.subject_key, s.revision, s.tools_allowed, s.delegation, "
-            "s.started_at, s.ended_at, s.summary, "
+            "s.started_at, s.ended_at, s.summary, s.learn, "
             "sc.auto_score, sc.user_score, sc.final_score, sc.stop_reason "
             "FROM sessions s JOIN symbiotes sym ON sym.id = s.symbiote_id "
             "LEFT JOIN session_scores sc ON sc.session_id = s.id"
@@ -107,6 +108,7 @@ class KernelInspector:
         for row in rows:
             row["tools_allowed"] = tools_from_json(row.get("tools_allowed"))
             row["delegation"] = row.get("delegation") or DELEGATION_OPEN
+            row["learn"] = row.get("learn") != 0
         return rows
 
     def list_messages(self, session_id: str, *, limit: int = 200) -> list[dict]:

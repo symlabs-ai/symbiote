@@ -108,6 +108,8 @@ class SessionResponse(BaseModel):
     delegation: str = "open"
     status: str
     summary: str | None = None
+    # False: closed with ``learn=false``; the symbiote learns nothing from it.
+    learn: bool = True
 
 
 class CreateMessageRequest(BaseModel):

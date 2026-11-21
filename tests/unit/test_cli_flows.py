@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from symbiote.adapters.storage.sqlite import SQLiteAdapter
 from symbiote.cli.main import app
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -140,3 +141,19 @@ def test_skills_commands(cli: Cli, tmp_path: Path) -> None:
     cli("skills", "pin", "deploy", "--unpin", "--root", str(root))
     missing = cli("skills", "promote", "nope", "--root", str(root), ok=False)
     assert missing.exit_code != 0
+
+
+def test_session_close_without_learning(cli: Cli, bot) -> None:
+    _sym, session = bot
+    cli("chat", session, "I prefer short and direct answers.")
+
+    out = cli("session", "close", session, "--no-learn").output
+
+    assert "Closed without learning" in out
+    adapter = SQLiteAdapter(cli.db)
+    adapter.init_schema()
+    row = adapter.fetch_one("SELECT status, learn, summary FROM sessions WHERE id = ?", (session,))
+    scores = adapter.fetch_all("SELECT id FROM session_scores WHERE session_id = ?", (session,))
+    adapter.close()
+    assert row == {"status": "closed", "learn": 0, "summary": None}
+    assert scores == []

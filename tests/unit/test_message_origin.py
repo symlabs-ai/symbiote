@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from symbiote.adapters.export.markdown import ExportService
-from symbiote.adapters.storage.sqlite import SCHEMA_VERSION, SQLiteAdapter
+from symbiote.adapters.storage.sqlite import _MIGRATIONS, SCHEMA_VERSION, SQLiteAdapter
 from symbiote.core.exceptions import ValidationError
 from symbiote.core.hooks import BaseHook
 from symbiote.core.origin import label_origin, normalize_origin, speaker
@@ -257,7 +257,7 @@ def test_a_database_without_the_column_gets_it(tmp_path: Path) -> None:
 
     conn = sqlite3.connect(db)
     conn.execute("ALTER TABLE messages DROP COLUMN origin")
-    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION - 1}")
+    conn.execute(f"PRAGMA user_version = {_MIGRATIONS.index('_migrate_message_origin')}")
     conn.commit()
     conn.close()
 

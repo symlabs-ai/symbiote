@@ -91,7 +91,7 @@ All methods are on `SymbioteKernel`.
 | `start_session` | `(symbiote_id: str, goal: str \| None, external_key: str \| None) -> Session` | Start new session |
 | `get_or_create_session` | `(symbiote_id: str, external_key: str, goal: str \| None) -> Session` | Idempotent session by external key |
 | `get_session` | `(session_id: str) -> Session \| None` | Resume existing session |
-| `close_session` | `(session_id: str) -> Session` | Close with reflection + scoring |
+| `close_session` | `(session_id: str, *, learn: bool = True) -> Session` | Close with reflection + scoring; `learn=False` only closes and marks the session |
 
 ### Messaging
 

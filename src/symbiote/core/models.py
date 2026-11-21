@@ -59,6 +59,10 @@ class Session(BaseModel):
     started_at: datetime = Field(default_factory=_utcnow)
     ended_at: datetime | None = None
     summary: str | None = None
+    # False once the session was closed with ``close_session(learn=False)``:
+    # nothing learned for the symbiote as a whole (scores, tuner, evolver,
+    # dream, skill review) reads it, until it is closed again with learning.
+    learn: bool = True
 
 
 # ── Message ──────────────────────────────────────────────────────────────────
