@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.18] - 2026-11-21
+
 Busca e leitura web sem serviço pago (B-107, item 27 do SymbiOS). Tudo em `symbiote.browser`, sem migração, e nada liga sozinho: sem o host escolher, o comportamento é o anterior.
 
 ### Novas funcionalidades
