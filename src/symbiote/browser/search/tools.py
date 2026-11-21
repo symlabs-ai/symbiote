@@ -13,6 +13,7 @@ tools that always 500.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from symbiote.browser.search.providers.base import (
@@ -22,15 +23,21 @@ from symbiote.browser.search.providers.base import (
 )
 from symbiote.environment.descriptors import ToolDescriptor
 
+_SEARCH_DESCRIPTION = (
+    "Search the web for current information. Returns a list of results "
+    "with URL, title, and a short snippet of the page content. Use this "
+    "to find up-to-date facts, news, documentation, or to discover URLs"
+)
+_SEARCH_OUTCOMES = (
+    " An empty list with outcome \"no_results\" means the search ran and found "
+    "nothing. An error means the search did not run, which says nothing about "
+    "whether results exist."
+)
+
 WEB_SEARCH_DESCRIPTOR = ToolDescriptor(
     tool_id="web_search",
     name="Web Search",
-    description=(
-        "Search the web for current information. Returns a list of results "
-        "with URL, title, and a short snippet of the page content. Use this "
-        "to find up-to-date facts, news, documentation, or to discover URLs "
-        "you may then read in detail via browser_navigate / browser_snapshot."
-    ),
+    description=_SEARCH_DESCRIPTION + "." + _SEARCH_OUTCOMES,
     parameters={
         "type": "object",
         "properties": {
@@ -120,12 +127,56 @@ ALL_DESCRIPTORS = [
     WEB_CRAWL_DESCRIPTOR,
 ]
 
+_NO_RESULTS_NOTE = (
+    "The search ran and found nothing for this query. Try other words or a "
+    "shorter query."
+)
+_CACHE_MAX_ENTRIES = 256
+
+
+def web_search_descriptor(readers: list[str] | None = None) -> ToolDescriptor:
+    """The ``web_search`` descriptor, naming only the tools registered with
+    it for reading a result in detail (``readers``: tool ids)."""
+    if not readers:
+        return WEB_SEARCH_DESCRIPTOR
+    return WEB_SEARCH_DESCRIPTOR.model_copy(update={
+        "description": (
+            f"{_SEARCH_DESCRIPTION} you may then read in detail via "
+            f"{' / '.join(readers)}.{_SEARCH_OUTCOMES}"
+        )
+    })
+
+
+class _TtlCache:
+    """Answers kept in memory for ``ttl`` seconds (``0``: nothing is kept)."""
+
+    def __init__(self, ttl: float) -> None:
+        self._ttl = ttl
+        self._entries: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+
+    def get(self, key: tuple[Any, ...]) -> dict[str, Any] | None:
+        entry = self._entries.get(key) if self._ttl > 0 else None
+        if entry is None:
+            return None
+        if time.monotonic() - entry[0] > self._ttl:
+            del self._entries[key]
+            return None
+        return dict(entry[1])
+
+    def put(self, key: tuple[Any, ...], value: dict[str, Any]) -> None:
+        if self._ttl <= 0:
+            return
+        while len(self._entries) >= _CACHE_MAX_ENTRIES:
+            del self._entries[next(iter(self._entries))]  # the oldest
+        self._entries[key] = (time.monotonic(), dict(value))
+
 
 def build_handlers(
     search: SearchProvider | None = None,
     extract: ExtractProvider | None = None,
     crawl: CrawlProvider | None = None,
     policy: Any = None,
+    cache_ttl: float = 0.0,
 ) -> dict[str, Any]:
     """Build async handlers for whichever providers were supplied.
 
@@ -135,6 +186,8 @@ def build_handlers(
         crawl: CrawlProvider; enables `web_crawl` when given.
         policy: Optional WebsitePolicy checked before every URL is fetched
             (web_extract / web_crawl), as the browser tools already do.
+        cache_ttl: Seconds an answer of web_search / web_extract is kept in
+            memory and reused for the same query or address (0: no cache).
 
     Returns:
         {tool_id: async-handler} mapping containing only the tools whose
@@ -142,14 +195,39 @@ def build_handlers(
         the descriptor + handler together on the ToolGateway.
     """
     handlers: dict[str, Any] = {}
+    cache = _TtlCache(cache_ttl)
 
     if search is not None:
+        # A chain says which provider answered and what the others did.
+        run = getattr(search, "run", None)
 
         async def web_search(params: dict[str, Any]) -> dict[str, Any]:
             query = params["query"]
             limit = int(params.get("limit", 5))
-            results = await search.search(query, limit=limit)
-            return {"results": results, "count": len(results)}
+            cached = cache.get(("search", query, limit))
+            if cached is not None:
+                return cached
+            extra: dict[str, Any] = {}
+            if callable(run):
+                ran = await run(query, limit=limit)
+                results = ran.results
+                if ran.source:
+                    extra["source"] = ran.source
+                if ran.attempts:
+                    extra["attempts"] = ran.attempts
+            else:
+                results = await search.search(query, limit=limit)
+            if not results:
+                return {
+                    "results": [],
+                    "count": 0,
+                    "outcome": "no_results",
+                    "note": _NO_RESULTS_NOTE,
+                    **extra,
+                }
+            answer = {"results": results, "count": len(results), "outcome": "results", **extra}
+            cache.put(("search", query, limit), answer)
+            return answer
 
         handlers[WEB_SEARCH_DESCRIPTOR.tool_id] = web_search
 
@@ -162,7 +240,16 @@ def build_handlers(
             if policy is not None:
                 policy.check(url)
             validate_url(url)  # SSRF guard before any HTTP I/O
-            return await extract.extract(url)
+            cached = cache.get(("extract", url))
+            if cached is not None:
+                return cached
+            result = await extract.extract(url)
+            final = result.get("url") if isinstance(result, dict) else None
+            if policy is not None and isinstance(final, str) and final and final != url:
+                policy.check(final)  # the page a redirect led to
+            if isinstance(result, dict) and (result.get("content") or "").strip():
+                cache.put(("extract", url), result)
+            return result
 
         handlers[WEB_EXTRACT_DESCRIPTOR.tool_id] = web_extract
 

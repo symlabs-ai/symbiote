@@ -160,7 +160,7 @@ def test_names_shipped_with_the_package() -> None:
     assert registry.provider_names("search") == [
         "brave", "brave_api", "searxng", "symgateway_objective",
     ]
-    assert registry.provider_names("extract") == ["firecrawl", "forge_scraper"]
+    assert registry.provider_names("extract") == ["firecrawl", "forge_scraper", "http"]
     assert registry.provider_names("crawl") == ["firecrawl"]
 
 

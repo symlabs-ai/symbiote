@@ -47,7 +47,7 @@ _BACKEND_MODULES: dict[str, tuple[str, str]] = {
 def register(
     kernel: SymbioteKernel,
     *,
-    search_backend: SearchBackend | Any | None = None,
+    search_backend: SearchBackend | Any | list[SearchBackend | Any] | None = None,
     search_routing: dict[str, SearchBackend] | SearchRouting | None = None,
     search_options: dict[str, Any] | SearchOptions | None = None,
     extract_backend: ExtractBackend | Any | list[ExtractBackend | Any] | None = None,
@@ -69,14 +69,18 @@ def register(
         search_backend: Provider for `web_search`. Names that ship with the
             package: "brave_api" (the Brave Search API with the host's own
             key) and "searxng" (a SearXNG instance), both direct; "brave" and
-            "symgateway_objective", both through SymGateway. None disables.
+            "symgateway_objective", both through SymGateway. Pass a list to
+            try them in that order: a provider that fails is skipped and the
+            first one with results answers. None disables.
         search_routing: Per-tool search provider overrides.
         search_options: Search tool behavior (limits, per-provider settings
             in ``provider_options``, SymGateway overrides).
         extract_backend: Extract provider(s) for `web_extract`. Pass a list
             to chain them with first-non-empty-wins fallback
-            (e.g. ["forge_scraper", "firecrawl"]). "forge_scraper" runs
-            locally; "firecrawl" goes through SymGateway. None disables.
+            (e.g. ["http", "firecrawl"]). "http" reads the page itself
+            (through ``search_options.fetcher``, when the host passes one)
+            and "forge_scraper" runs locally; "firecrawl" goes through
+            SymGateway. None disables.
         crawl_backend: Crawl provider for `web_crawl` ("firecrawl", through
             SymGateway, or the host's own). None disables.
         browser_backend: Browser provider for browser_* tools. None disables.
@@ -122,6 +126,7 @@ def register(
             extract_backend=extract_backend,
             crawl_backend=crawl_backend,
             policy=policy_obj,
+            browser=browser_backend is not None,
         )
 
     if browser_backend is not None:
@@ -188,7 +193,7 @@ def _normalize_policy(
 
 def _normalize_routing(
     routing: dict[str, SearchBackend] | SearchRouting | None,
-    default_backend: SearchBackend | None,
+    default_backend: Any,
 ) -> SearchRouting:
     if routing is None:
         return SearchRouting(
@@ -204,12 +209,13 @@ def _normalize_routing(
 def _register_search(
     kernel: SymbioteKernel,
     *,
-    search_backend: SearchBackend | Any | None,
+    search_backend: SearchBackend | Any | list[SearchBackend | Any] | None,
     search_routing: dict[str, SearchBackend] | SearchRouting | None,
     search_options: dict[str, Any] | SearchOptions | None,
     extract_backend: ExtractBackend | Any | list[ExtractBackend | Any] | None,
     crawl_backend: CrawlBackend | Any | None,
     policy: Any = None,
+    browser: bool = False,
 ) -> None:
     """Register web_search / web_extract / web_crawl backed by the chosen providers.
 
@@ -228,6 +234,7 @@ def _register_search(
         WEB_EXTRACT_DESCRIPTOR,
         WEB_SEARCH_DESCRIPTOR,
         build_handlers,
+        web_search_descriptor,
     )
 
     handlers = build_handlers(
@@ -235,9 +242,14 @@ def _register_search(
         extract=extract_provider,
         crawl=crawl_provider,
         policy=policy,
+        cache_ttl=opts.cache_ttl_seconds,
     )
+    # web_search points only at the reading tools registered along with it.
+    readers = [WEB_EXTRACT_DESCRIPTOR.tool_id] if extract_provider is not None else []
+    if browser:
+        readers += ["browser_navigate", "browser_snapshot"]
     descriptor_map = {
-        WEB_SEARCH_DESCRIPTOR.tool_id: WEB_SEARCH_DESCRIPTOR,
+        WEB_SEARCH_DESCRIPTOR.tool_id: web_search_descriptor(readers),
         WEB_EXTRACT_DESCRIPTOR.tool_id: WEB_EXTRACT_DESCRIPTOR,
         WEB_CRAWL_DESCRIPTOR.tool_id: WEB_CRAWL_DESCRIPTOR,
     }
@@ -249,13 +261,20 @@ def _register_search(
 
 
 def _build_search_provider(
-    backend: SearchBackend | Any | None,
+    backend: SearchBackend | Any | list[SearchBackend | Any] | None,
     routing: dict[str, SearchBackend] | SearchRouting | None,
     opts: SearchOptions,
 ) -> Any:
-    """The provider of ``web_search``: ``backend``, or the one the routing
-    names for it. There is no default engine."""
+    """The provider of ``web_search``: ``backend`` (a list is tried in its
+    order), or the one the routing names for it. There is no default engine."""
     from symbiote.browser.search.registry import resolve_provider
+
+    if isinstance(backend, list):
+        if not backend:
+            raise ValueError("search_backend list cannot be empty")
+        from symbiote.browser.search.search_chain import SearchWithFallback
+
+        return SearchWithFallback([resolve_provider("search", item, opts) for item in backend])
 
     chosen = backend
     if chosen is None and routing is not None:

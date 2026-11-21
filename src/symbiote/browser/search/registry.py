@@ -118,6 +118,12 @@ def _forge_scraper(options: SearchOptions) -> Any:
     return ForgeScraperProvider(options=options)
 
 
+def _http_extract(options: SearchOptions) -> Any:
+    from symbiote.browser.search.providers.http_extract import HttpExtract
+
+    return HttpExtract(options=options)
+
+
 def _firecrawl_via_gateway(options: SearchOptions) -> Any:
     from symbiote.browser.search.providers.firecrawl import FirecrawlViaSymGateway
 
@@ -133,6 +139,7 @@ register_crawl_provider("firecrawl", _firecrawl_via_gateway)
 register_search_provider("brave_api", _brave_api)
 register_search_provider("searxng", _searxng)
 register_extract_provider("forge_scraper", _forge_scraper)
+register_extract_provider("http", _http_extract)
 
 
 __all__ = [

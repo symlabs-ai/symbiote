@@ -42,6 +42,22 @@ class SearchOptions(BaseModel):
     "web_seek"). Required by ``search_backend="symgateway_objective"``."""
     symgateway_objective_service: str = "websearch"
     """The Objective's service to invoke; it receives ``{"q", "count"}``."""
+    fetcher: Any = None
+    """Who brings the page for the providers that read the web themselves
+    (the ``http`` extractor and the search engine readers): the host's own
+    object with ``async fetch(url, *, headers=None)``, or the name of a
+    registered one. ``None``: the package's plain client (``"http"``). See
+    ``symbiote.browser.search.fetch``."""
+    max_page_bytes: int = 2_000_000
+    """How much of a page those providers read; the rest is dropped."""
+    max_content_chars: int = 40_000
+    """How long the content returned by the ``http`` extractor may be. A
+    longer page keeps its beginning and its end, with a line saying how much
+    was left out. ``0``: no limit."""
+    cache_ttl_seconds: float = 0.0
+    """Keep the answers of ``web_search`` and ``web_extract`` in memory for
+    this long, so the same query or address asked again in the meantime does
+    not go out again. ``0`` (default): no cache."""
 
     def options_for(self, provider: str) -> dict[str, Any]:
         """The settings given for one provider (empty when none)."""

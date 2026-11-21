@@ -25,6 +25,7 @@ from symbiote.browser.register import (
     register_browser,
     register_user_browser,
 )
+from symbiote.browser.search.fetch import FetchedPage, register_fetcher
 from symbiote.browser.search.registry import (
     register_crawl_provider,
     register_extract_provider,
@@ -32,12 +33,14 @@ from symbiote.browser.search.registry import (
 )
 
 __all__ = [
+    "FetchedPage",
     "default_chrome_profile",
     "find_chrome",
     "register",
     "register_browser",
     "register_crawl_provider",
     "register_extract_provider",
+    "register_fetcher",
     "register_search_provider",
     "register_user_browser",
 ]
