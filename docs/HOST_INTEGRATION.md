@@ -538,6 +538,27 @@ existing session. Nothing changes for a host that does not pass
   can call `kernel.close_session(session_id, learn=False)` instead; see
   "Closing a session without learning from it".
 
+### Upgrading to 0.8.18
+
+No migration. The changes are in `symbiote.browser`, and none turns itself
+on (see "Busca e leitura sem serviço pago" in
+`docs/integrations/symbiote-browser-quickstart.md`). What a host that
+already registers the web tools may notice:
+
+- **`web_search` output** has the key `outcome` (`"results"` or
+  `"no_results"`); an empty answer also has `note`. With a list in
+  `search_backend` it has `source` and, when an earlier provider failed,
+  `attempts`.
+- **`web_search` description** no longer names `browser_navigate` /
+  `browser_snapshot` unless the browser tools are registered in the same
+  `register()` call; it names `web_extract` when that one is.
+- **`web_extract`** also checks against `policy` the address a provider
+  reports as the final one (the key `url` of its answer), so a redirect to a
+  denied site is refused.
+- New names: `extract_backend="http"`, `search_backend="duckduckgo"` /
+  `"yahoo"`, `search_options["fetcher"]`, and the `[web]` extra for
+  `fetcher="chrome"`.
+
 ---
 
 ## Tool Registration

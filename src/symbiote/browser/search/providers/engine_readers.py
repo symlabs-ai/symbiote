@@ -106,7 +106,8 @@ class DuckDuckGoReader(EngineReader):
 
     name = "duckduckgo"
     block_marks: ClassVar[dict[str, str]] = {"anomaly-modal": "challenge", "anomaly.js": "challenge"}
-    empty_marks: ClassVar[tuple[str, ...]] = ("no-results", "No results.")
+    # Seen on 2026-11-21: <div class="no-results__container">No results found for ...
+    empty_marks: ClassVar[tuple[str, ...]] = ("no-results", "No results found for")
 
     def search_url(self, query: str) -> str:
         url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
@@ -141,6 +142,8 @@ class YahooReader(EngineReader):
     """``search.yahoo.com/search``."""
 
     name = "yahoo"
+    # Not seen live: on 2026-11-21 Yahoo answered a query with no match with
+    # loosely related results, which end as unrelated, not as no results.
     empty_marks: ClassVar[tuple[str, ...]] = ("We did not find results for",)
 
     def search_url(self, query: str) -> str:

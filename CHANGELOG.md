@@ -5,6 +5,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+Busca e leitura web sem serviço pago (B-107, item 27 do SymbiOS). Tudo em `symbiote.browser`, sem migração, e nada liga sozinho: sem o host escolher, o comportamento é o anterior.
+
+### Novas funcionalidades
+
+- feat(browser): quem traz a página é trocável pelo host. Os provedores que leem a web por conta própria pedem a página a um objeto com `async fetch(url, *, headers=None)`, que devolve `FetchedPage` (status, cabeçalhos, corpo e endereço final). O host passa o dele em `search_options["fetcher"]` (objeto ou nome registrado com `register_fetcher`); sem isso vale o cliente do pacote. Quem traz a página segue os redirecionamentos e confere cada salto; o pacote limita tempo e tamanho seja quem for.
+- feat(browser): `extract_backend="http"` lê a página com um GET, sem serviço no meio: pede `text/markdown` primeiro, converte HTML em markdown leve com um leitor em biblioteca padrão, devolve texto e JSON como vieram e corta página longa mantendo o começo e o fim, avisando o modelo.
+- feat(browser): `search_backend` aceita uma lista, tentada em ordem (`SearchWithFallback`). O `web_search` devolve `outcome` (`results` ou `no_results`), `source` e `attempts`; quando nenhum provedor responde, o erro diz o que cada um fez. `SearchRefusedError` e `SearchUnrelatedError` separam a recusa e a lista "cheia e sem relação com a consulta" de "nenhum resultado".
+- feat(browser): leitores `duckduckgo` e `yahoo` (leem a página de resultados; seletores de 2026-11-21) e `fetcher="chrome"`, que abre a conexão como o Chrome no TLS e no HTTP/2 (extra `[web]`, `curl_cffi`). Sempre escolha explícita do host; revê a conclusão de maio de 2026 registrada na "Fase 7" de `docs/integrations/symbiote-browser.md`.
+- feat(browser): `search_options["cache_ttl_seconds"]` guarda em memória as respostas de `web_search` e `web_extract` (desligado por padrão).
+
+### Correções
+
+- fix(browser): a descrição do `web_search` mandava ler as páginas com `browser_navigate` / `browser_snapshot` mesmo sem as ferramentas de navegador registradas. Agora cita só as ferramentas de leitura registradas junto.
+- fix(browser): o `web_extract` confere contra a `policy` também o endereço final que o provedor informa, não só o pedido.
+
+### Outros
+
+- docs: "Busca e leitura sem serviço pago" em `docs/integrations/symbiote-browser-quickstart.md`, revisão da "Fase 7" em `docs/integrations/symbiote-browser.md` e "Upgrading to 0.8.18" em `docs/HOST_INTEGRATION.md`.
+
 ## [v0.8.17] - 2026-11-21
 
 **Migração:** 20 no SQLite e 14 no PostgreSQL (coluna `sessions.learn`, `1` em toda sessão existente). Nada muda para quem não passa `learn=False`.

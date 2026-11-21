@@ -9,6 +9,12 @@ name of a registered one (`register_search_provider`). The package ships
 / `symgateway_objective`, which go through SymGateway and need
 `SYMGATEWAY_API_KEY` / `SYMGATEWAY_BASE_URL`.
 
+Reading and searching without a paid service is there for the host that
+asks for it: `extract_backend="http"` reads a page with one GET,
+`search_backend=["duckduckgo", "yahoo"]` reads the results page of an engine
+(best effort; never chosen by default), and `search_options["fetcher"]` says
+who brings the page (`symbiote.browser.search.fetch`).
+
 Browser navigation needs Playwright, kept in the `[browser]` extra so
 clients that only want search pay no cost:
 

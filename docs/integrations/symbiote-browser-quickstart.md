@@ -191,6 +191,8 @@ Nenhum mecanismo de busca vem fixo: o host escolhe. `search_backend`, `extract_b
 | `searxng` | `web_search` | direto numa instância SearXNG | `provider_options["searxng"]["base_url"]` ou `SEARXNG_URL` (saída JSON habilitada) |
 | `brave` | `web_search` | pelo SymGateway | `SYMGATEWAY_BASE_URL` e `SYMGATEWAY_API_KEY` |
 | `symgateway_objective` | `web_search` | pelo SymGateway | os dois acima e `search_options["symgateway_objective"]` |
+| `duckduckgo`, `yahoo` | `web_search` | lendo a página de resultados do buscador | escolha explícita; ver "Busca e leitura sem serviço pago" |
+| `http` | `web_extract` | um GET direto na página | nada |
 | `forge_scraper` | `web_extract` | local | extra `[extract]` |
 | `firecrawl` | `web_extract`, `web_crawl` | pelo SymGateway | `SYMGATEWAY_BASE_URL` e `SYMGATEWAY_API_KEY` |
 
@@ -213,6 +215,78 @@ register(kernel, search_backend="minha-busca")                # ou o nome
 ```
 
 A fábrica recebe o `SearchOptions` dado a `register`; `options.options_for("minha-busca")` devolve o que veio em `provider_options` para aquele nome. `register_extract_provider` e `register_crawl_provider` fazem o mesmo para `web_extract` (`async extract(url)`) e `web_crawl` (`async crawl(domain, *, instruction, max_pages)`).
+
+### Busca e leitura sem serviço pago
+
+Nada desta seção liga sozinho: sem `search_backend` não há `web_search`, sem `extract_backend` não há `web_extract`, e nenhum buscador é escolhido pelo host.
+
+**Ler uma página: `extract_backend="http"`.** Um GET na página, sem serviço no meio. O pedido prefere `text/markdown`; HTML vira markdown leve (títulos, listas, links), sem navegação, rodapé, formulário e script; texto e JSON voltam como vieram; outros tipos (PDF, imagem) dão erro, e numa lista o próximo provedor tenta. Nada é executado: página montada por JavaScript rende pouco ou nenhum texto.
+
+```python
+register(kernel, extract_backend="http")
+register(kernel, extract_backend=["http", "firecrawl"])   # com reserva
+```
+
+Página longa volta com o começo e o fim e uma linha dizendo quanto ficou de fora (`max_content_chars`, padrão 40 000; a resposta traz `truncated` e `total_chars`). O corpo é lido até `max_page_bytes` (padrão 2 MB).
+
+**Quem traz a página é do host: `search_options["fetcher"]`.** O extrator `http` e os leitores de buscador nunca abrem conexão: pedem a página a um objeto com um método só.
+
+```python
+from symbiote.browser import FetchedPage, register
+
+class MeuCanal:
+    async def fetch(self, url, *, headers=None):
+        resposta = await meu_canal.get(url, headers=headers)   # um proxy, um app em outra máquina
+        return FetchedPage(
+            status=resposta.status, headers=resposta.headers, body=resposta.corpo, url=resposta.url_final
+        )
+
+register(kernel, extract_backend="http", search_options={"fetcher": MeuCanal()})
+```
+
+- `url` na resposta é o endereço de onde ela veio, depois dos redirecionamentos.
+- **Quem traz a página segue os redirecionamentos e confere cada salto.** Só ele sabe para onde um nome resolve na rede de onde o pedido sai. Os clientes do pacote conferem com `validate_url` (só http e https, nenhum endereço interno).
+- Seja quem for, o pacote limita o tempo (`timeout_seconds`) e o tamanho, e o `web_extract` confere o endereço final contra a `policy`.
+- Sem `fetcher`, vale o cliente do pacote (`"http"`, httpx comum). `"chrome"` é o que imita o Chrome (abaixo). `register_fetcher(nome, fabrica)` registra outro nome.
+
+**Vários provedores de busca em ordem.** `search_backend` aceita uma lista: o provedor que falha é pulado e responde o primeiro que trouxer resultados.
+
+```python
+register(kernel, search_backend=["brave_api", "searxng"])
+```
+
+**Os desfechos de uma busca não se confundem.** A resposta do `web_search` traz `outcome`:
+
+| Desfecho | O que o modelo recebe |
+|---|---|
+| Resultados | `outcome: "results"`, a lista e, numa lista de provedores, `source` (quem respondeu) e `attempts` (o que os anteriores fizeram) |
+| Nenhum resultado | `outcome: "no_results"`, lista vazia e uma nota: a busca rodou e não achou nada |
+| A busca não rodou | erro com o que cada provedor fez, por exemplo `duckduckgo: refused (HTTP 202); yahoo: results unrelated to the query` |
+
+"Veio cheio e sem relação com a consulta" é uma recusa, não um sucesso: é como alguns buscadores recusam sem dizer. Um provedor avisa disso com `SearchUnrelatedError` (de `symbiote.browser.search.outcomes`, junto de `SearchRefusedError` e de `query_coverage`, a medida usada: a fração das palavras da consulta, com quatro letras ou mais e sem acento, que aparece no título, no resumo ou no endereço dos cinco primeiros).
+
+**Buscar lendo a página de um buscador: `duckduckgo` e `yahoo`.** Leia antes de escolher:
+
+- Ler a página de resultados assim contraria os termos dos buscadores. Por isso é sempre escolha explícita do host, que responde por ela.
+- É melhor esforço. O buscador recusa o que não parece uma pessoa num navegador: pelo endereço de onde o pedido sai (datacenter é recusado cedo; uma conexão residencial, no ritmo de uma pessoa, não) e pelo jeito de abrir a conexão. Só os cabeçalhos de navegador não bastam em toda rede.
+- Os seletores são os das páginas de 2026-11-21 e quebram quando o buscador muda o HTML. O leitor separa "página que não consegui ler" (erro) de "a busca não achou nada" (lista vazia), e o uso recomendado é em lista.
+
+```python
+register(
+    kernel,
+    search_backend=["duckduckgo", "yahoo"],
+    search_options={
+        "fetcher": "chrome",                       # ou o objeto do host
+        "provider_options": {"duckduckgo": {"region": "br-pt", "accept_language": "pt-BR,pt;q=0.9"}},
+    },
+)
+```
+
+`fetcher="chrome"` (extra `[web]`, `pip install "symbiote[web]"`, biblioteca `curl_cffi`) abre a conexão como o Chrome abre, no TLS e no HTTP/2. `min_relevance` (padrão 0,5; por provedor em `provider_options`) é o piso da conferência de relação; `0` desliga. Uma consulta cujas palavras não aparecem em resultado nenhum também cai nesse desfecho: em 2026-11-21 o Yahoo respondia a uma consulta sem correspondência com resultados aproximados, e só o DuckDuckGo dizia "nenhum resultado". O Bing não tem leitor: na medição do SymbiOS de 2026-11-21, metade das respostas dele era sobre outro assunto.
+
+Conferência ao vivo em 2026-11-21, de uma conexão residencial, um pedido a cada 2,5 s: com `"chrome"`, o DuckDuckGo respondeu 11 de 12 consultas (um HTTP 202) e o Yahoo 12 de 12; com o cliente comum, 8 de 8 nos dois. Em maio de 2026 e na medição do SymbiOS, de outras redes, o cliente comum recebeu 202 do DuckDuckGo em todas.
+
+**Cache.** `search_options["cache_ttl_seconds"]` guarda em memória as respostas de `web_search` e `web_extract` por esse tempo; a mesma consulta ou o mesmo endereço não sai de novo. Desligado por padrão.
 
 ## 7. Tools disponíveis (referência rápida)
 

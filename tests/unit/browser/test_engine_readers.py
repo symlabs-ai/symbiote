@@ -134,7 +134,8 @@ async def test_a_refusal_is_told_apart_from_no_results(status, body, reason) -> 
 
 @pytest.mark.asyncio
 async def test_a_page_that_says_nothing_was_found_is_no_results() -> None:
-    assert await _ddg(200, '<div class="no-results">No results.</div>').search(QUERY) == []
+    nothing = '<div class="no-results__container result__title">No results found for <b>zzzz</b></div>'
+    assert await _ddg(200, nothing).search(QUERY) == []
     assert await _yahoo(200, "<p>We did not find results for: zzzz</p>").search(QUERY) == []
 
 

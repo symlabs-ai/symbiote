@@ -430,6 +430,14 @@ DDG aplica detecção multi-camada (TLS fingerprint, IP reputation, headless fla
 
 Revertido no commit subsequente. `SearchBackend = Literal["brave"]` permanece com apenas um provider; estrutura do `SearchProvider` protocol fica viva para futuras adições (Searxng/Firecrawl/Exa via SymGateway).
 
+**Revisão de 2026-11-21 (B-107, pedido do SymbiOS).** Os leitores `duckduckgo` e `yahoo` voltaram, em outros termos:
+
+- O que mudou nos fatos: o pedido deixou de sair, por obrigação, do servidor. Quem traz a página passou a ser um objeto que o host troca (`search_options["fetcher"]`), e o caso que motivou a volta é o de um aplicativo na máquina da pessoa, saindo pelo IP residencial dela, no ritmo de uma pessoa. A medição do SymbiOS (100 consultas, 2026-11-21) teve 100 de 100 no DuckDuckGo e no Yahoo com um cliente que imita o Chrome no TLS e no HTTP/2.
+- O que continua valendo das lições acima: é melhor esforço, vira manutenção quando o HTML muda, e de datacenter é recusado cedo. Por isso nada liga sozinho, os leitores vão em lista com reserva, e uma recusa nunca passa por "nenhum resultado".
+- O que continua fora: navegador com janela, proxies residenciais e resolver captcha.
+
+Ver "Busca e leitura sem serviço pago" no [quickstart](./symbiote-browser-quickstart.md).
+
 ## 9. Riscos e mitigações
 
 | Risco | Probabilidade | Impacto | Mitigação |
