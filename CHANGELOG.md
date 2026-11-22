@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.21] - 2026-11-22
+
 ### Novas funcionalidades
 
 - feat(symgateway): streaming e opções do provedor no `SymGatewayLLMAdapter` (B-111, pedido do SymCoder, PB-058). Com `streaming=True` o adapter pede toda resposta como stream de eventos (`stream: true`, com o uso no último chunk) e passa a ter `stream()`: o `on_token` recebe o texto nos pedaços em que o modelo o escreveu (enquanto escreve, com `set_token_streaming("live")`), também com tools nativas (as tool calls são montadas do stream e vêm num `LLMResponse` depois do texto), e `complete()` lê o mesmo stream e devolve o que devolvia. `on_activity=` é chamado a cada linha recebida, para o host mostrar que a resposta longa está viva. Requisição recusada continua virando `LLMError` com o status; stream que não é uma resposta inteira (chunk com `error` ou que não é JSON, conexão encerrada antes de `finish_reason` ou `[DONE]`) e timeout viram `LLMError(retryable=True)`. `session_key`, a troca da sessão de trabalho recusada e `on_routed` valem igual; no stream, `objective`, `provider` e `request_id` do roteamento só vêm quando algum chunk traz o bloco `symgateway`. `provider_options=` (no construtor, no atributo, em `with_model(..., provider_options=)` e em `with_objective`) vai no corpo de toda chamada, e o `provider_options` do `config` de uma chamada é fundido por cima, chave a chave; `models()` devolve as entradas de `/v1/models` com o `provider` de cada modelo, para o host decidir quem recebe o quê. Sem as opções nada muda: o corpo é o de antes e o adapter continua sem `stream`. Um host que herdava do adapter para ler o stream por conta própria pode largar esse código.
