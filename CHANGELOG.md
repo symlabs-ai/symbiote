@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.20] - 2026-11-22
+
 ### Novas funcionalidades
 
 - feat(kernel): o número de rodadas da compactação do laço de ferramentas (Layer 2) passa a ser configurável (B-110, pedido do SymCoder). `KernelConfig.loop_compaction_rounds` (padrão `4`, o comportamento de antes) diz depois de quantas rodadas cada rodada troca as trocas anteriores do laço por uma linha por passo; `None` ou `0` desliga essa camada, e o laço só é encurtado ao passar de 80% de `loop_context_budget`. Vale no chat e nos blocos do `long_run`; `ChatRunner` e `LongRunRunner` aceitam o mesmo parâmetro. Para um host cujo modelo lê arquivos ao longo de muitas rodadas (um agente de código), que relia o que a compactação tirava de vista.
