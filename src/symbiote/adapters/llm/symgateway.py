@@ -9,7 +9,9 @@ The gateway key replaces the provider key. The gateway's contract:
 - ``POST /_api/work-sessions`` opens a work session, and every inference call
   carries its uid in ``X-SymGateway-Session-Id``; the same uid is reused for
   every call of one conversation or task;
-- ``POST /v1/chat/completions`` is OpenAI-compatible;
+- ``POST /v1/chat/completions`` is OpenAI-compatible, whole or as an event
+  stream (``stream: true``), and takes ``provider_options`` for the provider
+  behind the gateway;
 - ``X-Project-Slug`` goes on every request only when the key is used inside a
   project.
 
@@ -25,6 +27,12 @@ Which work session a call belongs to is decided by ``session_key``: a callable
 the host passes that returns a stable key for the current conversation (for
 example the Symbiote session id, read from a context variable). Calls with no
 key share one default work session.
+
+Built with ``streaming=True`` the adapter reads every reply as an event
+stream, in ``complete()`` and in ``stream()``: a reply that takes minutes
+keeps the connection alive while it is written, and ``on_activity`` runs for
+every line received. Without the option nothing changes: one request, one
+whole reply, and no ``stream()`` for the kernel to call.
 """
 
 from __future__ import annotations
@@ -32,7 +40,7 @@ from __future__ import annotations
 import copy
 import json
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any
 
 import httpx
@@ -59,6 +67,9 @@ _MESSAGE_FIELDS = ("role", "content", "name", "tool_calls", "tool_call_id")
 # A rejected session uid (expired, closed, unknown) is replaced once.
 _STALE_SESSION = frozenset({404, 409, 410})
 _DEFAULT_KEY = "__default__"
+_COMPLETIONS = "/v1/chat/completions"
+# ``with_model(..., provider_options=)`` not given: the copy keeps the options.
+_KEEP: Any = object()
 
 
 class SymGatewayLLMAdapter:
@@ -77,6 +88,9 @@ class SymGatewayLLMAdapter:
         timeout: float = 120.0,
         client: httpx.Client | None = None,
         on_routed: Callable[[dict[str, Any]], None] | None = None,
+        streaming: bool = False,
+        on_activity: Callable[[], None] | None = None,
+        provider_options: Mapping[str, Any] | None = None,
     ) -> None:
         """``model`` names the model to call; ``objective`` names a gateway
         Objective instead, and the gateway chooses the model. One of the two
@@ -86,6 +100,28 @@ class SymGatewayLLMAdapter:
         gateway answered: ``{"model", "objective", "provider", "request_id",
         "work_session"}`` (``objective`` is the one that routed the call, or
         ``None``). ``last_routing`` keeps the latest one.
+
+        ``streaming=True`` asks the gateway for every reply as an event
+        stream (``stream: true``, with the usage in the last chunk) and gives
+        the adapter a ``stream()``, so the kernel gets the text in the pieces
+        the model wrote, for ``on_token``. ``complete()`` reads the stream
+        too and returns the same value as without the option. ``timeout``
+        then bounds the silence inside a reply, not the whole reply.
+        ``on_activity()`` runs for every line of a stream as it arrives (a
+        sign of life while a long reply is written; how often to show it is
+        the host's matter). Off, the default, the adapter sends one request
+        and reads one whole reply, as it always did. The routing of a
+        streamed call is read from its chunks: ``objective``, ``provider``
+        and ``request_id`` are ``None`` when no chunk carries the gateway's
+        ``symgateway`` block.
+
+        ``provider_options`` goes in the body of every call as
+        ``provider_options``, for the provider behind the gateway (for
+        example Anthropic's ``{"cache_control": {"type": "ephemeral"}}``).
+        The ``provider_options`` of a call's own config is merged over it,
+        key by key. Which models take which options is the host's decision
+        (``models()`` says which provider serves each one); the attribute
+        ``provider_options`` may be replaced after construction.
         """
         if not api_key:
             raise LLMError("SymGateway API key is required")
@@ -98,6 +134,9 @@ class SymGatewayLLMAdapter:
         self.objective = objective
         self.provider = "symgateway"
         self._on_routed = on_routed
+        self._streaming = bool(streaming)
+        self._on_activity = on_activity
+        self.provider_options: dict[str, Any] = dict(provider_options or {})
         self.last_routing: dict[str, Any] | None = None
         self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
         self._session_key = session_key
@@ -112,11 +151,18 @@ class SymGatewayLLMAdapter:
 
     # ── gateway API ────────────────────────────────────────────────────
 
+    def models(self) -> list[dict[str, Any]]:
+        """What this key may use, as the gateway lists it (``GET /v1/models``):
+        one dict per entry, of every service type, with the gateway's own
+        fields (``id``, ``service_type``, ``provider``, ...)."""
+        data = self._request("GET", "/v1/models").json()
+        entries = data.get("data") if isinstance(data, dict) else None
+        return [dict(m) for m in entries or [] if isinstance(m, dict)]
+
     def list_models(self) -> list[str]:
         """IDs of the LLM models this key may use."""
-        data = self._request("GET", "/v1/models").json()
         return [
-            m["id"] for m in data.get("data", [])
+            m["id"] for m in self.models()
             if m.get("service_type", "llm") == "llm" and m.get("id")
         ]
 
@@ -156,18 +202,34 @@ class SymGatewayLLMAdapter:
                 self._sessions[key] = uid
             return uid
 
-    def with_model(self, model: str) -> SymGatewayLLMAdapter:
+    def with_model(
+        self, model: str, *, provider_options: Mapping[str, Any] | None = _KEEP
+    ) -> SymGatewayLLMAdapter:
         """Same key, client and work sessions, another model — so a main and
-        an auxiliary model working on one conversation share its session."""
-        other = copy.copy(self)
+        an auxiliary model working on one conversation share its session.
+
+        The copy keeps this adapter's ``provider_options`` unless others are
+        given: pass the other model's own, or ``None`` for none, when it is
+        served by another provider (an auxiliary model must not inherit the
+        main one's ``cache_control``)."""
+        other = self._copy(provider_options)
         other.model = model
         other.objective = None
         return other
 
-    def with_objective(self, objective: str) -> SymGatewayLLMAdapter:
-        """Same key, client and work sessions, routed by another Objective."""
-        other = copy.copy(self)
+    def with_objective(
+        self, objective: str, *, provider_options: Mapping[str, Any] | None = _KEEP
+    ) -> SymGatewayLLMAdapter:
+        """Same key, client and work sessions, routed by another Objective.
+        ``provider_options`` as in ``with_model``."""
+        other = self._copy(provider_options)
         other.objective = objective
+        return other
+
+    def _copy(self, provider_options: Mapping[str, Any] | None) -> SymGatewayLLMAdapter:
+        other = copy.copy(self)
+        kept = self.provider_options if provider_options is _KEEP else provider_options
+        other.provider_options = dict(kept or {})
         return other
 
     @property
@@ -187,6 +249,60 @@ class SymGatewayLLMAdapter:
         config: dict | None = None,
         tools: list[dict] | None = None,
     ) -> str | LLMResponse:
+        body = self._body(messages, config, tools)
+        if not self._streaming:
+            return self._reply(*self._post(body))
+        completion: tuple[dict[str, Any], str] | None = None
+        for kind, value in self._events(body):
+            if kind == "done":
+                completion = value
+        assert completion is not None  # a stream ends with its completion
+        return self._reply(*completion)
+
+    @property
+    def stream(self) -> Callable[..., Iterator[str | LLMResponse]]:
+        """``stream(messages, config=None, tools=None)``: the reply as the
+        model writes it, with the contract of ``ForgeLLMAdapter.stream()``.
+        Yields the text in the pieces the gateway sends and, when the model
+        called tools, one ``LLMResponse`` at the end (content, tool calls,
+        usage). Plain text reports its usage with ``report_usage``.
+
+        Only an adapter built with ``streaming=True`` has it. The kernel
+        streams through any adapter that has ``stream()``, so on one built
+        without the option the attribute is absent (``hasattr`` is False)
+        and the kernel keeps calling ``complete()``, as it always did.
+        """
+        if not self._streaming:
+            raise AttributeError(
+                "stream() needs SymGatewayLLMAdapter(..., streaming=True)"
+            )
+        return self._stream
+
+    def _stream(
+        self,
+        messages: list[dict],
+        config: dict | None = None,
+        tools: list[dict] | None = None,
+    ) -> Iterator[str | LLMResponse]:
+        completion: tuple[dict[str, Any], str] | None = None
+        for kind, value in self._events(self._body(messages, config, tools)):
+            if kind == "text":
+                yield value
+            else:
+                completion = value
+        assert completion is not None  # a stream ends with its completion
+        reply = self._reply(*completion)
+        if isinstance(reply, LLMResponse):
+            yield reply
+
+    # ── internals ──────────────────────────────────────────────────────
+
+    def _body(
+        self,
+        messages: list[dict],
+        config: dict | None,
+        tools: list[dict] | None,
+    ) -> dict[str, Any]:
         # A call names an objective or a model. What the call's own config
         # asks for wins over what the adapter was built with.
         asked = config or {}
@@ -200,35 +316,81 @@ class SymGatewayLLMAdapter:
         else:
             body["model"] = self.model
         for name in _PASSTHROUGH:
-            value = (config or {}).get(name)
+            value = asked.get(name)
             if value is not None:
                 body[name] = value
         if tools:
             body["tools"] = tools
+        own = asked.get("provider_options")
+        options = {**self.provider_options, **(own if isinstance(own, Mapping) else {})}
+        if options:
+            body["provider_options"] = options
+        if self._streaming:
+            body["stream"] = True
+            body["stream_options"] = {"include_usage": True}
+        return body
 
+    def _post(self, body: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        """One whole reply and the work session that carried the call."""
         key = self._session_key() if self._session_key else None
         uid = self.work_session(key)
         try:
             response = self._request(
-                "POST", "/v1/chat/completions", json=body, headers={SESSION_HEADER: uid}
+                "POST", _COMPLETIONS, json=body, headers={SESSION_HEADER: uid}
             )
         except LLMError as exc:
             if exc.status_code not in _STALE_SESSION:
                 raise
-            with self._lock:
-                self._sessions.pop(key or _DEFAULT_KEY, None)
+            self._forget_session(key)
             uid = self.work_session(key)
             response = self._request(
-                "POST", "/v1/chat/completions", json=body, headers={SESSION_HEADER: uid}
+                "POST", _COMPLETIONS, json=body, headers={SESSION_HEADER: uid}
             )
-        data = response.json()
+        return response.json(), uid
+
+    def _events(self, body: dict[str, Any]) -> Iterator[tuple[str, Any]]:
+        """The reply as an event stream: ``("text", piece)`` as it arrives,
+        then ``("done", (completion, work session uid))``."""
+        key = self._session_key() if self._session_key else None
+        for attempt in (1, 2):
+            uid = self.work_session(key)
+            try:
+                with self._client.stream(
+                    "POST",
+                    self.base_url + _COMPLETIONS,
+                    json=body,
+                    headers={**self._headers, SESSION_HEADER: uid},
+                ) as response:
+                    status = response.status_code
+                    if status >= 400:
+                        response.read()
+                        if attempt == 1 and status in _STALE_SESSION:
+                            # A rejected work session is replaced once.
+                            self._forget_session(key)
+                            continue
+                        raise _status_error(response, _COMPLETIONS)
+                    for kind, value in _read_stream(
+                        response.iter_lines(), self._on_activity
+                    ):
+                        yield (kind, (value, uid)) if kind == "done" else (kind, value)
+                    return
+            except httpx.TimeoutException as exc:
+                raise LLMError(
+                    f"SymGateway timeout on {_COMPLETIONS}", retryable=True
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise LLMError(f"SymGateway unreachable: {exc}", retryable=True) from exc
+
+    def _forget_session(self, key: str | None) -> None:
+        with self._lock:
+            self._sessions.pop(key or _DEFAULT_KEY, None)
+
+    def _reply(self, data: dict[str, Any], uid: str) -> str | LLMResponse:
         routing = _routing(data, uid)
         self.last_routing = routing
         if self._on_routed is not None:
             self._on_routed(routing)
         return _parse_completion(data, uid)
-
-    # ── internals ──────────────────────────────────────────────────────
 
     def _request(
         self,
@@ -250,13 +412,127 @@ class SymGatewayLLMAdapter:
         except httpx.HTTPError as exc:
             raise LLMError(f"SymGateway unreachable: {exc}", retryable=True) from exc
         if response.status_code >= 400:
-            status = response.status_code
-            raise LLMError(
-                f"SymGateway {status} on {path}: {_error_text(response)}",
-                status_code=status,
-                retryable=status in (408, 429) or status >= 500,
-            )
+            raise _status_error(response, path)
         return response
+
+
+def _status_error(response: httpx.Response, path: str) -> LLMError:
+    """The gateway refused the request; the body was already read."""
+    status = response.status_code
+    return LLMError(
+        f"SymGateway {status} on {path}: {_error_text(response)}",
+        status_code=status,
+        retryable=status in (408, 429) or status >= 500,
+    )
+
+
+def _stream_failed(reason: object) -> LLMError:
+    """The event stream is not a whole reply: asking again may get one."""
+    return LLMError(f"SymGateway stream failed: {reason}", retryable=True)
+
+
+def _read_stream(
+    lines: Iterable[str], on_activity: Callable[[], None] | None = None
+) -> Iterator[tuple[str, Any]]:
+    """Read an OpenAI-style event stream while the model writes.
+
+    Yields ``("text", piece)`` for every piece of text as it arrives and,
+    once the stream ends, ``("done", completion)``: the whole reply in the
+    shape of one that was not streamed, so ``_parse_completion`` reads both
+    the same way. ``on_activity`` runs for every line received.
+
+    Only ``data:`` lines count; an empty one is a sign of life. ``[DONE]``
+    ends the stream and what follows it is not read. Only the choice of
+    index 0 is read. A tool call arrives in parts, placed by ``index``; with
+    no index, a part with an ``id`` opens a call and one without continues
+    the latest. A chunk that is an error or is not JSON, and a stream cut
+    before ``finish_reason`` or ``[DONE]``, raise a retryable ``LLMError``.
+    """
+    text: list[str] = []
+    calls: dict[int, dict[str, Any]] = {}
+    # A file written in one call arrives in thousands of parts: joined once.
+    arguments: dict[int, list[str]] = {}
+    identifier: Any = None
+    model: Any = None
+    usage: Any = None
+    gateway: dict[str, Any] = {}
+    finish: str | None = None
+    done = False
+    for raw in lines:
+        if on_activity is not None:
+            on_activity()
+        line = raw.strip()
+        if not line.startswith("data:"):
+            continue  # blank lines, comments and the other event fields
+        payload = line[5:].strip()
+        if not payload:
+            continue
+        if payload == "[DONE]":
+            done = True
+            break
+        try:
+            chunk = json.loads(payload)
+        except ValueError:
+            raise _stream_failed("a chunk is not JSON") from None
+        if not isinstance(chunk, dict):
+            raise _stream_failed("a chunk is not an object")
+        if chunk.get("error"):
+            error = chunk["error"]
+            reason = error.get("message") if isinstance(error, dict) else error
+            raise _stream_failed(str(reason or "the gateway reported an error")[:300])
+        identifier = chunk.get("id") or identifier
+        model = chunk.get("model") or model
+        usage = chunk.get("usage") or usage
+        block = chunk.get("symgateway")
+        if isinstance(block, dict):
+            gateway.update({k: v for k, v in block.items() if v is not None})
+        for choice in chunk.get("choices") or []:
+            if not isinstance(choice, dict) or choice.get("index", 0) != 0:
+                continue
+            delta = choice.get("delta")
+            delta = delta if isinstance(delta, dict) else {}
+            piece = delta.get("content")
+            if isinstance(piece, str) and piece:
+                text.append(piece)
+                yield "text", piece
+            for part in delta.get("tool_calls") or []:
+                if not isinstance(part, dict):
+                    continue
+                position = part.get("index")
+                if not isinstance(position, int) or isinstance(position, bool):
+                    position = len(calls) if part.get("id") or not calls else max(calls)
+                call = calls.setdefault(
+                    position,
+                    {"id": None, "type": "function", "function": {"name": "", "arguments": ""}},
+                )
+                if part.get("id"):
+                    call["id"] = part["id"]
+                function = part.get("function")
+                if isinstance(function, dict):
+                    if function.get("name") and not call["function"]["name"]:
+                        call["function"]["name"] = str(function["name"])
+                    if isinstance(function.get("arguments"), str):
+                        arguments.setdefault(position, []).append(function["arguments"])
+            finish = choice.get("finish_reason") or finish
+    if finish is None and not done:
+        # The connection ended before the model said it was done.
+        raise _stream_failed("the stream ended before the reply was complete")
+    message: dict[str, Any] = {"role": "assistant", "content": "".join(text)}
+    if calls:
+        for position, call in calls.items():
+            call["function"]["arguments"] = "".join(arguments.get(position, []))
+        message["tool_calls"] = [calls[position] for position in sorted(calls)]
+    completion: dict[str, Any] = {
+        "id": identifier,
+        "model": model,
+        "choices": [{"index": 0, "message": message, "finish_reason": finish or "stop"}],
+        "usage": usage,
+    }
+    if gateway:
+        # ``on_routed`` reads it. A gateway whose chunks do not carry the
+        # block leaves the objective, provider and request id unknown.
+        completion["symgateway"] = gateway
+    yield "done", completion
 
 
 def _wire_message(message: dict[str, Any]) -> dict[str, Any]:

@@ -329,8 +329,9 @@ Each distinct `session_key()` value gets one gateway work session
 `X-SymGateway-Session-Id` on every call of that conversation. Calls with no key
 share one default session. Set the same key around `close_session()` so the
 reflection and dream calls land in the conversation's session. The adapter
-talks to the OpenAI-compatible `/v1/chat/completions` with httpx; it does not
-stream, so `on_token` receives the final text.
+talks to the OpenAI-compatible `/v1/chat/completions` with httpx. By default
+it sends one request and reads one whole reply, so `on_token` receives the
+final text; `streaming=True` changes that (below).
 
 The gateway can also choose the model: name an Objective instead of a model.
 
@@ -345,6 +346,74 @@ llm.last_routing   # {"model": ..., "objective": ..., "provider": ..., "request_
 `on_routed(routing)` is called after every call with what the gateway
 answered, including the Objective that routed it. Objectives exist only in
 this adapter; the kernel and `LLMPort` know nothing about them.
+
+**Streaming.** Built with `streaming=True`, the adapter asks the gateway for
+every reply as an event stream and has a `stream()`:
+
+```python
+llm = SymGatewayLLMAdapter(
+    api_key,
+    model="<id>",
+    streaming=True,
+    on_activity=note_activity,  # optional: runs for every line of a stream
+    timeout=420.0,              # with streaming: the longest silence inside a reply
+)
+```
+
+- `on_token` receives the text in the pieces the model wrote: as it writes
+  them with `set_token_streaming("live")`, and once the reply is validated
+  in the default `"final"` mode (see "Streaming"). With native tools too:
+  the tool calls are put together from the stream and come as one
+  `LLMResponse` after the text, as `ForgeLLMAdapter(stream_tool_calls=True)`
+  does.
+- `complete()` reads the stream as well and returns what it returns without
+  the option. A reply that takes minutes arrives over a connection that
+  stays active, instead of one silent wait for the whole response.
+- `on_activity()` runs for every line received, the empty sign-of-life
+  lines included, on the thread that makes the call. How often to tell
+  anyone is the host's matter: keep the time of the last line and compare.
+- A refused request raises `LLMError` with its status (`retryable` for 408,
+  429 and 5xx), as without streaming. A stream that is not a whole reply (a
+  chunk that carries `error` or is not JSON, a connection that ends before
+  `finish_reason` or `[DONE]`) and a timeout raise `LLMError(retryable=True)`:
+  the kernel asks again.
+- Token usage is the `usage` of the last chunk (the adapter sends
+  `stream_options: {"include_usage": true}`).
+- `session_key`, the replacement of a rejected work session and `on_routed`
+  work as before. The `objective`, `provider` and `request_id` of a streamed
+  call's routing come from the gateway's `symgateway` block when a chunk
+  carries it, and are `None` when none does; `model` and `work_session` are
+  always there.
+
+Without `streaming=True` the adapter has no `stream` at all
+(`hasattr(llm, "stream")` is `False`): the kernel keeps calling `complete()`,
+and the request body is the one it always was.
+
+**Provider options.** The gateway forwards `provider_options` to the
+provider behind it (Anthropic's prompt cache, how much the model thinks).
+The adapter carries them; which model takes which option is the host's
+decision, and `models()` says which provider serves each model:
+
+```python
+llm = SymGatewayLLMAdapter(api_key, model=model)
+entry = next((m for m in llm.models() if m.get("id") == model), {})
+if entry.get("provider") == "anthropic":
+    llm.provider_options = {"cache_control": {"type": "ephemeral"}}
+
+aux = llm.with_model("<another provider's id>", provider_options=None)
+llm.complete(messages, config={"provider_options": {"output_config": {"effort": "high"}}})
+```
+
+- `provider_options=` at construction, or the attribute set later, goes in
+  the body of every call. Empty, the default, sends no such field.
+- The `provider_options` of one call's config (the `llm_config=` of a turn)
+  is merged over the adapter's, key by key at the first level.
+- `with_model()` and `with_objective()` keep the options unless
+  `provider_options=` is given: pass the other model's own, or `None`, so an
+  auxiliary model of another provider does not inherit `cache_control`.
+- `models()` returns the entries of `GET /v1/models` as the gateway sends
+  them, of every service type; `list_models()` is still the ids of the LLM
+  ones.
 
 ---
 
@@ -570,6 +639,23 @@ every existing session) and `environment_configs.instant_read_results`
   with `set_session_tool_mode`).
 - `EnvironmentConfig` and the HTTP config have `instant_read_results`
   (`False`). See "Tool Mode Selection".
+
+### Upgrading to 0.8.21
+
+No migration, and nothing turns itself on. What is new, all of it opt-in:
+
+- **`SymGatewayLLMAdapter(streaming=True)`** reads every reply as an event
+  stream and gives the adapter a `stream()`, so `on_token` receives the text
+  in the pieces the model wrote; `on_activity=` is called for every line.
+  Without the option the adapter still has no `stream` and sends the same
+  body. A host that subclassed the adapter to stream (overriding `complete`
+  / `stream` and reading the wire itself) can drop that code. See "LLM
+  through SymGateway".
+- **`provider_options`** on the same adapter (`provider_options=`, the
+  attribute, `with_model(..., provider_options=)`) and the public
+  `models()`. One thing to check: a `provider_options` key in the
+  `llm_config` of a turn, which the adapter used to drop, is now sent to
+  the gateway.
 
 ---
 
@@ -1293,7 +1379,9 @@ one complete call unless built with `ForgeLLMAdapter(..., stream_tool_calls=True
 which streams the text and collects the tool calls from the stream. Leave it off
 for providers that do not assemble tool calls in a stream (Groq) and for agent
 protocols that replay the reasoning state (`poolside_laguna_v1`): the stream
-does not carry it. `SymGatewayLLMAdapter` does not stream. Use the progress
+does not carry it. `SymGatewayLLMAdapter` streams when built with
+`streaming=True`, text and native tool calls alike (see "LLM through
+SymGateway"); without it, it makes one complete call. Use the progress
 callbacks and tool hooks below to show activity while the loop runs.
 
 ### Streaming over HTTP
