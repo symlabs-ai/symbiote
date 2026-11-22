@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.19] - 2026-11-22
+
 **Migração:** 21 no SQLite e 15 no PostgreSQL (colunas `sessions.tool_mode` e `environment_configs.instant_read_results`). Nada muda para quem não usa as duas opções.
 
 ### Novas funcionalidades
