@@ -73,7 +73,8 @@ if TYPE_CHECKING:
 _HANDLED_INTENTS = frozenset({"chat", "ask", "question", "talk"})
 _MAX_TOOL_ITERATIONS = 10
 _MAX_VALIDATION_RETRIES = 2
-_COMPACTION_THRESHOLD = 4  # compact after this many loop-added message pairs
+# Layer 2: compact after this many loop rounds (KernelConfig.loop_compaction_rounds).
+_COMPACTION_THRESHOLD = 4
 _CHARS_PER_TOKEN = 4  # rough estimate for token counting
 _MICROCOMPACT_MAX_CHARS = 3000  # truncate individual tool results beyond this
 _AUTOCOMPACT_THRESHOLD = 0.80  # trigger autocompact at 80% of context budget
@@ -249,13 +250,23 @@ class ChatRunner:
         # (timestamp + session id, the historical behaviour), "timestamp"
         # (no session id) or "off" (the message goes as the user wrote it).
         runtime_context: str = "full",
+        # Layer 2: after this many tool rounds, older exchanges are replaced
+        # by a one-line-per-step summary every round. None or 0 turns it off,
+        # leaving only the budget compaction (Layer 3).
+        loop_compaction_rounds: int | None = _COMPACTION_THRESHOLD,
     ) -> None:
         if runtime_context not in _RUNTIME_CONTEXT_MODES:
             raise ValidationError(
                 f"runtime_context must be one of {sorted(_RUNTIME_CONTEXT_MODES)}, "
                 f"got {runtime_context!r}"
             )
+        if loop_compaction_rounds is not None and loop_compaction_rounds < 0:
+            raise ValidationError(
+                "loop_compaction_rounds must be None or >= 0, "
+                f"got {loop_compaction_rounds!r}"
+            )
         self._runtime_context = runtime_context
+        self._loop_compaction_rounds = loop_compaction_rounds or None
         self._llm = llm
         self._working_memory = working_memory
         self._tool_gateway = tool_gateway
@@ -1027,7 +1038,9 @@ class ChatRunner:
             )
 
             # Layer 2: compact old loop messages to prevent context growth
-            self._compact_loop_messages(messages, initial_msg_count)
+            self._compact_loop_messages(
+                messages, initial_msg_count, rounds=self._loop_compaction_rounds
+            )
             # Layer 3: aggressive autocompact if approaching context budget
             self._autocompact_if_needed(messages, initial_msg_count)
 
@@ -1659,24 +1672,31 @@ class ChatRunner:
 
     @staticmethod
     def _compact_loop_messages(
-        messages: list[dict], initial_count: int
+        messages: list[dict],
+        initial_count: int,
+        *,
+        rounds: int | None = _COMPACTION_THRESHOLD,
     ) -> None:
         """Replace old tool exchanges with a compact summary.
 
         Only compacts messages added during the tool loop (after
-        ``initial_count``). Keeps the most recent complete exchange intact so
-        native ``assistant`` + one-or-more ``tool`` messages never become
-        orphaned. Legacy assistant/user pairs retain their previous shape.
+        ``initial_count``), once the loop has ``rounds`` assistant turns;
+        ``None`` or ``0`` never compacts. Keeps the most recent complete
+        exchange intact so native ``assistant`` + one-or-more ``tool``
+        messages never become orphaned. Legacy assistant/user pairs retain
+        their previous shape.
 
         Modifies *messages* in-place.
         """
+        if not rounds:
+            return
         loop_messages = messages[initial_count:]
         assistant_positions = [
             idx
             for idx, message in enumerate(loop_messages)
             if message.get("role") == "assistant"
         ]
-        if len(assistant_positions) < _COMPACTION_THRESHOLD:
+        if len(assistant_positions) < rounds:
             return
 
         last_exchange_start = assistant_positions[-1]

@@ -160,8 +160,11 @@ class LongRunRunner:
         protocol_registry: AgentProtocolRegistry | None = None,
         background_review: object | None = None,
         skill_nudge_interval: int = 10,
+        # Layer 2 compaction of each block (ChatRunner's default is 4).
+        loop_compaction_rounds: int | None = 4,
     ) -> None:
         self._tool_result_max_chars = tool_result_max_chars
+        self._loop_compaction_rounds = loop_compaction_rounds
         self._runtime_context = runtime_context
         # Blocks run in the kernel's protocol and nudge its skill review
         # like a plain chat turn does (B-74).
@@ -645,6 +648,7 @@ class LongRunRunner:
             native_tools=self._native_tools,
             context_budget=self._context_budget,
             runtime_context=self._runtime_context,
+            loop_compaction_rounds=self._loop_compaction_rounds,
             **limits,
             # Tools inside a block use the same approval gate as a chat turn.
             on_before_tool_call=self._on_before_tool_call,

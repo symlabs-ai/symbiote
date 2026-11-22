@@ -1112,8 +1112,8 @@ does reach the model provider. `KernelConfig.runtime_context` controls it:
 
 ### Sizing tool results
 
-Two settings decide how much of a tool result the model reads, and they have
-to be raised together:
+Three settings decide how much of the tool results the model reads; the
+first two have to be raised together:
 
 - `tool_result_max_chars` (default `3000`): ceiling per result. What exceeds
   it is cut and replaced by `... (N chars truncated)`; the model cannot see
@@ -1126,6 +1126,14 @@ to be raised together:
 - `loop_context_budget` (default `16000` tokens, about 4 characters each):
   when the turn's messages pass 80% of it, older tool steps are summarized
   and, if that is not enough, the results of the latest step are cut again.
+- `loop_compaction_rounds` (default `4`): independently of the budget,
+  once a turn has made this many tool rounds, every round replaces the
+  older exchanges of the loop with one line per step (`1) read_file → ...`);
+  only the latest exchange stays in full. `None` or `0` turns this off, so
+  the older results stay in full until the 80% of `loop_context_budget`
+  above. A host whose model reads files over many rounds (a coding agent)
+  turns it off and raises `loop_context_budget`: with the default, the
+  model loses what it read four rounds ago and reads it again.
 
 A single result should fit in half of that 80%, so keep
 `loop_context_budget >= tool_result_max_chars * 0.625` at the very least (the
@@ -1133,7 +1141,8 @@ kernel logs a warning at startup when it is not). That minimum only holds two
 full results and nothing else, so leave room for the system prompt, the
 history and the earlier steps: with `tool_result_max_chars=30000` the minimum
 is 18,750 tokens, and something like 48,000 to 64,000 is a realistic pairing.
-The same ceiling applies inside the blocks of `tool_mode="long_run"`.
+The same ceiling, and `loop_compaction_rounds`, apply inside the blocks of
+`tool_mode="long_run"`.
 
 ### When the tool loop is stopped
 

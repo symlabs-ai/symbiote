@@ -297,6 +297,7 @@ class SymbioteKernel:
                     agent_protocol=resolved_agent_protocol,
                     protocol_registry=active_protocol_registry,
                     runtime_context=config.runtime_context,
+                    loop_compaction_rounds=config.loop_compaction_rounds,
                 )
             )
 
@@ -312,6 +313,7 @@ class SymbioteKernel:
                     agent_protocol=resolved_agent_protocol,
                     protocol_registry=active_protocol_registry,
                     background_review=self._background_review_for,
+                    loop_compaction_rounds=config.loop_compaction_rounds,
                 )
             )
 

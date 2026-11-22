@@ -30,6 +30,13 @@ class KernelConfig(BaseModel):
     # messages). Past 80% of it, older loop steps are summarized; the most
     # recent tool results are kept (truncated if they alone overflow).
     loop_context_budget: int = 16_000
+    # After this many tool rounds in a turn, every round replaces the loop's
+    # older exchanges with one line per step ("1) read_file → ...") and keeps
+    # only the latest exchange in full. None or 0 turns this off: older steps
+    # stay in full until the turn passes 80% of loop_context_budget. Hosts
+    # whose model reads files over many rounds (a coding agent) turn it off
+    # and raise loop_context_budget instead.
+    loop_compaction_rounds: int | None = Field(default=4, ge=0)
     # What the kernel prepends to the user message it sends to the model (it
     # is never persisted): "full" = timestamp and session id (the historical
     # behaviour), "timestamp" = no session id, "off" = nothing.
