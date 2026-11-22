@@ -86,6 +86,14 @@ _HISTORY_ROLES = frozenset({"user", "assistant"})
 # After autocompact, a fresh tool result is never cut below this many chars.
 _MIN_RESULT_CHARS_AFTER_AUTOCOMPACT = 2000
 _MAX_LLM_RETRIES = 3
+
+# What an instant turn with ``instant_read_results`` tells the model after its
+# actions ran. A host replaces it per symbiote with the harness text
+# ``injection_instant_results`` (``kernel.harness_versions.create_version``).
+INSTANT_RESULTS_MSG = (
+    "The actions above have run. Read their results and answer the user now. "
+    "Do not call any more tools."
+)
 # User-facing texts when the loop ends without a model answer (same language
 # as response_validator's fallback).
 _LOOP_TIMEOUT_TEXT = (
@@ -454,7 +462,9 @@ class ChatRunner:
 
         When ``context.tool_mode == "instant"``, a streamlined fast-path is
         used: single LLM call, optional single tool execution, no loop
-        controller, no compaction, no progress callbacks.
+        controller, no compaction, no progress callbacks. The model is called
+        again only when an action failed or, with
+        ``context.instant_read_results``, to read the results and answer.
 
         ``llm_config`` is merged into the ``config`` kwarg passed to
         ``self._llm.stream(...)`` — useful for per-call overrides like
@@ -591,6 +601,47 @@ class ChatRunner:
 
             if hook_text is not None:
                 clean_text = hook_text
+            elif all(tr.success for tr in all_tool_results) and context.instant_read_results:
+                # The actions ran: one more call, without tools, so the model
+                # reads what they returned and answers. Without it the turn
+                # ends with the text written before the results existed.
+                self._append_tool_exchange(
+                    messages,
+                    response,
+                    clean_text,
+                    tool_calls,
+                    results,
+                    protocol_state=protocol_state,
+                )
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        context.injection_instant_results_override or INSTANT_RESULTS_MSG
+                    ),
+                })
+                # No ``tools`` in this call, and so no structured tool
+                # exchange either (see the step-limit call of the loop).
+                read_kwargs = dict(kwargs)
+                read_kwargs.pop("tools", None)
+                try:
+                    read_response, read_chunks = self._call_llm_with_retry(
+                        flatten_tool_exchanges(messages), read_kwargs, on_token, sink
+                    )
+                except Exception:
+                    pass  # keep the text of the first call
+                else:
+                    read_text, read_calls = self._parse_response(read_response)
+                    self._validate_protocol_response(
+                        read_response,
+                        read_calls,
+                        protocol_state,
+                    )
+                    # A reply that still asks for tools ignored the
+                    # instruction; its text is narration, not an answer.
+                    if read_text.strip() and not read_calls:
+                        clean_text, buffered_chunks = read_text, read_chunks
+                if not clean_text.strip():
+                    clean_text = "Pronto."
             elif all(tr.success for tr in all_tool_results):
                 # Default: skip final LLM round-trip on success when no hook.
                 if not clean_text.strip():

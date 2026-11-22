@@ -37,6 +37,7 @@ from symbiote.api.schemas import (
     SetDefaultRevisionRequest,
     SetSessionDelegationRequest,
     SetSessionRevisionRequest,
+    SetSessionToolModeRequest,
     SetSessionToolsRequest,
 )
 from symbiote.core.exceptions import (
@@ -73,6 +74,7 @@ def _session_response(sess: Any, *, summary: bool = True) -> SessionResponse:
         status=sess.status,
         summary=sess.summary if summary else None,
         learn=sess.learn,
+        tool_mode=sess.tool_mode,
     )
 
 
@@ -145,6 +147,19 @@ def set_session_delegation(
     effect on its next turn."""
     _require_session_access(kernel._storage, session_id, auth)
     return _session_response(kernel.set_session_delegation(session_id, body.delegation))
+
+
+@router.put("/sessions/{session_id}/tool-mode", response_model=SessionResponse)
+def set_session_tool_mode(
+    session_id: str,
+    body: SetSessionToolModeRequest,
+    auth: Annotated[APIKey, Depends(require_auth)],
+    kernel: Annotated[SymbioteKernel, Depends(get_kernel)],
+) -> SessionResponse:
+    """Choose a session's own tool mode, or go back to the symbiote's
+    (``null``). Takes effect on its next turn."""
+    _require_session_access(kernel._storage, session_id, auth)
+    return _session_response(kernel.set_session_tool_mode(session_id, body.tool_mode))
 
 
 # ── Revisions of a symbiote's configuration ──────────────────────────────

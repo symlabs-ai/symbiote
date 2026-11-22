@@ -575,6 +575,14 @@ _V14_SESSION_LEARN = """
 ALTER TABLE sessions ADD COLUMN learn INTEGER DEFAULT 1;
 """
 
+# 15: the tool mode a session chooses for itself, and whether an instant turn
+# reads the results of its actions before answering.
+_V15_TURN_MODES = """
+ALTER TABLE sessions ADD COLUMN tool_mode TEXT COLLATE "C";
+
+ALTER TABLE environment_configs ADD COLUMN instant_read_results INTEGER DEFAULT 0;
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "baseline", _V1_BASELINE),
     (2, "session_locks", _V2_SESSION_LOCKS),
@@ -590,6 +598,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (12, "session_scope", _V12_SESSION_SCOPE),
     (13, "message_origin", _V13_MESSAGE_ORIGIN),
     (14, "session_learn", _V14_SESSION_LEARN),
+    (15, "turn_modes", _V15_TURN_MODES),
 )
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

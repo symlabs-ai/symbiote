@@ -176,6 +176,16 @@ class SymbioteClient:
         resp.raise_for_status()
         return resp.json()
 
+    def set_session_tool_mode(self, session_id: str, tool_mode: str | None) -> dict:
+        """Give a session a tool mode of its own (``"instant"``, ``"brief"``,
+        ``"long_run"``, ``"continuous"``, ``"auto"``), or go back to the
+        Symbiota's (``None``)."""
+        resp = self._client.put(
+            f"/sessions/{session_id}/tool-mode", json={"tool_mode": tool_mode}
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     def set_default_revision(self, symbiote_id: str, label: str | None) -> dict | None:
         """Make a revision the Symbiota's default (where a delegation lands
         when the caller's label has no match), or leave it with none

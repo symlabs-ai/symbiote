@@ -37,6 +37,10 @@ DELEGATION_OPEN = "open"
 DELEGATION_STRICT = "strict"
 DELEGATION_MODES = (DELEGATION_OPEN, DELEGATION_STRICT)
 
+# The tool modes a session may choose for itself: the ones of
+# ``EnvironmentConfig.tool_mode``.
+TOOL_MODES = ("auto", "instant", "brief", "long_run", "continuous")
+
 MAX_TOOLS_ALLOWED = 1000
 MAX_TOOL_ID_CHARS = 200
 
@@ -50,6 +54,8 @@ class SessionScope:
     # None: no restriction. An empty set: no tool at all.
     tools_allowed: frozenset[str] | None = None
     delegation: str = DELEGATION_OPEN
+    # None: the tool mode of the symbiote's configuration.
+    tool_mode: str | None = None
 
 
 def validate_tools_allowed(value: Any) -> list[str] | None:
@@ -103,6 +109,15 @@ def validate_delegation(value: Any) -> str:
     return str(value)
 
 
+def validate_tool_mode(value: Any) -> str | None:
+    """A session's own tool mode; ``None`` is the symbiote's."""
+    if value is None:
+        return None
+    if value not in TOOL_MODES:
+        raise ValidationError(f"tool_mode must be one of {list(TOOL_MODES)} or None, got {value!r}")
+    return str(value)
+
+
 # ── the scope of the turn in progress ───────────────────────────────────
 
 _scope: contextvars.ContextVar[SessionScope | None] = contextvars.ContextVar(
@@ -126,6 +141,19 @@ def session_tools_for(symbiote_id: str) -> frozenset[str] | None:
     scope = _scope.get()
     if scope is not None and scope.symbiote_id == symbiote_id:
         return scope.tools_allowed
+    return None
+
+
+def session_tool_mode_for(symbiote_id: str) -> str | None:
+    """The tool mode the session in progress chose for ``symbiote_id``, or
+    ``None`` when it follows the symbiote's configuration.
+
+    Only the symbiote the session belongs to: a symbiote it delegates to
+    works in its own mode (the sub-session does not inherit this one).
+    """
+    scope = _scope.get()
+    if scope is not None and scope.symbiote_id == symbiote_id:
+        return scope.tool_mode
     return None
 
 

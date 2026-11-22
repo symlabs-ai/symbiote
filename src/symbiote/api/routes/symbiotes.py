@@ -171,6 +171,7 @@ def set_config(
         "tool_call_timeout", "loop_timeout", "memory_share", "knowledge_share",
         "context_mode", "prompt_caching", "learn_from_subject_sessions",
         "skill_trial_listing", "dream_llm", "session_summary_mode",
+        "instant_read_results",
         "max_turn_tokens", "max_turn_llm_calls",
     ):
         val = getattr(body, field_name, None)
@@ -220,6 +221,7 @@ def _build_config_response(env: EnvironmentManager, symbiote_id: str) -> ConfigR
         tool_loading=cfg.tool_loading,
         tool_tags=cfg.tool_tags,
         tool_visibility=cfg.tool_visibility,
+        instant_read_results=cfg.instant_read_results,
         tool_loop=cfg.tool_loop,
         max_tool_iterations=cfg.max_tool_iterations,
         tool_call_timeout=cfg.tool_call_timeout,

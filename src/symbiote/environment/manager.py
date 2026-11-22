@@ -42,6 +42,7 @@ class EnvironmentManager:
         tool_loading: str | None = None,
         tool_mode: str | None = None,
         tool_loop: bool | None = None,
+        instant_read_results: bool | None = None,
         prompt_caching: bool | None = None,
         memory_share: float | None = None,
         knowledge_share: float | None = None,
@@ -355,6 +356,13 @@ class EnvironmentManager:
             return "brief"
         return cfg.tool_mode
 
+    def get_instant_read_results(
+        self, symbiote_id: str, workspace_id: str | None = None
+    ) -> bool:
+        """Return instant_read_results from config, or False if no config."""
+        cfg = self.get_config(symbiote_id, workspace_id)
+        return bool(cfg is not None and cfg.instant_read_results)
+
     def get_tool_loop(
         self, symbiote_id: str, workspace_id: str | None = None
     ) -> bool:
@@ -582,6 +590,7 @@ class EnvironmentManager:
             tool_loading=row.get("tool_loading") or "full",
             tool_mode=row.get("tool_mode") or "brief",
             tool_loop=bool(row.get("tool_loop", 1)),
+            instant_read_results=bool(_int(row, "instant_read_results", 0)),
             prompt_caching=bool(row.get("prompt_caching", 0)),
             memory_share=_float(row, "memory_share", 0.40),
             knowledge_share=_float(row, "knowledge_share", 0.25),

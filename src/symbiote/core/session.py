@@ -20,6 +20,7 @@ from symbiote.core.session_scope import (
     tools_from_json,
     tools_to_json,
     validate_delegation,
+    validate_tool_mode,
     validate_tools_allowed,
 )
 from symbiote.core.subjects import validate_subject_key
@@ -115,6 +116,15 @@ class SessionManager:
         self._storage.execute(
             "UPDATE sessions SET delegation = ? WHERE id = ?",
             (validate_delegation(delegation), session_id),
+        )
+        return self._require(session_id)
+
+    def set_tool_mode(self, session_id: str, tool_mode: str | None) -> Session:
+        """Give the session a tool mode of its own, or none (``None``: the
+        symbiote's). Raises EntityNotFoundError if not found."""
+        self._storage.execute(
+            "UPDATE sessions SET tool_mode = ? WHERE id = ?",
+            (validate_tool_mode(tool_mode), session_id),
         )
         return self._require(session_id)
 
@@ -436,6 +446,7 @@ class SessionManager:
             ended_at=ended_at,
             summary=row.get("summary"),
             learn=row.get("learn") != 0,
+            tool_mode=row.get("tool_mode") or None,
         )
 
     @staticmethod

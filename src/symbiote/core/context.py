@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from symbiote.core.exceptions import EntityNotFoundError
 from symbiote.core.identity import IdentityManager
 from symbiote.core.ports import KnowledgePort, MemoryPort
-from symbiote.core.session_scope import tool_in_session
+from symbiote.core.session_scope import session_tool_mode_for, tool_in_session
 from symbiote.core.subjects import subject_kwargs
 from symbiote.memory.working import WorkingMemory
 
@@ -53,6 +53,8 @@ class AssembledContext(BaseModel):
     tool_loading: str = "full"
     tool_mode: str = "brief"
     tool_loop: bool = True  # deprecated — derived from tool_mode
+    # Instant mode: read the results of the actions before answering.
+    instant_read_results: bool = False
     max_tool_iterations: int = 10
     tool_call_timeout: float = 30.0
     loop_timeout: float = 300.0
@@ -63,6 +65,8 @@ class AssembledContext(BaseModel):
     tool_instructions_override: str | None = None
     injection_stagnation_override: str | None = None
     injection_circuit_breaker_override: str | None = None
+    # Host text for the call that reads the results of an instant turn.
+    injection_instant_results_override: str | None = None
     context_mode: str = "packed"
     # Long-run mode fields
     planner_prompt: str | None = None
@@ -286,6 +290,7 @@ class ContextAssembler:
         loading_mode = "full"
         tool_mode = "brief"
         loop_enabled = True
+        instant_read_results = False
         prompt_caching = False
         memory_share = _MEMORIES_SHARE
         knowledge_share = _KNOWLEDGE_SHARE
@@ -305,12 +310,17 @@ class ContextAssembler:
                 # This session may not fetch schemas one by one: show it the
                 # full schemas of the tools it has, so they stay usable.
                 loading_mode = "full"
-            tool_mode = self._environment.get_tool_mode(symbiote_id)
+            # The session's own mode, when it chose one, else the symbiote's.
+            tool_mode = session_tool_mode_for(symbiote_id) or self._environment.get_tool_mode(
+                symbiote_id
+            )
             if tool_mode == "auto":
                 tool_mode = self._resolve_auto_mode(
                     symbiote_id, user_input,
                 )
             loop_enabled = tool_mode != "instant"
+            read_getter = getattr(self._environment, "get_instant_read_results", None)
+            instant_read_results = read_getter(symbiote_id) is True if read_getter else False
             prompt_caching = self._environment.get_prompt_caching(symbiote_id)
             memory_share = self._environment.get_memory_share(symbiote_id)
             knowledge_share = self._environment.get_knowledge_share(symbiote_id)
@@ -391,12 +401,17 @@ class ContextAssembler:
         tool_instr_override = None
         stag_override = None
         cb_override = None
+        instant_results_override = None
         if self._harness_versions is not None:
             get_active = getattr(self._harness_versions, "get_active", None)
             if get_active is not None:
                 tool_instr_override = get_active(symbiote_id, "tool_instructions", tool_mode)
                 stag_override = get_active(symbiote_id, "injection_stagnation", tool_mode)
                 cb_override = get_active(symbiote_id, "injection_circuit_breaker", tool_mode)
+                if instant_read_results:
+                    instant_results_override = get_active(
+                        symbiote_id, "injection_instant_results", tool_mode
+                    )
 
         # 9. Skill injection (opt-in, per-symbiote). Off by default — empty
         #    summary / list, total unchanged. Budget-aware: skills are added
@@ -422,6 +437,7 @@ class ContextAssembler:
             tool_loading=loading_mode,
             tool_mode=tool_mode,
             tool_loop=loop_enabled,
+            instant_read_results=instant_read_results,
             max_tool_iterations=max_tool_iterations,
             tool_call_timeout=tool_call_timeout,
             loop_timeout=loop_timeout,
@@ -430,6 +446,7 @@ class ContextAssembler:
             tool_instructions_override=tool_instr_override,
             injection_stagnation_override=stag_override,
             injection_circuit_breaker_override=cb_override,
+            injection_instant_results_override=instant_results_override,
             context_mode=context_mode,
             planner_prompt=planner_prompt,
             evaluator_prompt=evaluator_prompt,

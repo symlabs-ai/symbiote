@@ -5,6 +5,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+**Migração:** 21 no SQLite e 15 no PostgreSQL (colunas `sessions.tool_mode` e `environment_configs.instant_read_results`). Nada muda para quem não usa as duas opções.
+
+### Novas funcionalidades
+
+- feat(runner): modo instant que lê o resultado das ações antes de responder (B-108, item 28 do SymbiOS). Com `instant_read_results=True` no `EnvironmentConfig`, depois que as ações do turno dão certo o modelo é chamado mais uma vez, sem ferramentas, para ler os resultados e responder; o turno continua terminando como `end_turn`, com a nota de um turno instant bem-sucedido. Desligado (padrão), o instant segue como antes: a resposta é o texto escrito antes de as ações rodarem. A instrução dessa chamada é trocável por symbiota com o texto de harness `injection_instant_results`.
+- feat(kernel): modo de trabalho por sessão (B-109, item 29 do SymbiOS). `kernel.set_session_tool_mode(session_id, mode)` dá a uma sessão o próprio modo (`instant`, `brief`, `long_run`, `continuous` ou `auto`, resolvido a cada turno); `None` volta ao modo do symbiota. Vale só para aquela sessão, inclusive com outra sessão do mesmo symbiota rodando ao mesmo tempo, não passa para um symbiota chamado por `spawn`, e o trace e a nota usam o modo em que o turno rodou. `Session.tool_mode`, `inspector.list_sessions`, `PUT /sessions/{id}/tool-mode` e `SymbioteClient.set_session_tool_mode`.
+
+### Outros
+
+- docs: "Instant mode: a command or a query", "A tool mode per session" e "Upgrading to 0.8.19" em `docs/HOST_INTEGRATION.md`.
+
 ## [v0.8.18] - 2026-11-21
 
 Busca e leitura web sem serviço pago (B-107, item 27 do SymbiOS). Tudo em `symbiote.browser`, sem migração, e nada liga sozinho: sem o host escolher, o comportamento é o anterior.

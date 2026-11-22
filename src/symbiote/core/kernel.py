@@ -1073,8 +1073,23 @@ class SymbioteKernel:
         next turn. Raises ``EntityNotFoundError`` for an unknown session."""
         return self._sessions.set_delegation(session_id, delegation)
 
+    def set_session_tool_mode(self, session_id: str, tool_mode: str | None) -> Session:
+        """Give a session a tool mode of its own: ``"instant"``, ``"brief"``,
+        ``"long_run"``, ``"continuous"`` or ``"auto"`` (resolved at every
+        turn, as in the configuration). ``None`` goes back to the mode of
+        the symbiote's configuration.
+
+        It holds for this session's turns only: the symbiote's other
+        sessions, also the ones running at the same time, keep their own,
+        and a symbiote this session delegates to works in its mode. The
+        turn's trace and score carry the mode the turn ran in. Takes effect
+        on the session's next turn. Raises ``EntityNotFoundError`` for an
+        unknown session and ``ValidationError`` for an unknown mode."""
+        return self._sessions.set_tool_mode(session_id, tool_mode)
+
     _SESSION_SCOPE_SQL = (
-        "SELECT symbiote_id, revision, tools_allowed, delegation FROM sessions WHERE id = ?"
+        "SELECT symbiote_id, revision, tools_allowed, delegation, tool_mode "
+        "FROM sessions WHERE id = ?"
     )
 
     def _bind_session(
@@ -1098,6 +1113,7 @@ class SymbioteKernel:
             session_id=session_id,
             tools_allowed=frozenset(tools) if tools is not None else None,
             delegation=row.get("delegation") or "open",
+            tool_mode=row.get("tool_mode") or None,
         )
         return bind_revision(revision), bind_session_scope(scope)
 
@@ -2562,10 +2578,15 @@ class SymbioteKernel:
     ) -> dict | None:
         """S-01: On first message of a session, inject the most recent handoff.
 
-        Only for a symbiote in long_run mode: the planner is what reads it.
-        A chat turn would get the whole JSON record in its system prompt.
+        Only for a turn in long_run mode (the session's own mode, else the
+        symbiote's): the planner is what reads it. A chat turn would get the
+        whole JSON record in its system prompt.
         """
-        if self._environment.get_tool_mode(symbiote_id) != "long_run":
+        own = self._storage.fetch_one(
+            "SELECT tool_mode FROM sessions WHERE id = ?", (session_id,)
+        )
+        mode = (own or {}).get("tool_mode") or self._environment.get_tool_mode(symbiote_id)
+        if mode != "long_run":
             return extra_context
         msg_row = self._storage.fetch_one(
             "SELECT COUNT(*) as c FROM messages WHERE session_id = ?", (session_id,)

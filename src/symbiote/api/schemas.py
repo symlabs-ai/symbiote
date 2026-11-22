@@ -91,6 +91,12 @@ class SetSessionDelegationRequest(BaseModel):
     delegation: Literal["open", "strict"] = "open"
 
 
+class SetSessionToolModeRequest(BaseModel):
+    """Choose a session's own tool mode, or go back to the symbiote's (null)."""
+
+    tool_mode: Literal["auto", "instant", "brief", "long_run", "continuous"] | None = None
+
+
 class SetDefaultRevisionRequest(BaseModel):
     """Make a revision the symbiote's default, or leave it with none (null)."""
 
@@ -110,6 +116,8 @@ class SessionResponse(BaseModel):
     summary: str | None = None
     # False: closed with ``learn=false``; the symbiote learns nothing from it.
     learn: bool = True
+    # The tool mode this session chose for itself; None: the symbiote's.
+    tool_mode: str | None = None
 
 
 class CreateMessageRequest(BaseModel):
@@ -205,6 +213,8 @@ class ConfigRequest(BaseModel):
 
     tools: list[str] | None = None  # explicit tool allowlist (PolicyGate)
     tool_mode: str | None = None  # "instant" | "brief" | "long_run" | "continuous"
+    # Instant mode: read the results of the actions before answering
+    instant_read_results: bool | None = None
     tool_loading: str | None = None  # "full" | "index" | "semantic"
     tool_tags: list[str] | None = None
     tool_visibility: str | None = None  # "tagged" | "authorized"
@@ -239,6 +249,7 @@ class ConfigResponse(BaseModel):
     tool_tags: list[str] = []
     tool_visibility: str = "tagged"
     tool_loop: bool = True
+    instant_read_results: bool = False
     max_tool_iterations: int = 10
     tool_call_timeout: float = 30.0
     loop_timeout: float = 300.0

@@ -63,6 +63,9 @@ class Session(BaseModel):
     # nothing learned for the symbiote as a whole (scores, tuner, evolver,
     # dream, skill review) reads it, until it is closed again with learning.
     learn: bool = True
+    # The tool mode this session chose for itself (``set_session_tool_mode``).
+    # None: the mode of the symbiote's configuration.
+    tool_mode: str | None = None
 
 
 # ── Message ──────────────────────────────────────────────────────────────────
@@ -196,6 +199,13 @@ class EnvironmentConfig(BaseModel):
     tool_loading: Literal["full", "index", "semantic"] = "full"
     tool_mode: Literal["auto", "instant", "brief", "long_run", "continuous"] = "brief"
     tool_loop: bool = True  # deprecated — derived from tool_mode
+    # Instant mode only. False (default): when every action of the turn
+    # succeeds the answer is the text the model wrote before they ran, and
+    # the model is called again only when one fails (right for a command).
+    # True: after the actions succeed the model is called once more, without
+    # tools, to read their results and answer (right for a query); the turn
+    # still ends as ``end_turn``.
+    instant_read_results: bool = False
     prompt_caching: bool = False
     memory_share: float = Field(default=0.40, ge=0.0, le=1.0)
     knowledge_share: float = Field(default=0.25, ge=0.0, le=1.0)

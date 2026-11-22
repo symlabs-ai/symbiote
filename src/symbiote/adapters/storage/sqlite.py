@@ -193,6 +193,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "_migrate_session_scope",
     "_migrate_message_origin",
     "_migrate_session_learn",
+    "_migrate_turn_modes",
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -816,6 +817,17 @@ class SQLiteAdapter:
         with ``close_session(learn=False)``)."""
         with contextlib.suppress(sqlite3.OperationalError):  # column already exists
             self._conn.execute("ALTER TABLE sessions ADD COLUMN learn INTEGER DEFAULT 1")
+        self._conn.commit()
+
+    def _migrate_turn_modes(self) -> None:
+        """21: the tool mode a session chooses for itself, and whether an
+        instant turn reads the results of its actions before answering."""
+        for stmt in (
+            "ALTER TABLE sessions ADD COLUMN tool_mode TEXT",
+            "ALTER TABLE environment_configs ADD COLUMN instant_read_results INTEGER DEFAULT 0",
+        ):
+            with contextlib.suppress(sqlite3.OperationalError):  # column already exists
+                self._conn.execute(stmt)
         self._conn.commit()
 
     def execute(self, sql: str, params: tuple | None = None) -> sqlite3.Cursor:

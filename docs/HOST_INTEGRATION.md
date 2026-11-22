@@ -559,6 +559,18 @@ already registers the web tools may notice:
   `"yahoo"`, `search_options["fetcher"]`, and the `[web]` extra for
   `fetcher="chrome"`.
 
+### Upgrading to 0.8.19
+
+Migration 21 (PostgreSQL 15): the columns `sessions.tool_mode` (`NULL` for
+every existing session) and `environment_configs.instant_read_results`
+(`0`). Nothing changes for a host that uses neither. What a host may notice:
+
+- `Session`, the rows of `inspector.list_sessions` and the HTTP session
+  response have the key `tool_mode` (`None` unless the session chose a mode
+  with `set_session_tool_mode`).
+- `EnvironmentConfig` and the HTTP config have `instant_read_results`
+  (`False`). See "Tool Mode Selection".
+
 ---
 
 ## Tool Registration
@@ -2097,6 +2109,84 @@ kernel.environment.configure(
 # continuous: Always-on agent (placeholder, not yet implemented)
 kernel.environment.configure(symbiote_id=sym.id, tool_mode="continuous")
 ```
+
+### Instant mode: a command or a query
+
+An instant turn makes one model call and runs the actions it asks for. When
+they all succeed, the turn ends there: the reply is the text of that call,
+written before any result existed, and the model is called again only when
+an action fails. That is right for a command ("open the editor") and wrong
+for a query, where the reply would be "let me look that up" and nothing
+else.
+
+```python
+kernel.environment.configure(
+    symbiote_id=sym.id, tool_mode="instant", instant_read_results=True  # default False
+)
+```
+
+With `instant_read_results=True`, after the actions succeed the model is
+called once more, without tools, to read their results and answer. The turn
+is still an instant one: `stop_reason="end_turn"`, one iteration, scored as a
+successful instant turn. (The workaround of `tool_mode="brief"` with
+`max_tool_iterations=1` ends as `max_iterations`: scored 0, recorded as a
+failure memory and read by the dream and the tuner as a failed turn.)
+
+- A turn that asked for no action makes no second call.
+- A failed action goes back to the model as before, with or without the
+  option.
+- A host `on_after_tool_result` hook that returns a text still decides the
+  reply; no second call is made.
+- If the second call fails, or answers by asking for more tools, the text of
+  the first call stays.
+- The stored reply and `outcome.text` are the answer of the second call.
+  With live token streaming, whatever the first call streamed before its
+  actions ran is already on the screen, as in the tool loop.
+
+The second call ends with one instruction, in English by default:
+
+> The actions above have run. Read their results and answer the user now. Do
+> not call any more tools.
+
+Replace it per symbiote with the harness text `injection_instant_results`,
+for instance to write it in the user's language. It is not an evolvable
+component: the evolver never rewrites it.
+
+```python
+kernel.harness_versions.create_version(
+    sym.id, "injection_instant_results", "As ações acima já rodaram. Leia os resultados e responda."
+)
+```
+
+### A tool mode per session
+
+The mode of the configuration is the one every session of the symbiote
+starts with. One session can choose another for itself:
+
+```python
+kernel.set_session_tool_mode(session.id, "long_run")   # this conversation only
+kernel.set_session_tool_mode(session.id, None)         # back to the symbiote's mode
+```
+
+- Values: the ones of the configuration (`"instant"`, `"brief"`,
+  `"long_run"`, `"continuous"`, `"auto"`). `"auto"` is resolved at every
+  turn, as in the configuration. Anything else raises `ValidationError`.
+- It is stored with the session (`Session.tool_mode`; `None`: the
+  symbiote's) and takes effect on the session's next turn. Two sessions of
+  the same symbiote can run at the same time in different modes; changing
+  one changes nothing for the others, and a new session starts in the
+  symbiote's mode.
+- It holds for the symbiote of the session only: a symbiote it delegates to
+  (`spawn`) works in its own mode.
+- The trace, `TurnOutcome.tool_mode` and the session score use the mode the
+  turn ran in.
+- Everything else the mode needs still comes from the configuration:
+  `long_run` reads the symbiote's planner and evaluator settings, and the
+  handoff of an unfinished project is injected into a session whose own mode
+  is `long_run`.
+
+Over HTTP it is `PUT /sessions/{id}/tool-mode` with `{"tool_mode": "brief"}`
+(or `null`), and in the SDK `client.set_session_tool_mode(session_id, mode)`.
 
 ---
 

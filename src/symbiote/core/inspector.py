@@ -74,12 +74,13 @@ class KernelInspector:
         it is pinned to (``None``: the current configuration), the tools it
         is narrowed to (``tools_allowed``; ``None``: no restriction) and its
         ``delegation`` mode. ``learn`` is ``False`` for a session closed with
-        ``close_session(learn=False)``.
+        ``close_session(learn=False)``; ``tool_mode`` is the mode the session
+        chose for itself (``None``: the symbiote's).
         """
         sql = (
             "SELECT s.id, s.symbiote_id, sym.name AS symbiote_name, s.goal, s.status, "
             "s.external_key, s.subject_key, s.revision, s.tools_allowed, s.delegation, "
-            "s.started_at, s.ended_at, s.summary, s.learn, "
+            "s.started_at, s.ended_at, s.summary, s.learn, s.tool_mode, "
             "sc.auto_score, sc.user_score, sc.final_score, sc.stop_reason "
             "FROM sessions s JOIN symbiotes sym ON sym.id = s.symbiote_id "
             "LEFT JOIN session_scores sc ON sc.session_id = s.id"
