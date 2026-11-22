@@ -162,9 +162,13 @@ class LongRunRunner:
         skill_nudge_interval: int = 10,
         # Layer 2 compaction of each block (ChatRunner's default is 4).
         loop_compaction_rounds: int | None = 4,
+        # Whether the wait for an approval counts toward each block's
+        # ``loop_timeout`` (see ChatRunner).
+        loop_timeout_counts_approval: bool = True,
     ) -> None:
         self._tool_result_max_chars = tool_result_max_chars
         self._loop_compaction_rounds = loop_compaction_rounds
+        self._loop_timeout_counts_approval = loop_timeout_counts_approval
         self._runtime_context = runtime_context
         # Blocks run in the kernel's protocol and nudge its skill review
         # like a plain chat turn does (B-74).
@@ -649,6 +653,7 @@ class LongRunRunner:
             context_budget=self._context_budget,
             runtime_context=self._runtime_context,
             loop_compaction_rounds=self._loop_compaction_rounds,
+            loop_timeout_counts_approval=self._loop_timeout_counts_approval,
             **limits,
             # Tools inside a block use the same approval gate as a chat turn.
             on_before_tool_call=self._on_before_tool_call,

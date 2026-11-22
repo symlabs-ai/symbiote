@@ -656,6 +656,11 @@ No migration, and nothing turns itself on. What is new, all of it opt-in:
   `models()`. One thing to check: a `provider_options` key in the
   `llm_config` of a turn, which the adapter used to drop, is now sent to
   the gateway.
+- **`KernelConfig.loop_timeout_counts_approval`** (default `True`, the
+  behaviour of before). `False` takes the wait for the approval callback off
+  the clock of `loop_timeout`. `ChatRunner` and `LongRunRunner` take the same
+  keyword. A host that replaced `symbiote.runners.chat.time` with a clock of
+  its own to get this can drop that. See "Timeout Configuration".
 
 ---
 
@@ -2578,6 +2583,18 @@ kernel.environment.configure(
     loop_timeout=120.0,      # Total loop timeout (seconds), default 300
 )
 ```
+
+`loop_timeout` is checked before each round of the tool loop, against the
+time since the loop began: it stops the turn with `stop_reason="timeout"`
+and does not interrupt a model call or a tool in progress. By default that
+time includes what the approval callback takes, so a person who is slow to
+answer (see "Human-in-the-Loop") can end a turn that did almost no work.
+`KernelConfig(loop_timeout_counts_approval=False)` takes the time spent in
+the approval callback off the loop's clock: the limit then measures model
+calls and tools only. It applies to the chat loop, sync and async, and to
+each block of `tool_mode="long_run"`; the trace's `total_elapsed_ms` stays
+wall-clock time. How long a person may take is the host's to bound, in its
+own callback (or with `ApprovalDecision.defer`, which does not wait at all).
 
 ---
 

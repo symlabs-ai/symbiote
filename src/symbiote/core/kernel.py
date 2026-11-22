@@ -298,6 +298,7 @@ class SymbioteKernel:
                     protocol_registry=active_protocol_registry,
                     runtime_context=config.runtime_context,
                     loop_compaction_rounds=config.loop_compaction_rounds,
+                    loop_timeout_counts_approval=config.loop_timeout_counts_approval,
                 )
             )
 
@@ -314,6 +315,7 @@ class SymbioteKernel:
                     protocol_registry=active_protocol_registry,
                     background_review=self._background_review_for,
                     loop_compaction_rounds=config.loop_compaction_rounds,
+                    loop_timeout_counts_approval=config.loop_timeout_counts_approval,
                 )
             )
 

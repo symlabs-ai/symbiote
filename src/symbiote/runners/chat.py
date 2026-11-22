@@ -254,6 +254,10 @@ class ChatRunner:
         # by a one-line-per-step summary every round. None or 0 turns it off,
         # leaving only the budget compaction (Layer 3).
         loop_compaction_rounds: int | None = _COMPACTION_THRESHOLD,
+        # Whether the time a person takes to answer the approval callback
+        # counts toward ``loop_timeout``. False: the loop's limit measures
+        # the work only (model calls and tools), not the wait.
+        loop_timeout_counts_approval: bool = True,
     ) -> None:
         if runtime_context not in _RUNTIME_CONTEXT_MODES:
             raise ValidationError(
@@ -267,6 +271,7 @@ class ChatRunner:
             )
         self._runtime_context = runtime_context
         self._loop_compaction_rounds = loop_compaction_rounds or None
+        self._loop_timeout_counts_approval = bool(loop_timeout_counts_approval)
         self._llm = llm
         self._working_memory = working_memory
         self._tool_gateway = tool_gateway
@@ -799,12 +804,16 @@ class ChatRunner:
         final_text = ""
         loop_start = time.monotonic()
         loop_timeout = context.loop_timeout
+        # Seconds spent in the approval gate, taken off the loop's clock
+        # when ``loop_timeout_counts_approval`` is off. The trace's
+        # ``total_elapsed_ms`` stays wall-clock time either way.
+        approval_wait = 0.0
         rounds = 0  # model rounds actually executed (LLM calls in the loop)
         sink = TokenSink(on_token, self._token_streaming)
 
         for iteration in range(max_iters):
             # Check loop timeout before each iteration
-            if time.monotonic() - loop_start > loop_timeout:
+            if time.monotonic() - loop_start - approval_wait > loop_timeout:
                 logger.info("[tool-loop] loop timeout exceeded (%.1fs)", loop_timeout)
                 trace.stop_reason = "timeout"
                 break
@@ -889,9 +898,14 @@ class ChatRunner:
             # callback is synchronous and may wait for a human, so it is a
             # blocking request (a worker thread under the async driver).
             if self._on_before_tool_call is not None:
+                asked = (
+                    None if self._loop_timeout_counts_approval else time.monotonic()
+                )
                 approved_calls, denial_results = yield _Blocking(
                     self._check_approval, remaining_calls, context
                 )
+                if asked is not None:
+                    approval_wait += time.monotonic() - asked
             else:
                 approved_calls, denial_results = self._check_approval(
                     remaining_calls, context

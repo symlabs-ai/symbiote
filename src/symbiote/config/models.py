@@ -37,6 +37,13 @@ class KernelConfig(BaseModel):
     # whose model reads files over many rounds (a coding agent) turn it off
     # and raise loop_context_budget instead.
     loop_compaction_rounds: int | None = Field(default=4, ge=0)
+    # Whether the time a person takes to answer the approval callback counts
+    # toward a symbiote's ``loop_timeout`` (the historical behaviour). False:
+    # the limit measures the work only, model calls and tools, so a turn that
+    # waits long for approvals is not ended for it. Applies to the chat loop
+    # and to each block of a long run; the trace's ``total_elapsed_ms`` is
+    # wall-clock time either way.
+    loop_timeout_counts_approval: bool = True
     # What the kernel prepends to the user message it sends to the model (it
     # is never persisted): "full" = timestamp and session id (the historical
     # behaviour), "timestamp" = no session id, "off" = nothing.
