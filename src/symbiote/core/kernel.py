@@ -708,6 +708,7 @@ class SymbioteKernel:
         on_stream: Callable[[str, int], None] | None = None,
         on_plan: Callable[[LongRunPlan], None] | None = None,
         on_block_complete: Callable[[BlockResult], None] | None = None,
+        on_reasoning: Callable[[str, int], None] | None = None,
     ) -> None:
         """Install mid-turn callbacks on the internal runners.
 
@@ -718,7 +719,19 @@ class SymbioteKernel:
         index, total)`` with ``plan_complete`` / ``block_start`` /
         ``block_end``, ``on_plan(plan)`` and ``on_block_complete(result)``.
 
-        Each call replaces all four; omitted ones are cleared. The callbacks
+        ``on_reasoning(text, iteration)``: the model's reasoning, piece by
+        piece, while each model call runs, before the text it leads to, in
+        every round of the tool loop (chat turns and long-run blocks;
+        ``iteration`` is the model call's number, as in ``on_progress``, and
+        starts again in each block). Opt-in twice: it needs this callback
+        and an adapter that streams reasoning (``stream_reasoning=True`` on
+        ``ForgeLLMAdapter`` or ``SymGatewayLLMAdapter``); with the callback
+        set, model calls go through the adapter's ``stream()`` even without
+        ``on_token``. The reasoning never enters the turn's text, the
+        history, the memory or what a delegated symbiote returns. See
+        "Visible reasoning" in ``docs/HOST_INTEGRATION.md``.
+
+        Each call replaces all five; omitted ones are cleared. The callbacks
         are shared by every session of this kernel (they receive no session
         id), and in ``message_async`` they may run on a worker thread.
 
@@ -731,13 +744,16 @@ class SymbioteKernel:
                 "No chat runner available to set progress callbacks "
                 "(kernel was constructed without an LLM)."
             )
-        runner.set_progress_callbacks(on_progress=on_progress, on_stream=on_stream)
+        runner.set_progress_callbacks(
+            on_progress=on_progress, on_stream=on_stream, on_reasoning=on_reasoning
+        )
         long_run = self._runner_registry.get("long_run")
         if isinstance(long_run, LongRunRunner):
             long_run.set_progress_callbacks(
                 on_progress=on_progress,
                 on_block_complete=on_block_complete,
                 on_plan=on_plan,
+                on_reasoning=on_reasoning,
             )
 
     def set_native_tools(self, enabled: bool) -> None:

@@ -5,6 +5,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+### Novas funcionalidades
+
+- feat(kernel): o raciocínio do modelo chega ao host enquanto ele pensa (B-113, pedido do SymbiOS, item 30). Com `stream_reasoning=True` no adapter, o `stream()` devolve o raciocínio do provedor como itens `ReasoningDelta` (`symbiote.environment.descriptors`), separados do texto: o `SymGatewayLLMAdapter` (precisa de `streaming=True`) lê `delta.reasoning_content` ou, sem ele, `delta.reasoning`; o `ForgeLLMAdapter` lê `reasoning_content` ou `reasoning` dos chunks do forge_llm e, quando o `stream()` recorre ao `complete()` (tools nativas sem `stream_tool_calls`), devolve o `reasoning_content` inteiro uma vez, antes do texto. `kernel.set_progress_callbacks(on_reasoning=...)` recebe `(text, iteration)` durante cada chamada ao modelo, em toda rodada do laço de ferramentas, no chat (síncrono e assíncrono, inclusive no instant) e nos blocos do `long_run`; `iteration` é o número que o `on_progress` dá ao `iteration_start` da chamada. Com o callback, as chamadas passam pelo `stream()` do adapter mesmo sem `on_token`. O raciocínio não entra no texto do turno, no `on_token`, no `on_stream`, no histórico nem na memória, e o `reasoning_state` de reenvio ao provedor fica como estava. O `reasoning_tokens` do uso vem preenchido também numa chamada em stream, quando o provedor informa. Sem o callback e sem a opção do adapter nada muda: nem o corpo das chamadas nem os itens do stream. Depende ainda do forge_llm (emitir raciocínio no stream, aceitar o `thinking` da Anthropic) e do SymGateway (aceitar o pedido em `provider_options` e repassar o raciocínio no stream).
+
+### Outros
+
+- docs: "Visible reasoning" em `docs/HOST_INTEGRATION.md`, com o que cada adapter lê e como pedir raciocínio visível pelo `provider_options`.
+
 ## [v0.8.21] - 2026-11-22
 
 ### Novas funcionalidades

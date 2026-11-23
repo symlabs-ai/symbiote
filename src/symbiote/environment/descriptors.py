@@ -195,3 +195,18 @@ class LLMResponse(BaseModel):
     model_identity: LLMModelIdentity | None = None
     usage: LLMTokenUsage | None = None
     metadata: dict[str, Any] = Field(default_factory=dict, repr=False)
+
+
+class ReasoningDelta(BaseModel):
+    """A piece of the model's reasoning, streamed apart from the reply's text.
+
+    An adapter built with ``stream_reasoning=True`` yields it from
+    ``stream()`` among the text pieces, as the provider sends it (before the
+    text it leads to). It is never part of the reply: the kernel hands it to
+    ``on_reasoning`` and keeps it out of the turn's text, the history and the
+    memory. An adapter without the option never yields it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    text: str

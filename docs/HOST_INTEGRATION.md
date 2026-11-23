@@ -1438,10 +1438,83 @@ kernel.set_progress_callbacks(
 )
 ```
 
-Each call replaces all four callbacks (omitted ones are cleared). They are
+Each call replaces all the callbacks (omitted ones are cleared). They are
 shared by every session of the kernel and receive no session id; in
 `message_async` they may run on a worker thread. For per-tool detail (tool id,
 params, result) use the `before_tool` / `after_tool` hooks.
+
+### Visible reasoning
+
+A model that reasons spends most of a turn thinking without writing a word.
+With two opt-ins the host receives that reasoning while each model call runs:
+an adapter built with `stream_reasoning=True` and the `on_reasoning`
+callback.
+
+```python
+from symbiote.adapters.llm.symgateway import SymGatewayLLMAdapter
+
+llm = SymGatewayLLMAdapter(api_key, model=model, streaming=True, stream_reasoning=True)
+kernel = SymbioteKernel(config, llm=llm)
+
+def on_reasoning(text: str, iteration: int) -> None:
+    # A piece of the reasoning of model call ``iteration``; group by it.
+    show_thinking(iteration, text)
+
+kernel.set_progress_callbacks(on_progress=on_progress, on_reasoning=on_reasoning)
+```
+
+- `on_reasoning(text, iteration)` receives the pieces as the provider sends
+  them, before the text they lead to, in every model call of the turn: each
+  round of the tool loop, chat and long-run blocks alike. `iteration` is the
+  number `on_progress` gives the call's `iteration_start`; the answer forced
+  by a step limit and instant mode's reading of the results get the next
+  number, a retried call keeps its own, and in a long run the count starts
+  again in each block (`block_start` tells which). The long run's planner,
+  evaluator and final report are not streamed.
+- With the callback set, model calls go through the adapter's `stream()`
+  even when the turn has no `on_token`.
+- The reasoning is never part of the answer: it does not enter the text the
+  turn returns, `on_token`, `on_stream`, the history, the memory, the
+  reflection or what a delegated symbiote returns. The turn's text, history
+  and memory are the same with and without it. `LLMResponse.reasoning_state`,
+  which some protocols send back to the provider, is untouched.
+- `LLMTokenUsage.reasoning_tokens` is filled from a streamed call's usage
+  when the provider reports it (`completion_tokens_details` or
+  `output_tokens_details`).
+- Without `stream_reasoning=True` an adapter's stream yields what it always
+  did, and the request body is the same with or without it. Without the
+  callback the kernel calls the adapter as before. An adapter of your own
+  can take part by yielding `symbiote.environment.descriptors.ReasoningDelta`
+  items from `stream()`; the kernel never mixes them into the text.
+
+What each adapter reads:
+
+| Adapter | Where the reasoning comes from |
+|---------|--------------------------------|
+| `SymGatewayLLMAdapter(streaming=True, stream_reasoning=True)` | `delta.reasoning_content` (or, without it, `delta.reasoning`) in the gateway's event stream. `stream_reasoning` without `streaming` is an error. |
+| `ForgeLLMAdapter(stream_reasoning=True)` | `reasoning_content` (or `reasoning`) on forge_llm's stream chunks. When `stream()` falls back to one complete call (native tools without `stream_tool_calls`), the reply's whole `reasoning_content` comes once, before its text. |
+
+**Asking for visible reasoning.** Whether the model shows its reasoning at
+all is asked of the provider, in its own terms; which model takes which
+option is the host's decision. Through SymGateway, put it in
+`provider_options` (see "Provider options"), per model:
+
+```python
+entry = next((m for m in llm.models() if m.get("id") == model), {})
+if entry.get("provider") == "anthropic":
+    llm.provider_options = {"thinking": {"type": "enabled", "budget_tokens": 4000}}
+elif entry.get("provider") == "openai":
+    llm.provider_options = {"reasoning": {"summary": "auto"}}
+```
+
+Both depend on the gateway: it has to accept these options and relay the
+provider's reasoning (Anthropic's `thinking_delta`, OpenAI's reasoning
+summary) in the stream as `delta.reasoning_content`. Until it does, nothing
+reaches `on_reasoning` and the turn runs as before. With `ForgeLLMAdapter`,
+OpenAI-compatible providers that return `reasoning_content` on their own
+(DeepSeek, vLLM and similar) show it through the complete-call fallback;
+forge_llm 0.7.18 does not yet stream reasoning nor send Anthropic's
+`thinking`.
 
 ---
 

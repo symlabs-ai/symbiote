@@ -165,7 +165,10 @@ class LongRunRunner:
         # Whether the wait for an approval counts toward each block's
         # ``loop_timeout`` (see ChatRunner).
         loop_timeout_counts_approval: bool = True,
+        # The model's reasoning inside each block (see ChatRunner).
+        on_reasoning: Callable[[str, int], None] | None = None,
     ) -> None:
+        self._on_reasoning = on_reasoning
         self._tool_result_max_chars = tool_result_max_chars
         self._loop_compaction_rounds = loop_compaction_rounds
         self._loop_timeout_counts_approval = loop_timeout_counts_approval
@@ -236,17 +239,23 @@ class LongRunRunner:
         on_progress: Callable[[str, int, int], None] | None = None,
         on_block_complete: Callable[[BlockResult], None] | None = None,
         on_plan: Callable[[LongRunPlan], None] | None = None,
+        on_reasoning: Callable[[str, int], None] | None = None,
     ) -> None:
         """Install (or clear, with ``None``) the run's callbacks.
 
         ``on_progress(event, index, total)`` receives ``plan_complete``,
         ``block_start`` and ``block_end``; ``on_plan(plan)`` receives the
         planner's blocks before the first one runs; ``on_block_complete``
-        receives each ``BlockResult`` after evaluation.
+        receives each ``BlockResult`` after evaluation. ``on_reasoning(text,
+        iteration)`` receives the reasoning streamed during the model calls
+        of each block, numbered within the block (see
+        ``ChatRunner.set_progress_callbacks``); the planner, the evaluator
+        and the final report are not streamed.
         """
         self._on_progress = on_progress
         self._on_block_complete = on_block_complete
         self._on_plan = on_plan
+        self._on_reasoning = on_reasoning
 
     def can_handle(self, intent: str) -> bool:
         return intent in _HANDLED_INTENTS
@@ -660,6 +669,7 @@ class LongRunRunner:
             approval_risk_threshold=self._approval_risk_threshold,
             on_defer_tool_call=self._on_defer_tool_call,
             token_streaming=self._token_streaming,
+            on_reasoning=self._on_reasoning,
             agent_protocol=self._agent_protocol,
             protocol_registry=self._protocol_registry,
             background_review=self._background_review,

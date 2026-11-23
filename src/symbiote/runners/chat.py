@@ -34,7 +34,12 @@ from symbiote.core.ports import LLMPort
 from symbiote.core.session_scope import tool_in_session
 from symbiote.core.turn_control import TurnStop, check_turn
 from symbiote.core.turn_record import turn_budget_exceeded
-from symbiote.environment.descriptors import LLMResponse, ToolCall, ToolCallResult
+from symbiote.environment.descriptors import (
+    LLMResponse,
+    ReasoningDelta,
+    ToolCall,
+    ToolCallResult,
+)
 from symbiote.environment.exec_context import tool_exec_context
 from symbiote.environment.parser import parse_tool_calls
 from symbiote.environment.policies import (
@@ -236,6 +241,8 @@ class ChatRunner:
         on_after_tool_result: Callable[[list[ToolCall], list[ToolCallResult]], str | None] | None = None,
         on_progress: Callable[[str, int, int], None] | None = None,
         on_stream: Callable[[str, int], None] | None = None,
+        # The model's reasoning as it is streamed (see set_progress_callbacks).
+        on_reasoning: Callable[[str, int], None] | None = None,
         # Sprint 4 — optional. When provided AND a per-symbiote
         # skill_review_enabled=True, the runner fires the engine every N
         # tool iterations from inside the loop. Default None preserves
@@ -286,6 +293,7 @@ class ChatRunner:
         self._on_after_tool_result = on_after_tool_result
         self._on_progress = on_progress
         self._on_stream = on_stream
+        self._on_reasoning = on_reasoning
         self._background_review = background_review
         self._skill_nudge_interval = max(1, int(skill_nudge_interval))
         self._iters_since_skill_review = 0
@@ -334,6 +342,7 @@ class ChatRunner:
         self,
         on_progress: Callable[[str, int, int], None] | None = None,
         on_stream: Callable[[str, int], None] | None = None,
+        on_reasoning: Callable[[str, int], None] | None = None,
     ) -> None:
         """Install (or clear, with ``None``) the mid-loop callbacks.
 
@@ -341,9 +350,21 @@ class ChatRunner:
         ``iteration_start``, ``tool_start``, ``tool_end`` and ``iteration_end``;
         ``on_stream(text, iteration)`` receives the parsed text of every model
         reply, including the ones that only request tools.
+
+        ``on_reasoning(text, iteration)`` receives the model's reasoning as it
+        is streamed, piece by piece, during every model call of the turn:
+        ``iteration`` is the number of the call, the one ``on_progress``
+        gives its ``iteration_start`` (a call after the last round, such as
+        the answer forced by a step limit or instant mode's reading of the
+        results, gets the next number; a retried call keeps its own). It
+        needs an adapter that streams reasoning (``stream_reasoning=True``)
+        and makes every call go through ``stream()`` even without
+        ``on_token``. The reasoning never enters the turn's text, the
+        history or the memory.
         """
         self._on_progress = on_progress
         self._on_stream = on_stream
+        self._on_reasoning = on_reasoning
 
     def set_native_tools(self, enabled: bool) -> None:
         """Use the provider's structured tool calls instead of text parsing."""
@@ -549,7 +570,7 @@ class ChatRunner:
         # Single LLM call with retry
         try:
             response, buffered_chunks = self._call_llm_with_retry(
-                messages, kwargs, on_token, sink
+                messages, kwargs, on_token, sink, reasoning=self._reasoning_for(1)
             )
         except Exception as exc:
             return self._complete_protocol_run(
@@ -641,7 +662,8 @@ class ChatRunner:
                 read_kwargs.pop("tools", None)
                 try:
                     read_response, read_chunks = self._call_llm_with_retry(
-                        flatten_tool_exchanges(messages), read_kwargs, on_token, sink
+                        flatten_tool_exchanges(messages), read_kwargs, on_token, sink,
+                        reasoning=self._reasoning_for(2),
                     )
                 except Exception:
                     pass  # keep the text of the first call
@@ -675,7 +697,8 @@ class ChatRunner:
 
                 try:
                     final_response, buffered_chunks = self._call_llm_with_retry(
-                        messages, kwargs, on_token, sink
+                        messages, kwargs, on_token, sink,
+                        reasoning=self._reasoning_for(2),
                     )
                 except Exception:
                     pass  # keep the tool-call text as final
@@ -829,7 +852,8 @@ class ChatRunner:
 
             try:
                 response, buffered_chunks = yield _Blocking(
-                    self._call_llm_with_retry, messages, kwargs, on_token, sink
+                    self._call_llm_with_retry, messages, kwargs, on_token, sink,
+                    reasoning=self._reasoning_for(iteration + 1),
                 )
             except Exception as exc:
                 # Totals are normally filled after the loop; fill them here
@@ -1022,6 +1046,7 @@ class ChatRunner:
                         inj_response, inj_chunks = yield _Blocking(
                             self._call_llm_sync, inj_messages, inj_kwargs, on_token,
                             live=sink.begin_round(),
+                            reasoning=self._reasoning_for(iteration + 2),
                         )
                     except Exception:
                         sink.end_round()  # keep the last final_text
@@ -1528,35 +1553,49 @@ class ChatRunner:
             llm_config,
         ).to_llm_kwargs()
 
+    def _reasoning_for(self, call: int) -> Callable[[str], None] | None:
+        """What hands the reasoning of model call ``call`` to the host."""
+        on_reasoning = self._on_reasoning
+        if on_reasoning is None:
+            return None
+        return lambda text: on_reasoning(text, call)
+
     def _call_llm_sync(
         self, messages: list[dict], kwargs: dict,
         on_token: Callable[[str], None] | None,
         *,
         live: Callable[[str], None] | None = None,
+        reasoning: Callable[[str], None] | None = None,
     ) -> tuple[str | LLMResponse, list[str] | None]:
         """Call the LLM synchronously, with optional streaming.
 
         Returns a tuple of ``(response, buffered_chunks)`` where
         *buffered_chunks* holds the raw token sequence collected during
-        streaming (``None`` when not streaming).  Tokens are **never**
-        forwarded to *on_token* here — the caller must do so after the
-        response has been validated. ``live`` (the live-mode filter of a
-        ``TokenSink``) receives each chunk as it arrives.
+        streaming (``None`` when not streaming, or when only the reasoning
+        is).  Tokens are **never** forwarded to *on_token* here — the caller
+        must do so after the response has been validated. ``live`` (the
+        live-mode filter of a ``TokenSink``) receives each chunk as it
+        arrives. ``reasoning`` receives the text of every ``ReasoningDelta``
+        the adapter yields; with it the call is streamed even without
+        ``on_token``. Reasoning never joins the response or the chunks.
         """
         check_turn()  # no model call starts once the turn has to stop
-        if on_token is not None and hasattr(self._llm, "stream"):
+        if (on_token is not None or reasoning is not None) and hasattr(self._llm, "stream"):
             chunks: list[str] = []
             response: str | LLMResponse = ""
             for item in self._llm.stream(messages, **kwargs):
                 if isinstance(item, LLMResponse):
                     response = item
+                elif isinstance(item, ReasoningDelta):
+                    if reasoning is not None and item.text:
+                        reasoning(item.text)
                 else:
                     chunks.append(item)
                     if live is not None:
                         live(item)
             if not isinstance(response, LLMResponse):
                 response = "".join(chunks)
-            return response, chunks
+            return response, chunks if on_token is not None else None
         response = self._llm.complete(messages, **kwargs)
         return response, None
 
@@ -1578,18 +1617,23 @@ class ChatRunner:
         kwargs: dict,
         on_token: Callable[[str], None] | None,
         sink: TokenSink | None = None,
+        *,
+        reasoning: Callable[[str], None] | None = None,
     ) -> tuple[str | LLMResponse, list[str] | None]:
         """Wrap ``_call_llm_sync`` with exponential-backoff retry logic.
 
         With a live ``sink`` each attempt is a round of its own: text a
         failed attempt already streamed stays, and the retry starts a new
-        paragraph.
+        paragraph. ``reasoning`` goes to every attempt (see
+        ``_call_llm_sync``).
         """
         last_exc: Exception | None = None
         for attempt in range(1, _MAX_LLM_RETRIES + 1):
             live = sink.begin_round() if sink is not None else None
             try:
-                return self._call_llm_sync(messages, kwargs, on_token, live=live)
+                return self._call_llm_sync(
+                    messages, kwargs, on_token, live=live, reasoning=reasoning
+                )
             except Exception as exc:
                 if sink is not None:
                     sink.end_round()

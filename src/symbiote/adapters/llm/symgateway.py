@@ -33,6 +33,11 @@ stream, in ``complete()`` and in ``stream()``: a reply that takes minutes
 keeps the connection alive while it is written, and ``on_activity`` runs for
 every line received. Without the option nothing changes: one request, one
 whole reply, and no ``stream()`` for the kernel to call.
+
+With ``stream_reasoning=True`` too, ``stream()`` also yields the model's
+reasoning as ``ReasoningDelta`` items, apart from the text, when the gateway
+relays it in the stream (``delta.reasoning_content`` or ``delta.reasoning``).
+Asking the provider for visible reasoning is a ``provider_options`` matter.
 """
 
 from __future__ import annotations
@@ -51,6 +56,7 @@ from symbiote.core.llm_usage import report_usage, usage_from_provider
 from symbiote.environment.descriptors import (
     LLMModelIdentity,
     LLMResponse,
+    ReasoningDelta,
 )
 
 DEFAULT_BASE_URL = "https://symgateway.symlabs.ai"
@@ -62,6 +68,9 @@ _PASSTHROUGH = (
     "max_tokens", "temperature", "top_p", "stop", "tool_choice",
     "response_format", "parallel_tool_calls", "seed",
 )
+# Fields of a stream delta that carry reasoning, in order of preference: a
+# delta with both (vLLM sends the same text in each) is read once.
+_REASONING_FIELDS = ("reasoning_content", "reasoning")
 # Fields of the canonical message dict the OpenAI body accepts.
 _MESSAGE_FIELDS = ("role", "content", "name", "tool_calls", "tool_call_id")
 # A rejected session uid (expired, closed, unknown) is replaced once.
@@ -74,6 +83,9 @@ _KEEP: Any = object()
 
 class SymGatewayLLMAdapter:
     """LLMPort that routes calls through SymGateway with work sessions."""
+
+    # Off unless asked; a subclass that skips __init__ sees it too.
+    _stream_reasoning = False
 
     def __init__(
         self,
@@ -91,6 +103,7 @@ class SymGatewayLLMAdapter:
         streaming: bool = False,
         on_activity: Callable[[], None] | None = None,
         provider_options: Mapping[str, Any] | None = None,
+        stream_reasoning: bool = False,
     ) -> None:
         """``model`` names the model to call; ``objective`` names a gateway
         Objective instead, and the gateway chooses the model. One of the two
@@ -122,6 +135,17 @@ class SymGatewayLLMAdapter:
         key by key. Which models take which options is the host's decision
         (``models()`` says which provider serves each one); the attribute
         ``provider_options`` may be replaced after construction.
+
+        ``stream_reasoning=True`` (needs ``streaming=True``): ``stream()``
+        also yields the reasoning the gateway relays in the stream
+        (``delta.reasoning_content``, or ``delta.reasoning``) as
+        ``ReasoningDelta`` items, never mixed with the text; the kernel hands
+        them to ``on_reasoning``. It changes neither the body of the call
+        nor the reply: the reasoning is not kept in the text, the tool calls
+        or ``reasoning_content``. Off, the default, the stream yields exactly
+        what it did. Whether the model shows its reasoning at all is asked
+        of the provider through ``provider_options`` (see "Visible reasoning"
+        in ``docs/HOST_INTEGRATION.md``).
         """
         if not api_key:
             raise LLMError("SymGateway API key is required")
@@ -130,12 +154,15 @@ class SymGatewayLLMAdapter:
                 "SymGateway needs a model or an objective — pick one from "
                 "list_models() or list_objectives()"
             )
+        if stream_reasoning and not streaming:
+            raise LLMError("stream_reasoning=True needs streaming=True")
         self.model = model
         self.objective = objective
         self.provider = "symgateway"
         self._on_routed = on_routed
         self._streaming = bool(streaming)
         self._on_activity = on_activity
+        self._stream_reasoning = bool(stream_reasoning)
         self.provider_options: dict[str, Any] = dict(provider_options or {})
         self.last_routing: dict[str, Any] | None = None
         self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
@@ -260,12 +287,14 @@ class SymGatewayLLMAdapter:
         return self._reply(*completion)
 
     @property
-    def stream(self) -> Callable[..., Iterator[str | LLMResponse]]:
+    def stream(self) -> Callable[..., Iterator[str | ReasoningDelta | LLMResponse]]:
         """``stream(messages, config=None, tools=None)``: the reply as the
         model writes it, with the contract of ``ForgeLLMAdapter.stream()``.
         Yields the text in the pieces the gateway sends and, when the model
         called tools, one ``LLMResponse`` at the end (content, tool calls,
-        usage). Plain text reports its usage with ``report_usage``.
+        usage). Plain text reports its usage with ``report_usage``. Built
+        with ``stream_reasoning=True``, it also yields ``ReasoningDelta``
+        items for the reasoning the gateway relays.
 
         Only an adapter built with ``streaming=True`` has it. The kernel
         streams through any adapter that has ``stream()``, so on one built
@@ -283,11 +312,14 @@ class SymGatewayLLMAdapter:
         messages: list[dict],
         config: dict | None = None,
         tools: list[dict] | None = None,
-    ) -> Iterator[str | LLMResponse]:
+    ) -> Iterator[str | ReasoningDelta | LLMResponse]:
         completion: tuple[dict[str, Any], str] | None = None
         for kind, value in self._events(self._body(messages, config, tools)):
             if kind == "text":
                 yield value
+            elif kind == "reasoning":
+                if self._stream_reasoning:
+                    yield ReasoningDelta(text=value)
             else:
                 completion = value
         assert completion is not None  # a stream ends with its completion
@@ -349,8 +381,9 @@ class SymGatewayLLMAdapter:
         return response.json(), uid
 
     def _events(self, body: dict[str, Any]) -> Iterator[tuple[str, Any]]:
-        """The reply as an event stream: ``("text", piece)`` as it arrives,
-        then ``("done", (completion, work session uid))``."""
+        """The reply as an event stream: ``("text", piece)`` and
+        ``("reasoning", piece)`` as they arrive, then ``("done", (completion,
+        work session uid))``."""
         key = self._session_key() if self._session_key else None
         for attempt in (1, 2):
             uid = self.work_session(key)
@@ -436,10 +469,13 @@ def _read_stream(
 ) -> Iterator[tuple[str, Any]]:
     """Read an OpenAI-style event stream while the model writes.
 
-    Yields ``("text", piece)`` for every piece of text as it arrives and,
-    once the stream ends, ``("done", completion)``: the whole reply in the
-    shape of one that was not streamed, so ``_parse_completion`` reads both
-    the same way. ``on_activity`` runs for every line received.
+    Yields ``("text", piece)`` for every piece of text as it arrives,
+    ``("reasoning", piece)`` for every piece of reasoning (``reasoning_content``
+    or, without it, ``reasoning`` in the delta) and, once the stream ends,
+    ``("done", completion)``: the whole reply in the shape of one that was not
+    streamed, so ``_parse_completion`` reads both the same way. The reasoning
+    is not part of the completion. ``on_activity`` runs for every line
+    received.
 
     Only ``data:`` lines count; an empty one is a sign of life. ``[DONE]``
     ends the stream and what follows it is not read. Only the choice of
@@ -491,6 +527,15 @@ def _read_stream(
                 continue
             delta = choice.get("delta")
             delta = delta if isinstance(delta, dict) else {}
+            thought = next(
+                (
+                    delta[name] for name in _REASONING_FIELDS
+                    if isinstance(delta.get(name), str) and delta[name]
+                ),
+                None,
+            )
+            if thought is not None:
+                yield "reasoning", thought
             piece = delta.get("content")
             if isinstance(piece, str) and piece:
                 text.append(piece)

@@ -13,6 +13,7 @@ from symbiote.environment.descriptors import (
     LLMResponse,
     LLMTokenUsage,
     NativeToolCall,
+    ReasoningDelta,
 )
 
 if TYPE_CHECKING:
@@ -34,6 +35,9 @@ _UNSET: Any = object()
 class ForgeLLMAdapter:
     """LLMPort implementation backed by forge_llm."""
 
+    # Off unless asked; a subclass or a copy that skips __init__ sees it too.
+    _stream_reasoning = False
+
     def __init__(
         self,
         provider: str = "anthropic",
@@ -43,6 +47,7 @@ class ForgeLLMAdapter:
         *,
         stream_tool_calls: bool = False,
         project_slug: str | None = _UNSET,
+        stream_reasoning: bool = False,
     ) -> None:
         """``stream_tool_calls``: stream text token by token also when native
         tools are offered, collecting the tool calls from the stream. Off by
@@ -54,8 +59,18 @@ class ForgeLLMAdapter:
         gateway routes the call to (its ``X-Project-Slug`` header). Not given,
         it is ``"symbiote"``, as it always was; ``None`` sends no project.
         Every other provider is called with no gateway field at all.
+
+        ``stream_reasoning``: ``stream()`` also yields the model's reasoning
+        as ``ReasoningDelta`` items, never mixed with the text: the pieces a
+        forge_llm stream chunk carries in ``reasoning_content`` (or
+        ``reasoning``), and, when ``stream()`` falls back to ``complete()``
+        (native tools without ``stream_tool_calls``), the reply's whole
+        ``reasoning_content`` once, before its text. It changes neither the
+        request nor the reply. Off by default: the stream yields exactly
+        what it did.
         """
         self._stream_tool_calls = stream_tool_calls
+        self._stream_reasoning = stream_reasoning
         # Read by the kernel's usage record when a response names neither.
         self.provider = provider
         self.model = model
@@ -138,11 +153,13 @@ class ForgeLLMAdapter:
         messages: list[dict],
         config: dict | None = None,
         tools: list[dict] | None = None,
-    ) -> Iterator[str | LLMResponse]:
+    ) -> Iterator[str | ReasoningDelta | LLMResponse]:
         """Stream tokens from the LLM.
 
         Yields ``str`` chunks for text tokens. If the model emits native
         tool calls, yields a final ``LLMResponse`` after all text chunks.
+        With ``stream_reasoning``, ``ReasoningDelta`` items for the
+        reasoning, as it arrives.
 
         When tools are provided and the provider doesn't support true
         streaming with tool calls (e.g. Groq), falls back to ``complete()``
@@ -156,6 +173,8 @@ class ForgeLLMAdapter:
         if tools:
             result = self.complete(messages, config=config, tools=tools)
             if isinstance(result, LLMResponse):
+                if self._stream_reasoning and result.reasoning_content:
+                    yield ReasoningDelta(text=result.reasoning_content)
                 if result.content:
                     yield result.content
                 yield result
@@ -172,6 +191,9 @@ class ForgeLLMAdapter:
             usage: Any = None
             for chunk in self._agent.stream_chat(**kwargs):
                 usage = _value(chunk, "usage") or usage
+                thought = self._reasoning(chunk)
+                if thought is not None:
+                    yield thought
                 if hasattr(chunk, "content") and chunk.content:
                     yield chunk.content
                 elif isinstance(chunk, str):
@@ -187,7 +209,7 @@ class ForgeLLMAdapter:
         messages: list[dict],
         config: dict | None,
         tools: list[dict],
-    ) -> Iterator[str | LLMResponse]:
+    ) -> Iterator[str | ReasoningDelta | LLMResponse]:
         """Text chunks as they arrive, then an ``LLMResponse`` if the model
         called tools (the provider assembles the calls at the end)."""
         try:
@@ -202,6 +224,9 @@ class ForgeLLMAdapter:
                 config=cfg,
                 auto_execute_tools=False,
             ):
+                thought = self._reasoning(chunk)
+                if thought is not None:
+                    yield thought
                 text = _value(chunk, "content")
                 if isinstance(text, str) and text:
                     parts.append(text)
@@ -222,6 +247,16 @@ class ForgeLLMAdapter:
             )
         else:
             _report(_extract_usage({"usage": usage}), None)
+
+    def _reasoning(self, chunk: Any) -> ReasoningDelta | None:
+        """The reasoning a stream chunk carries, when it is to be streamed."""
+        if not self._stream_reasoning or isinstance(chunk, str):
+            return None
+        for name in ("reasoning_content", "reasoning"):
+            text = _value(chunk, name)
+            if isinstance(text, str) and text:
+                return ReasoningDelta(text=text)
+        return None
 
 
 def _wrap_error(exc: Exception) -> LLMError:
