@@ -1519,13 +1519,16 @@ kernel.message(session.id, text, llm_config={"provider_options": OPENAI})  # one
   round, as Anthropic requires; with `stream_tool_calls=True` the stream
   carries them too. OpenAI: a call that asks for a summary goes through the
   Responses API, the only one that returns it.
-- `SymGatewayLLMAdapter` sends them in the body as `provider_options`. It
-  depends on the gateway: it has to accept these options, relay the
-  provider's reasoning (Anthropic's `thinking_delta`, OpenAI's reasoning
-  summary) in the stream as `delta.reasoning_content`, and keep Anthropic's
-  thinking blocks across the rounds of a tool loop. Until it does, nothing
-  reaches `on_reasoning` and the turn runs as before. `models()` says which
-  provider serves each model.
+- `SymGatewayLLMAdapter` sends them in the body as `provider_options`
+  (SymGateway 0.34.164 and later). The gateway relays the provider's
+  reasoning (Anthropic's `thinking_delta`, OpenAI's reasoning summary, which
+  it gets from the Responses API) as `delta.reasoning_content`. A reply that
+  called tools carries the gateway's opaque replay state, `reasoning_state`
+  (in the terminal chunk of a stream, or in the whole message); the adapter
+  returns it on `LLMResponse.reasoning_state` and sends it back unchanged on
+  the assistant message that called the tools, as the gateway requires.
+  It stays in the tool loop, never in the history or the memory.
+  `models()` says which provider serves each model.
 
 ---
 

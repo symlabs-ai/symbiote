@@ -38,6 +38,13 @@ With ``stream_reasoning=True`` too, ``stream()`` also yields the model's
 reasoning as ``ReasoningDelta`` items, apart from the text, when the gateway
 relays it in the stream (``delta.reasoning_content`` or ``delta.reasoning``).
 Asking the provider for visible reasoning is a ``provider_options`` matter.
+
+A reply that called tools may carry the gateway's opaque replay state
+(``reasoning_state``: Anthropic's thinking blocks, OpenAI's encrypted
+reasoning), in the terminal chunk of a stream or in the whole message. It
+comes back as ``LLMResponse.reasoning_state`` and is sent unchanged on the
+assistant message that called the tools in the next round, as the gateway
+requires for a tool loop with reasoning (SymGateway 0.34.164 and later).
 """
 
 from __future__ import annotations
@@ -73,6 +80,8 @@ _PASSTHROUGH = (
 _REASONING_FIELDS = ("reasoning_content", "reasoning")
 # Fields of the canonical message dict the OpenAI body accepts.
 _MESSAGE_FIELDS = ("role", "content", "name", "tool_calls", "tool_call_id")
+# The gateway's opaque replay state of a reply that called tools.
+_STATE = "reasoning_state"
 # A rejected session uid (expired, closed, unknown) is replaced once.
 _STALE_SESSION = frozenset({404, 409, 410})
 _DEFAULT_KEY = "__default__"
@@ -474,8 +483,9 @@ def _read_stream(
     or, without it, ``reasoning`` in the delta) and, once the stream ends,
     ``("done", completion)``: the whole reply in the shape of one that was not
     streamed, so ``_parse_completion`` reads both the same way. The reasoning
-    is not part of the completion. ``on_activity`` runs for every line
-    received.
+    is not part of the completion; the replay state (``delta.reasoning_state``,
+    on the terminal chunk) is, in the message, as a whole reply carries it.
+    ``on_activity`` runs for every line received.
 
     Only ``data:`` lines count; an empty one is a sign of life. ``[DONE]``
     ends the stream and what follows it is not read. Only the choice of
@@ -492,6 +502,7 @@ def _read_stream(
     model: Any = None
     usage: Any = None
     gateway: dict[str, Any] = {}
+    state: Any = None
     finish: str | None = None
     done = False
     for raw in lines:
@@ -536,6 +547,9 @@ def _read_stream(
             )
             if thought is not None:
                 yield "reasoning", thought
+            # The opaque replay state, on the terminal chunk of the choice.
+            if delta.get(_STATE) is not None:
+                state = delta[_STATE]
             piece = delta.get("content")
             if isinstance(piece, str) and piece:
                 text.append(piece)
@@ -567,6 +581,8 @@ def _read_stream(
         for position, call in calls.items():
             call["function"]["arguments"] = "".join(arguments.get(position, []))
         message["tool_calls"] = [calls[position] for position in sorted(calls)]
+    if state is not None:
+        message[_STATE] = state
     completion: dict[str, Any] = {
         "id": identifier,
         "model": model,
@@ -581,10 +597,18 @@ def _read_stream(
 
 
 def _wire_message(message: dict[str, Any]) -> dict[str, Any]:
-    """Canonical message → OpenAI body; reasoning replay fields are dropped."""
+    """Canonical message → OpenAI body.
+
+    ``reasoning_content`` is dropped: it is display text, not state. The
+    gateway's ``reasoning_state`` goes back unchanged, but only on an
+    assistant message that called tools (a tool exchange flattened into
+    text for a call without tools no longer is one).
+    """
     out = {k: message[k] for k in _MESSAGE_FIELDS if message.get(k) is not None}
     if out.get("role") == "assistant" and "content" not in out:
         out["content"] = ""
+    if out.get("role") == "assistant" and out.get("tool_calls") and message.get(_STATE) is not None:
+        out[_STATE] = message[_STATE]
     if out.get("role") != "tool":
         out.pop("tool_call_id", None)
     return out
@@ -619,6 +643,7 @@ def _parse_completion(data: dict[str, Any], session_uid: str) -> str | LLMRespon
     return LLMResponse(
         content=message.get("content") or "",
         tool_calls=tool_calls,
+        reasoning_state=message.get(_STATE),
         finish_reason=choice.get("finish_reason"),
         model_identity=LLMModelIdentity(provider="symgateway", model=data.get("model")),
         usage=usage,

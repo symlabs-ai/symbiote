@@ -5,6 +5,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+### Novas funcionalidades
+
+- feat(symgateway): o `SymGatewayLLMAdapter` lê e reenvia o estado de raciocínio do gateway (B-113, SymGateway 0.34.164). Uma resposta que chamou ferramentas traz `reasoning_state`, opaco (blocos de thinking da Anthropic com assinatura, raciocínio cifrado da OpenAI), no chunk terminal do stream ou na mensagem da resposta inteira; ele vem em `LLMResponse.reasoning_state`, e o adapter o devolve sem alteração na mensagem do assistente que chamou as ferramentas, na rodada seguinte. Só vai com `tool_calls`: uma troca achatada em texto para uma chamada sem ferramentas não o leva. O `reasoning_content` continua fora do corpo. Sem estado vindo do gateway, o corpo é o de antes. Com isso o raciocínio visível funciona pelos dois adapters, com tools, para Anthropic com thinking e OpenAI com resumo.
+
 ## [v0.8.22] - 2026-11-23
 
 ### Novas funcionalidades

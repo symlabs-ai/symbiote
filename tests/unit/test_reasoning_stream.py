@@ -152,6 +152,102 @@ class TestSymGatewayAdapter:
         assert ReasoningDelta(text="Pesando ") in list(other.stream(MESSAGES))
 
 
+STATE = {"v": 1, "protocol": "anthropic_messages", "blocks": [
+    {"type": "thinking", "thinking": "Preciso buscar.", "signature": "sig"},
+    {"type": "redacted_thinking", "data": "xyz"},
+]}
+CALL = {"index": 0, "id": "c1", "function": {"name": "search", "arguments": "{}"}}
+
+
+class Sequence(Gateway):
+    """One stream (or whole reply) per call, in order."""
+
+    def __init__(self, *replies: bytes | dict) -> None:
+        super().__init__()
+        self.replies = list(replies)
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/_api/work-sessions":
+            return httpx.Response(201, json={"uid": "ws-1"})
+        self.bodies.append(json.loads(request.content))
+        reply = self.replies.pop(0)
+        if isinstance(reply, dict):
+            return httpx.Response(200, json=reply)
+        return httpx.Response(200, content=reply, headers={"content-type": "text/event-stream"})
+
+
+TOOL_ROUND = sse(
+    chunk(reasoning_content="Preciso buscar."),
+    chunk(tool_calls=[CALL]),
+    {"id": "cmpl-1", "model": "gpt-x", "choices": [
+        {"index": 0, "delta": {"reasoning_state": STATE}, "finish_reason": "tool_calls"}]},
+    {"id": "cmpl-1", "model": "gpt-x", "choices": [], "usage": {"input_tokens": 1, "output_tokens": 1}},
+)
+ANSWER_ROUND = sse(chunk(content="Achei."), *end())
+
+
+class TestGatewayReplayState:
+    def test_the_terminal_chunk_state_comes_back_unchanged(self) -> None:
+        items = list(gateway_adapter(Sequence(TOOL_ROUND)).stream(MESSAGES, tools=[{"type": "function"}]))
+
+        reply = items[-1]
+        assert isinstance(reply, LLMResponse)
+        assert reply.reasoning_state == STATE
+        assert reply.reasoning_content is None
+
+    def test_a_whole_reply_carries_it_too(self) -> None:
+        whole = {"id": "cmpl-1", "model": "gpt-x", "choices": [{"index": 0, "finish_reason": "tool_calls",
+                 "message": {"role": "assistant", "content": "", "reasoning_state": STATE,
+                             "tool_calls": [{"id": "c1", "type": "function",
+                                             "function": {"name": "search", "arguments": "{}"}}]}}]}
+        client = httpx.Client(transport=httpx.MockTransport(Sequence(whole)))
+        llm = SymGatewayLLMAdapter("sk-test", "gpt-x", client=client)
+
+        reply = llm.complete(MESSAGES, tools=[{"type": "function"}])
+
+        assert isinstance(reply, LLMResponse) and reply.reasoning_state == STATE
+
+    def test_the_state_goes_back_only_with_the_tool_calls(self) -> None:
+        gw = Sequence(ANSWER_ROUND)
+        called = {"role": "assistant", "content": "", "reasoning_content": "Preciso buscar.",
+                  "reasoning_state": STATE,
+                  "tool_calls": [{"id": "c1", "type": "function",
+                                  "function": {"name": "search", "arguments": "{}"}}]}
+        flattened = {"role": "assistant", "content": "[Called tool: search]\n{}",
+                     "reasoning_state": STATE}
+
+        list(gateway_adapter(gw).stream([*MESSAGES, called, flattened]))
+
+        sent = gw.bodies[0]["messages"]
+        assert sent[1]["reasoning_state"] == STATE
+        assert "reasoning_content" not in sent[1]
+        assert "reasoning_state" not in sent[2]
+
+    def test_a_tool_loop_sends_the_state_back_in_the_next_round(self) -> None:
+        gw = Sequence(TOOL_ROUND, ANSWER_ROUND)
+        runner = ChatRunner(llm=gateway_adapter(gw, stream_reasoning=True),
+                            tool_gateway=Tools(), native_tools=True)
+        seen: list[tuple[str, int]] = []
+        runner.set_progress_callbacks(on_reasoning=lambda text, it: seen.append((text, it)))
+
+        result = runner.run(context())
+
+        assert result.output["text"] == "Achei."
+        assert seen == [("Preciso buscar.", 1)]
+        assistant = next(m for m in gw.bodies[1]["messages"]
+                         if m["role"] == "assistant" and m.get("tool_calls"))
+        assert assistant["reasoning_state"] == STATE
+
+    def test_without_state_the_next_round_is_the_same(self) -> None:
+        plain_round = sse(chunk(tool_calls=[CALL]), *end("tool_calls"))
+        gw = Sequence(plain_round, ANSWER_ROUND)
+        runner = ChatRunner(llm=gateway_adapter(gw), tool_gateway=Tools(), native_tools=True)
+
+        runner.run(context())
+
+        assert all("reasoning_state" not in m for m in gw.bodies[1]["messages"])
+
+
 # ── ForgeLLMAdapter ──────────────────────────────────────────────────────────
 
 
