@@ -43,7 +43,7 @@ COPY docs/HOST_INTEGRATION.md docs/
 RUN python -m pytest -q --cov=src/symbiote --cov-fail-under=85 \
     && ruff check src tests \
     && mypy src/symbiote \
-    && python -c 'import json; from importlib.metadata import distribution, version; forge=distribution("forge-llm"); provenance=json.loads(forge.read_text("direct_url.json")); assert version("forge-llm") == "0.7.19"; assert provenance["vcs_info"]["requested_revision"] == "ba0c0ca80a46f0421e157d7c932d406036ccac8d"; assert provenance["vcs_info"]["commit_id"] == "ba0c0ca80a46f0421e157d7c932d406036ccac8d"'
+    && python -c 'import json; from importlib.metadata import distribution, version; forge=distribution("forge-llm"); provenance=json.loads(forge.read_text("direct_url.json")); assert version("forge-llm") == "0.7.20"; assert provenance["vcs_info"]["requested_revision"] == "ba2ab97348dc55a120c2d8db90622023d470d999"; assert provenance["vcs_info"]["commit_id"] == "ba2ab97348dc55a120c2d8db90622023d470d999"'
 
 # Production stage
 FROM ${PYTHON_IMAGE}

@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 RELEASE_VERSION = "0.8.21"
-FORGE_LLM_COMMIT = "ba0c0ca80a46f0421e157d7c932d406036ccac8d"
+FORGE_LLM_COMMIT = "ba2ab97348dc55a120c2d8db90622023d470d999"
 FORGE_SCRAPER_COMMIT = "632e4ce5d218bedebad3411df48625f4b34d7f29"
 FORGE_LLM_PIN = (
     "forge-llm @ git+https://github.com/symlabs-ai/forge_llm.git"

@@ -55,7 +55,7 @@ class ForgeLLMAdapter:
         tools are offered, collecting the tool calls from the stream. Off by
         default: not every provider assembles tool calls in a stream (Groq).
         The reply then carries the reasoning the stream brought
-        (``reasoning_content``, and the ``reasoning_state`` forge_llm 0.7.19
+        (``reasoning_content``, and the ``reasoning_state`` forge_llm 0.7.20
         streams for Anthropic's thinking); a provider whose stream brings no
         state cannot serve protocols that replay it (e.g.
         ``poolside_laguna_v1``).

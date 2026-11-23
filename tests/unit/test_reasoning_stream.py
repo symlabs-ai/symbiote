@@ -277,58 +277,69 @@ class TestForgeProviderOptions:
 
 
 def test_anthropic_thinking_through_forge_llm_end_to_end() -> None:
-    """forge_llm 0.7.19 itself, with only Anthropic's client faked."""
+    """forge_llm and the pinned anthropic SDK themselves, over a fake HTTP
+    transport: the request asks for thinking, the stream yields it, and the
+    next round sends the blocks back before the tool call."""
     pytest.importorskip("forge_llm")
+    from anthropic import Anthropic
+
     from symbiote.adapters.llm.forge import ForgeLLMAdapter
 
     thinking = {"type": "enabled", "budget_tokens": 8000}
+    message = {"id": "m", "type": "message", "role": "assistant", "model": "claude-x",
+               "stop_reason": None, "stop_sequence": None,
+               "usage": {"input_tokens": 5, "output_tokens": 1}}
+    events = [
+        {"type": "message_start", "message": {**message, "content": []}},
+        {"type": "content_block_start", "index": 0,
+         "content_block": {"type": "thinking", "thinking": "", "signature": ""}},
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "thinking_delta", "thinking": "Preciso buscar."}},
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "signature_delta", "signature": "sig"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1,
+         "content_block": {"type": "tool_use", "id": "tu_1", "name": "search", "input": {}}},
+        {"type": "content_block_delta", "index": 1,
+         "delta": {"type": "input_json_delta", "partial_json": "{}"}},
+        {"type": "content_block_stop", "index": 1},
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+         "usage": {"output_tokens": 9}},
+        {"type": "message_stop"},
+    ]
+    stream_body = "".join(
+        f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events
+    ).encode()
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200, content=stream_body, headers={"content-type": "text/event-stream"}
+        )
+
     adapter = ForgeLLMAdapter(
         provider="anthropic", model="claude-x", api_key="k",
         stream_tool_calls=True, stream_reasoning=True,
         provider_options={"thinking": thinking},
     )
+    adapter._agent._get_provider()._client = Anthropic(
+        api_key="k", http_client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
+    tools = [{"type": "function", "function": {
+        "name": "search", "description": "d", "parameters": {"type": "object"}}}]
 
-    def ev(kind, **fields):
-        return SimpleNamespace(type=kind, **fields)
+    items = list(adapter.stream(MESSAGES, tools=tools))
 
-    def block(**fields):
-        return ev("content_block_start", content_block=SimpleNamespace(**fields))
-
-    def delta(**fields):
-        return ev("content_block_delta", delta=SimpleNamespace(**fields))
-
-    events = [
-        block(type="thinking", thinking="", signature=""),
-        delta(type="thinking_delta", thinking="Preciso buscar."),
-        delta(type="signature_delta", signature="sig"),
-        ev("content_block_stop"),
-        block(type="tool_use", id="tu_1", name="search"),
-        delta(type="input_json_delta", partial_json="{}"),
-        ev("content_block_stop"),
-        ev("message_stop"),
-    ]
-    stream = MagicMock()
-    stream.__enter__ = MagicMock(return_value=iter(events))
-    stream.__exit__ = MagicMock(return_value=False)
-    provider = adapter._agent._get_provider()
-    provider._client = MagicMock()
-    provider._client.messages.stream.return_value = stream
-
-    items = list(adapter.stream(MESSAGES, tools=[{
-        "type": "function",
-        "function": {"name": "search", "description": "d", "parameters": {"type": "object"}},
-    }]))
-
-    sent = provider._client.messages.stream.call_args.kwargs
-    assert sent["thinking"] == thinking and sent["max_tokens"] > 8000
+    assert bodies[0]["thinking"] == thinking and bodies[0]["max_tokens"] > 8000
     assert items[0] == ReasoningDelta(text="Preciso buscar.")
     reply = items[-1]
     assert isinstance(reply, LLMResponse)
     assert [c.tool_id for c in reply.tool_calls] == ["search"]
-    blocks = reply.reasoning_state["anthropic_thinking"]
-    assert blocks == [{"type": "thinking", "thinking": "Preciso buscar.", "signature": "sig"}]
+    assert reply.reasoning_state == {"anthropic_thinking": [
+        {"type": "thinking", "thinking": "Preciso buscar.", "signature": "sig"},
+    ]}
 
-    # The next round sends the blocks back, first in the assistant message.
     replay = [
         *MESSAGES,
         {"role": "assistant", "content": "", "reasoning_state": reply.reasoning_state,
@@ -336,13 +347,12 @@ def test_anthropic_thinking_through_forge_llm_end_to_end() -> None:
                          "function": {"name": "search", "arguments": "{}"}}]},
         {"role": "tool", "tool_call_id": "tu_1", "content": "ok"},
     ]
-    stream.__enter__ = MagicMock(return_value=iter([ev("message_stop")]))
-    list(adapter.stream(replay, tools=[{
-        "type": "function",
-        "function": {"name": "search", "description": "d", "parameters": {"type": "object"}},
-    }]))
-    assistant = provider._client.messages.stream.call_args.kwargs["messages"][1]
-    assert [b["type"] for b in assistant["content"]] == ["thinking", "tool_use"]
+    list(adapter.stream(replay, tools=tools))
+
+    assert bodies[1]["messages"][1]["content"] == [
+        {"type": "thinking", "thinking": "Preciso buscar.", "signature": "sig"},
+        {"type": "tool_use", "id": "tu_1", "name": "search", "input": {}},
+    ]
 
 
 # ── ChatRunner ───────────────────────────────────────────────────────────────

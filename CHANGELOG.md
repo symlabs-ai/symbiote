@@ -12,7 +12,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ### Dependências
 
-- forge_llm 0.7.19 (`ba0c0ca`): raciocínio no stream de todos os adapters compatíveis com OpenAI, resumo de raciocínio pela Responses API, thinking da Anthropic com os blocos devolvidos em `reasoning_state` e reenviados na troca de ferramentas, e `reasoning_tokens` no uso do stream.
+- forge_llm 0.7.20 (`ba2ab97`): raciocínio no stream de todos os adapters compatíveis com OpenAI, resumo de raciocínio pela Responses API, thinking da Anthropic com os blocos devolvidos em `reasoning_state` e reenviados na troca de ferramentas, e `reasoning_tokens` no uso do stream. A 0.7.19 mandava o `thinking` de um jeito que o SDK `anthropic` 0.30 fixado recusa; a 0.7.20 o manda no corpo. Com esse SDK, o thinking da Anthropic funciona no Python 3.11 a 3.13 (o da imagem é 3.12); no 3.14 o SDK não lê blocos de thinking.
 
 ### Outros
 

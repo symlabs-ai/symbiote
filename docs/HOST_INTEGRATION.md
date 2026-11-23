@@ -1492,7 +1492,7 @@ What each adapter reads:
 | Adapter | Where the reasoning comes from |
 |---------|--------------------------------|
 | `SymGatewayLLMAdapter(streaming=True, stream_reasoning=True)` | `delta.reasoning_content` (or, without it, `delta.reasoning`) in the gateway's event stream. `stream_reasoning` without `streaming` is an error. |
-| `ForgeLLMAdapter(stream_reasoning=True)` | forge_llm's stream chunks (0.7.19 and later): Anthropic's thinking, OpenAI's reasoning summary, and `delta.reasoning_content` / `delta.reasoning` of OpenAI-compatible providers (DeepSeek, vLLM, xAI, OpenRouter, Groq). When `stream()` falls back to one complete call (native tools without `stream_tool_calls`), the reply's whole `reasoning_content` comes once, before its text. |
+| `ForgeLLMAdapter(stream_reasoning=True)` | forge_llm's stream chunks (0.7.20 and later): Anthropic's thinking, OpenAI's reasoning summary, and `delta.reasoning_content` / `delta.reasoning` of OpenAI-compatible providers (DeepSeek, vLLM, xAI, OpenRouter, Groq). When `stream()` falls back to one complete call (native tools without `stream_tool_calls`), the reply's whole `reasoning_content` comes once, before its text. |
 
 **Asking for visible reasoning.** Whether the model shows its reasoning at
 all is asked of the provider, in its own terms, through `provider_options`.
@@ -1512,7 +1512,7 @@ llm = ForgeLLMAdapter(provider="anthropic", model=model, stream_reasoning=True,
 kernel.message(session.id, text, llm_config={"provider_options": OPENAI})  # one turn
 ```
 
-- `ForgeLLMAdapter` sends them as forge_llm's `ChatConfig.extra` (0.7.19 and
+- `ForgeLLMAdapter` sends them as forge_llm's `ChatConfig.extra` (0.7.20 and
   later). Anthropic: `max_tokens` must be above `budget_tokens`; forge_llm
   raises it when the call does not set one. The thinking blocks come back on
   the reply that called tools and the kernel sends them back in the next
