@@ -241,6 +241,110 @@ class TestForgeAdapter:
         ]
 
 
+class TestForgeProviderOptions:
+    def test_the_options_go_in_the_extra_of_every_call(self) -> None:
+        adapter = forge_adapter(stream_reasoning=False)
+        adapter.provider_options = {"thinking": {"type": "enabled", "budget_tokens": 2000}}
+        adapter._agent.chat.return_value = SimpleNamespace(content="ok", tool_calls=None)
+
+        adapter.complete(MESSAGES, config={"provider_options": {"x": 1}, "max_tokens": 9000})
+
+        cfg = adapter._agent.chat.call_args.kwargs["config"]
+        assert cfg.extra == {"thinking": {"type": "enabled", "budget_tokens": 2000}, "x": 1}
+        assert cfg.max_tokens == 9000
+
+    def test_without_options_the_call_does_not_change(self) -> None:
+        adapter = forge_adapter(stream_reasoning=False)
+        adapter._agent.chat.return_value = SimpleNamespace(content="ok", tool_calls=None)
+
+        adapter.complete(MESSAGES)
+
+        assert "config" not in adapter._agent.chat.call_args.kwargs
+
+    def test_the_tool_stream_keeps_what_the_provider_needs_back(self) -> None:
+        adapter = forge_adapter(stream_reasoning=False, stream_tool_calls=True)
+        chunks = forge_chunks(tool_call=True)
+        chunks[-1].reasoning_state = {"anthropic_thinking": [{"type": "thinking"}]}
+        adapter._agent.stream_chat.return_value = iter(chunks)
+
+        items = list(adapter.stream(MESSAGES, tools=[{"type": "function"}]))
+
+        assert not any(isinstance(i, ReasoningDelta) for i in items)
+        reply = items[-1]
+        assert isinstance(reply, LLMResponse)
+        assert reply.reasoning_content == "Pensando.Ainda pensando."
+        assert reply.reasoning_state == {"anthropic_thinking": [{"type": "thinking"}]}
+
+
+def test_anthropic_thinking_through_forge_llm_end_to_end() -> None:
+    """forge_llm 0.7.19 itself, with only Anthropic's client faked."""
+    pytest.importorskip("forge_llm")
+    from symbiote.adapters.llm.forge import ForgeLLMAdapter
+
+    thinking = {"type": "enabled", "budget_tokens": 8000}
+    adapter = ForgeLLMAdapter(
+        provider="anthropic", model="claude-x", api_key="k",
+        stream_tool_calls=True, stream_reasoning=True,
+        provider_options={"thinking": thinking},
+    )
+
+    def ev(kind, **fields):
+        return SimpleNamespace(type=kind, **fields)
+
+    def block(**fields):
+        return ev("content_block_start", content_block=SimpleNamespace(**fields))
+
+    def delta(**fields):
+        return ev("content_block_delta", delta=SimpleNamespace(**fields))
+
+    events = [
+        block(type="thinking", thinking="", signature=""),
+        delta(type="thinking_delta", thinking="Preciso buscar."),
+        delta(type="signature_delta", signature="sig"),
+        ev("content_block_stop"),
+        block(type="tool_use", id="tu_1", name="search"),
+        delta(type="input_json_delta", partial_json="{}"),
+        ev("content_block_stop"),
+        ev("message_stop"),
+    ]
+    stream = MagicMock()
+    stream.__enter__ = MagicMock(return_value=iter(events))
+    stream.__exit__ = MagicMock(return_value=False)
+    provider = adapter._agent._get_provider()
+    provider._client = MagicMock()
+    provider._client.messages.stream.return_value = stream
+
+    items = list(adapter.stream(MESSAGES, tools=[{
+        "type": "function",
+        "function": {"name": "search", "description": "d", "parameters": {"type": "object"}},
+    }]))
+
+    sent = provider._client.messages.stream.call_args.kwargs
+    assert sent["thinking"] == thinking and sent["max_tokens"] > 8000
+    assert items[0] == ReasoningDelta(text="Preciso buscar.")
+    reply = items[-1]
+    assert isinstance(reply, LLMResponse)
+    assert [c.tool_id for c in reply.tool_calls] == ["search"]
+    blocks = reply.reasoning_state["anthropic_thinking"]
+    assert blocks == [{"type": "thinking", "thinking": "Preciso buscar.", "signature": "sig"}]
+
+    # The next round sends the blocks back, first in the assistant message.
+    replay = [
+        *MESSAGES,
+        {"role": "assistant", "content": "", "reasoning_state": reply.reasoning_state,
+         "tool_calls": [{"id": "tu_1", "type": "function",
+                         "function": {"name": "search", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "tu_1", "content": "ok"},
+    ]
+    stream.__enter__ = MagicMock(return_value=iter([ev("message_stop")]))
+    list(adapter.stream(replay, tools=[{
+        "type": "function",
+        "function": {"name": "search", "description": "d", "parameters": {"type": "object"}},
+    }]))
+    assistant = provider._client.messages.stream.call_args.kwargs["messages"][1]
+    assert [b["type"] for b in assistant["content"]] == ["thinking", "tool_use"]
+
+
 # ── ChatRunner ───────────────────────────────────────────────────────────────
 
 

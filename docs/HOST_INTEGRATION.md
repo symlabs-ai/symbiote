@@ -1492,29 +1492,40 @@ What each adapter reads:
 | Adapter | Where the reasoning comes from |
 |---------|--------------------------------|
 | `SymGatewayLLMAdapter(streaming=True, stream_reasoning=True)` | `delta.reasoning_content` (or, without it, `delta.reasoning`) in the gateway's event stream. `stream_reasoning` without `streaming` is an error. |
-| `ForgeLLMAdapter(stream_reasoning=True)` | `reasoning_content` (or `reasoning`) on forge_llm's stream chunks. When `stream()` falls back to one complete call (native tools without `stream_tool_calls`), the reply's whole `reasoning_content` comes once, before its text. |
+| `ForgeLLMAdapter(stream_reasoning=True)` | forge_llm's stream chunks (0.7.19 and later): Anthropic's thinking, OpenAI's reasoning summary, and `delta.reasoning_content` / `delta.reasoning` of OpenAI-compatible providers (DeepSeek, vLLM, xAI, OpenRouter, Groq). When `stream()` falls back to one complete call (native tools without `stream_tool_calls`), the reply's whole `reasoning_content` comes once, before its text. |
 
 **Asking for visible reasoning.** Whether the model shows its reasoning at
-all is asked of the provider, in its own terms; which model takes which
-option is the host's decision. Through SymGateway, put it in
-`provider_options` (see "Provider options"), per model:
+all is asked of the provider, in its own terms, through `provider_options`.
+Both adapters take it the same way: at construction or on the attribute for
+every call, and in the config of one call (the `llm_config=` of a turn)
+merged over it, key by key. Which model takes which option is the host's
+decision:
 
 ```python
-entry = next((m for m in llm.models() if m.get("id") == model), {})
-if entry.get("provider") == "anthropic":
-    llm.provider_options = {"thinking": {"type": "enabled", "budget_tokens": 4000}}
-elif entry.get("provider") == "openai":
-    llm.provider_options = {"reasoning": {"summary": "auto"}}
+from symbiote.adapters.llm.forge import ForgeLLMAdapter
+
+ANTHROPIC = {"thinking": {"type": "enabled", "budget_tokens": 4000}}
+OPENAI = {"reasoning": {"summary": "auto"}}
+
+llm = ForgeLLMAdapter(provider="anthropic", model=model, stream_reasoning=True,
+                      provider_options=ANTHROPIC)
+kernel.message(session.id, text, llm_config={"provider_options": OPENAI})  # one turn
 ```
 
-Both depend on the gateway: it has to accept these options and relay the
-provider's reasoning (Anthropic's `thinking_delta`, OpenAI's reasoning
-summary) in the stream as `delta.reasoning_content`. Until it does, nothing
-reaches `on_reasoning` and the turn runs as before. With `ForgeLLMAdapter`,
-OpenAI-compatible providers that return `reasoning_content` on their own
-(DeepSeek, vLLM and similar) show it through the complete-call fallback;
-forge_llm 0.7.18 does not yet stream reasoning nor send Anthropic's
-`thinking`.
+- `ForgeLLMAdapter` sends them as forge_llm's `ChatConfig.extra` (0.7.19 and
+  later). Anthropic: `max_tokens` must be above `budget_tokens`; forge_llm
+  raises it when the call does not set one. The thinking blocks come back on
+  the reply that called tools and the kernel sends them back in the next
+  round, as Anthropic requires; with `stream_tool_calls=True` the stream
+  carries them too. OpenAI: a call that asks for a summary goes through the
+  Responses API, the only one that returns it.
+- `SymGatewayLLMAdapter` sends them in the body as `provider_options`. It
+  depends on the gateway: it has to accept these options, relay the
+  provider's reasoning (Anthropic's `thinking_delta`, OpenAI's reasoning
+  summary) in the stream as `delta.reasoning_content`, and keep Anthropic's
+  thinking blocks across the rounds of a tool loop. Until it does, nothing
+  reaches `on_reasoning` and the turn runs as before. `models()` says which
+  provider serves each model.
 
 ---
 

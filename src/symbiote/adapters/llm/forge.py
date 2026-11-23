@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from symbiote.core.exceptions import LLMError, is_transient_llm_error, llm_error_status
@@ -48,12 +49,16 @@ class ForgeLLMAdapter:
         stream_tool_calls: bool = False,
         project_slug: str | None = _UNSET,
         stream_reasoning: bool = False,
+        provider_options: Mapping[str, Any] | None = None,
     ) -> None:
         """``stream_tool_calls``: stream text token by token also when native
         tools are offered, collecting the tool calls from the stream. Off by
-        default: not every provider assembles tool calls in a stream (Groq),
-        and the stream carries no reasoning state, which protocols that
-        replay it (e.g. ``poolside_laguna_v1``) need.
+        default: not every provider assembles tool calls in a stream (Groq).
+        The reply then carries the reasoning the stream brought
+        (``reasoning_content``, and the ``reasoning_state`` forge_llm 0.7.19
+        streams for Anthropic's thinking); a provider whose stream brings no
+        state cannot serve protocols that replay it (e.g.
+        ``poolside_laguna_v1``).
 
         ``project_slug``: only for ``provider="symgateway"``, the project the
         gateway routes the call to (its ``X-Project-Slug`` header). Not given,
@@ -68,9 +73,18 @@ class ForgeLLMAdapter:
         ``reasoning_content`` once, before its text. It changes neither the
         request nor the reply. Off by default: the stream yields exactly
         what it did.
+
+        ``provider_options``: options for the provider, in its own terms,
+        sent with every call as forge_llm's ``ChatConfig.extra`` (for example
+        Anthropic's ``{"thinking": {"type": "enabled", "budget_tokens":
+        8000}}`` or OpenAI's ``{"reasoning": {"summary": "auto"}}``). The
+        ``provider_options`` of a call's own config is merged over them, key
+        by key, as in ``SymGatewayLLMAdapter``, so one ``llm_config`` serves
+        both adapters. The attribute may be replaced after construction.
         """
         self._stream_tool_calls = stream_tool_calls
         self._stream_reasoning = stream_reasoning
+        self.provider_options: dict[str, Any] = dict(provider_options or {})
         # Read by the kernel's usage record when a response names neither.
         self.provider = provider
         self.model = model
@@ -119,8 +133,9 @@ class ForgeLLMAdapter:
         try:
             chat_messages = [_to_chat_message(m) for m in messages]
             kwargs: dict = {"messages": chat_messages}
-            if config or tools:
-                cfg = ChatConfig(**(config or {}))
+            fields = self._config_fields(config)
+            if fields or tools:
+                cfg = ChatConfig(**fields)
                 if tools:
                     cfg.tools = tools
                 kwargs["config"] = cfg
@@ -185,8 +200,9 @@ class ForgeLLMAdapter:
         try:
             chat_messages = [_to_chat_message(m) for m in messages]
             kwargs: dict = {"messages": chat_messages}
-            if config or _STREAM_USAGE:
-                kwargs["config"] = _stream_config(config)
+            fields = self._config_fields(config)
+            if fields or _STREAM_USAGE:
+                kwargs["config"] = _stream_config(fields)
 
             usage: Any = None
             for chunk in self._agent.stream_chat(**kwargs):
@@ -213,9 +229,11 @@ class ForgeLLMAdapter:
         """Text chunks as they arrive, then an ``LLMResponse`` if the model
         called tools (the provider assembles the calls at the end)."""
         try:
-            cfg = _stream_config(config)
+            cfg = _stream_config(self._config_fields(config))
             cfg.tools = tools
             parts: list[str] = []
+            thoughts: list[str] = []
+            reasoning_state: Any = None
             raw_calls: list | None = None
             finish_reason: str | None = None
             usage: Any = None
@@ -224,9 +242,12 @@ class ForgeLLMAdapter:
                 config=cfg,
                 auto_execute_tools=False,
             ):
-                thought = self._reasoning(chunk)
-                if thought is not None:
-                    yield thought
+                piece = _reasoning_text(chunk)
+                if piece:
+                    thoughts.append(piece)
+                    if self._stream_reasoning:
+                        yield ReasoningDelta(text=piece)
+                reasoning_state = _value(chunk, "reasoning_state") or reasoning_state
                 text = _value(chunk, "content")
                 if isinstance(text, str) and text:
                     parts.append(text)
@@ -242,6 +263,9 @@ class ForgeLLMAdapter:
             yield LLMResponse(
                 content="".join(parts),
                 tool_calls=_extract_tool_calls({"tool_calls": raw_calls}),
+                # What the provider may need back with the tool results.
+                reasoning_content="".join(thoughts) or None,
+                reasoning_state=reasoning_state,
                 finish_reason=finish_reason,
                 usage=_extract_usage({"usage": usage}),
             )
@@ -250,13 +274,35 @@ class ForgeLLMAdapter:
 
     def _reasoning(self, chunk: Any) -> ReasoningDelta | None:
         """The reasoning a stream chunk carries, when it is to be streamed."""
-        if not self._stream_reasoning or isinstance(chunk, str):
+        if not self._stream_reasoning:
             return None
-        for name in ("reasoning_content", "reasoning"):
-            text = _value(chunk, name)
-            if isinstance(text, str) and text:
-                return ReasoningDelta(text=text)
+        text = _reasoning_text(chunk)
+        return ReasoningDelta(text=text) if text else None
+
+    def _config_fields(self, config: dict | None) -> dict[str, Any]:
+        """The ChatConfig fields of a call: its config, with the provider
+        options (the adapter's, then the call's) in ``extra``."""
+        fields = dict(config or {})
+        own = fields.pop("provider_options", None)
+        options = {
+            **(getattr(self, "provider_options", None) or {}),
+            **(own if isinstance(own, Mapping) else {}),
+        }
+        if options:
+            extra = fields.get("extra")
+            fields["extra"] = {**(extra if isinstance(extra, Mapping) else {}), **options}
+        return fields
+
+
+def _reasoning_text(chunk: Any) -> str | None:
+    """The piece of reasoning a forge_llm stream chunk carries, if any."""
+    if isinstance(chunk, str):
         return None
+    for name in ("reasoning_content", "reasoning"):
+        text = _value(chunk, name)
+        if isinstance(text, str) and text:
+            return text
+    return None
 
 
 def _wrap_error(exc: Exception) -> LLMError:
@@ -362,9 +408,9 @@ def _extract_usage(response: Any) -> LLMTokenUsage | None:
 _STREAM_USAGE = "include_usage" in getattr(ChatConfig, "__dataclass_fields__", {})
 
 
-def _stream_config(config: dict | None) -> Any:
+def _stream_config(fields: dict | None) -> Any:
     """The ChatConfig of a streamed call, asking for its token usage."""
-    cfg = ChatConfig(**(config or {}))
+    cfg = ChatConfig(**(fields or {}))
     if _STREAM_USAGE:
         cfg.include_usage = True
     return cfg
