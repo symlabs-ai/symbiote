@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 
 ## [Unreleased]
 
+## [v0.8.24] - 2026-11-24
+
 ### Novas funcionalidades
 
 - feat(kernel): `append_message(session_id, role, content, origin=None, idempotency_key=None)` persiste uma mensagem pronta no transcript sem chamar modelo, tools ou hooks e sem criar uso, trace ou score. A chave opcional é durável, por sessão e atômica em SQLite/PostgreSQL: retry idêntico devolve a mensagem original; o mesmo valor com payload diferente levanta `IdempotencyConflictError`. O inspector e o repositório de mensagens expõem a chave. Migrações: 22 no SQLite e 16 no PostgreSQL (`message_appends`).
