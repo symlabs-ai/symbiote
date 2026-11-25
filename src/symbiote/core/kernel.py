@@ -42,7 +42,7 @@ from symbiote.core.hooks import CompositeHook
 from symbiote.core.identity import IdentityManager
 from symbiote.core.inspector import KernelInspector
 from symbiote.core.llm_usage import LLMCallRecord, llm_call, metered
-from symbiote.core.models import Session, Symbiote
+from symbiote.core.models import Message, Session, Symbiote
 from symbiote.core.origin import normalize_origin
 from symbiote.core.ports import (
     LLMPort,
@@ -1184,6 +1184,42 @@ class SymbioteKernel:
         """Read a session. Does not reopen a closed one (use
         get_or_create_session / SessionManager.resume for that)."""
         return self._sessions.get(session_id)
+
+    def append_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        origin: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> Message:
+        """Store a ready message in a session without running a turn.
+
+        This method makes no model or tool call and creates no execution trace,
+        score or usage record. The message is immediately visible to the
+        inspector and is part of subsequent session history and summaries.
+
+        ``role`` must be ``"user"``, ``"assistant"`` or ``"system"`` and
+        ``content`` must be a non-empty string. ``origin`` has the same label
+        rules as :meth:`message`.
+
+        ``idempotency_key`` is optional and scoped to ``session_id``. The first
+        call durably stores it with the normalized payload (role, content and
+        origin); an identical retry returns the same :class:`Message`, including
+        its id and timestamp. Reusing the key with another payload raises
+        ``IdempotencyConflictError``. Keys must be non-empty strings of at most
+        500 characters.
+
+        Raises ``EntityNotFoundError`` for an unknown session and
+        ``ValidationError`` for invalid input.
+        """
+        return self._sessions.append_message(
+            session_id,
+            role,
+            content,
+            origin=origin,
+            idempotency_key=idempotency_key,
+        )
 
     def message(
         self,

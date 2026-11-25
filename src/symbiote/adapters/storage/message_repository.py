@@ -17,21 +17,23 @@ class MessageRepository:
         """Return messages for a session, chronological order.
 
         With ``since`` (an ISO timestamp), only messages created after it.
-        Each dict carries ``role``, ``content``, ``created_at`` and
-        ``origin`` (``None`` unless the message is an input that the person
-        did not write, see ``symbiote.core.origin``).
+        Each dict carries ``role``, ``content``, ``created_at``, ``origin``
+        (``None`` unless the message is an input that the person did not write,
+        see ``symbiote.core.origin``) and ``idempotency_key`` (normally None).
         """
         if since is None:
             rows = self._storage.fetch_all(
-                "SELECT role, content, created_at, origin FROM messages "
-                "WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                "SELECT m.role, m.content, m.created_at, m.origin, a.idempotency_key "
+                "FROM messages m LEFT JOIN message_appends a ON a.message_id = m.id "
+                "WHERE m.session_id = ? ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?",
                 (session_id, limit),
             )
         else:
             rows = self._storage.fetch_all(
-                "SELECT role, content, created_at, origin FROM messages "
-                "WHERE session_id = ? AND created_at > ? "
-                "ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                "SELECT m.role, m.content, m.created_at, m.origin, a.idempotency_key "
+                "FROM messages m LEFT JOIN message_appends a ON a.message_id = m.id "
+                "WHERE m.session_id = ? AND m.created_at > ? "
+                "ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?",
                 (session_id, since, limit),
             )
         return [
@@ -40,6 +42,7 @@ class MessageRepository:
                 "content": r["content"],
                 "created_at": r["created_at"],
                 "origin": r.get("origin"),
+                "idempotency_key": r.get("idempotency_key"),
             }
             for r in reversed(rows)
         ]

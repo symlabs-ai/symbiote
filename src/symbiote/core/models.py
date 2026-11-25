@@ -80,6 +80,9 @@ class Message(BaseModel):
     # the host, see ``symbiote.core.origin``). ``None``: the person, or a
     # message that is not the input of a turn.
     origin: str | None = None
+    # Supplied by a host that may retry ``append_message``. Unique within the
+    # session; None for ordinary turn messages and non-idempotent appends.
+    idempotency_key: str | None = None
     created_at: datetime = Field(default_factory=_utcnow)
 
 

@@ -116,12 +116,15 @@ class KernelInspector:
         """The last ``limit`` messages of a session, in chronological order.
 
         ``origin`` is ``None`` unless the message is an input that the person
-        did not write (the ``origin`` of ``kernel.message``).
+        did not write. ``idempotency_key`` is present only on messages written
+        through an idempotent ``kernel.append_message`` call.
         """
         rows = self._storage.fetch_all(
-            "SELECT id, role, content, created_at, origin FROM messages "
-            "WHERE session_id = ? "
-            "ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            "SELECT m.id, m.role, m.content, m.created_at, m.origin, "
+            "a.idempotency_key FROM messages m "
+            "LEFT JOIN message_appends a ON a.message_id = m.id "
+            "WHERE m.session_id = ? "
+            "ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?",
             (session_id, limit),
         )
         return list(reversed(rows))

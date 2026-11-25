@@ -909,13 +909,38 @@ session = kernel.get_or_create_session(
 # Start
 session = kernel.start_session(sym.id, goal="Help with X")
 
-# Send messages
+# Send a message through a model turn
 response = kernel.message(session.id, user_message)
+
+# Or append a ready message: no model, tools, trace, score or usage cost
+notice = kernel.append_message(
+    session.id,
+    role="assistant",
+    content="Your report is ready.",
+    origin="host.report",
+    idempotency_key="report:42:ready",
+)
 
 # Close (triggers reflection + scoring + failure memory)
 closed = kernel.close_session(session.id)
 # closed.summary contains the auto-generated session summary
 ```
+
+`append_message(session_id, role, content, origin=None, idempotency_key=None)`
+accepts the `user`, `assistant`, and `system` roles and non-empty text. It writes
+straight to the same persisted transcript that `message()` uses, so the result
+appears in `kernel.inspector.list_messages()`, later model context, exports, and
+session summaries. It does not reopen a closed session and does not run hooks,
+reflection, a model, or any tool.
+
+When `idempotency_key` is present, it is scoped to the session and stored
+transactionally with the message. Retrying the same normalized payload (role,
+content, and origin) returns the original `Message`, including its id and
+creation time, even after restart or from another replica. Reusing that key
+with a different payload raises
+`symbiote.core.exceptions.IdempotencyConflictError`. Hosts should derive stable
+keys from their own event IDs; keys must be non-empty strings of at most 500
+characters. Omitting the key appends a new message on every call.
 
 What that summary is depends on `session_summary_mode`, per symbiote:
 

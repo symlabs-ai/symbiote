@@ -194,6 +194,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "_migrate_message_origin",
     "_migrate_session_learn",
     "_migrate_turn_modes",
+    "_migrate_message_idempotency",
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -828,6 +829,21 @@ class SQLiteAdapter:
         ):
             with contextlib.suppress(sqlite3.OperationalError):  # column already exists
                 self._conn.execute(stmt)
+        self._conn.commit()
+
+    def _migrate_message_idempotency(self) -> None:
+        """22: durable idempotency for host-appended messages."""
+        self._conn.execute(
+            """CREATE TABLE IF NOT EXISTS message_appends (
+                rowid           INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id      TEXT NOT NULL REFERENCES sessions(id),
+                idempotency_key TEXT NOT NULL,
+                payload_hash    TEXT NOT NULL,
+                message_id      TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                UNIQUE(session_id, idempotency_key),
+                UNIQUE(message_id)
+            )"""
+        )
         self._conn.commit()
 
     def execute(self, sql: str, params: tuple | None = None) -> sqlite3.Cursor:

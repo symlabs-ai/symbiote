@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 from datetime import datetime
-from typing import Literal
+from typing import Literal, cast
 
 from symbiote.core.exceptions import (
     EntityNotFoundError,
+    IdempotencyConflictError,
     StorageIntegrityError,
     ValidationError,
 )
@@ -27,6 +29,9 @@ from symbiote.core.subjects import validate_subject_key
 
 # ``close(summary=...)`` not given: generate the summary as always.
 _GENERATE: object = object()
+
+_MESSAGE_ROLES = frozenset({"user", "assistant", "system"})
+MAX_IDEMPOTENCY_KEY_CHARS = 500
 
 _key_locks: dict[tuple[str, str], threading.Lock] = {}
 _key_locks_guard = threading.Lock()
@@ -330,13 +335,73 @@ class SessionManager:
         (``symbiote.core.origin``); ``None``, the default, is the person.
         """
         self._assert_session_exists(session_id)
-
         msg = Message(
             session_id=session_id,
             role=role,
             content=content,
             origin=normalize_origin(origin),
         )
+        self._insert_message(msg)
+        return msg
+
+    def append_message(
+        self,
+        session_id: str,
+        role: object,
+        content: object,
+        *,
+        origin: object = None,
+        idempotency_key: object = None,
+    ) -> Message:
+        """Validate and persist a ready message, with optional idempotency."""
+        role, content, origin, idempotency_key = self._validate_message(
+            role, content, origin, idempotency_key
+        )
+        self._assert_session_exists(session_id)
+        msg = Message(
+            session_id=session_id,
+            role=role,
+            content=content,
+            origin=origin,
+            idempotency_key=idempotency_key,
+        )
+        if idempotency_key is None:
+            self._insert_message(msg)
+            return msg
+
+        payload_hash = self._message_payload_hash(role, content, origin)
+        try:
+            with self._storage.transaction():
+                self._insert_message(msg)
+                self._storage.execute(
+                    "INSERT INTO message_appends "
+                    "(session_id, idempotency_key, payload_hash, message_id) "
+                    "VALUES (?, ?, ?, ?)",
+                    (session_id, idempotency_key, payload_hash, msg.id),
+                )
+            stored = self._idempotent_message(session_id, idempotency_key)
+            if stored is None:  # pragma: no cover - committed ledger invariant
+                raise RuntimeError("idempotent message disappeared after commit")
+            return self._row_to_message(stored)
+        except StorageIntegrityError:
+            existing = self._idempotent_message(session_id, idempotency_key)
+            if existing is None:
+                raise
+            if existing["payload_hash"] != payload_hash:
+                raise IdempotencyConflictError(session_id, idempotency_key) from None
+            return self._row_to_message(existing)
+
+    def _idempotent_message(
+        self, session_id: str, idempotency_key: str
+    ) -> dict | None:
+        return self._storage.fetch_one(
+            "SELECT m.*, a.idempotency_key, a.payload_hash "
+            "FROM message_appends a JOIN messages m ON m.id = a.message_id "
+            "WHERE a.session_id = ? AND a.idempotency_key = ?",
+            (session_id, idempotency_key),
+        )
+
+    def _insert_message(self, msg: Message) -> None:
         self._storage.execute(
             "INSERT INTO messages (id, session_id, role, content, created_at, origin) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -349,7 +414,49 @@ class SessionManager:
                 msg.origin,
             ),
         )
-        return msg
+
+    @staticmethod
+    def _validate_message(
+        role: object,
+        content: object,
+        origin: object,
+        idempotency_key: object,
+    ) -> tuple[Literal["user", "assistant", "system"], str, str | None, str | None]:
+        if role not in _MESSAGE_ROLES:
+            raise ValidationError("role must be one of: user, assistant, system")
+        if not isinstance(content, str):
+            raise ValidationError(
+                f"content must be a string, got {type(content).__name__}"
+            )
+        if not content.strip():
+            raise ValidationError("content must not be empty")
+        normalized_origin = normalize_origin(origin)
+        if idempotency_key is not None:
+            if not isinstance(idempotency_key, str):
+                raise ValidationError(
+                    "idempotency_key must be a string, got "
+                    f"{type(idempotency_key).__name__}"
+                )
+            if not idempotency_key.strip():
+                raise ValidationError("idempotency_key must not be empty")
+            if len(idempotency_key) > MAX_IDEMPOTENCY_KEY_CHARS:
+                raise ValidationError(
+                    "idempotency_key is longer than "
+                    f"{MAX_IDEMPOTENCY_KEY_CHARS} characters"
+                )
+        return (
+            cast(Literal["user", "assistant", "system"], role),
+            content,
+            normalized_origin,
+            idempotency_key,
+        )
+
+    @staticmethod
+    def _message_payload_hash(role: str, content: str, origin: str | None) -> str:
+        payload = json.dumps(
+            [role, content, origin], ensure_ascii=False, separators=(",", ":")
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def delete_message(self, message_id: str) -> None:
         """Remove one message (used to undo the user message of a failed turn)."""
@@ -358,8 +465,10 @@ class SessionManager:
     def get_messages(self, session_id: str, limit: int = 50) -> list[Message]:
         """Return messages for a session, most recent first."""
         rows = self._storage.fetch_all(
-            "SELECT * FROM messages WHERE session_id = ? "
-            "ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            "SELECT m.*, a.idempotency_key FROM messages m "
+            "LEFT JOIN message_appends a ON a.message_id = m.id "
+            "WHERE m.session_id = ? "
+            "ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?",
             (session_id, limit),
         )
         return [self._row_to_message(r) for r in rows]
@@ -457,6 +566,7 @@ class SessionManager:
             role=row["role"],
             content=row["content"],
             origin=row.get("origin"),
+            idempotency_key=row.get("idempotency_key"),
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 

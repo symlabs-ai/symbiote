@@ -67,6 +67,15 @@ sym = kernel.create_symbiote(name="Atlas", role="assistant")
 session = kernel.start_session(sym.id, goal="Python help")
 response = kernel.message(session.id, "How do I use dataclasses?")
 
+# Or persist a ready message without calling the model or tools
+notice = kernel.append_message(
+    session.id,
+    role="assistant",
+    content="Your report is ready.",
+    origin="host.report",
+    idempotency_key="report:42:ready",
+)
+
 # Close session (runs reflection, generates summary)
 kernel.close_session(session.id)
 ```

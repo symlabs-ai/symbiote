@@ -583,6 +583,19 @@ ALTER TABLE sessions ADD COLUMN tool_mode TEXT COLLATE "C";
 ALTER TABLE environment_configs ADD COLUMN instant_read_results INTEGER DEFAULT 0;
 """
 
+# 16: durable idempotency for host-appended messages.
+_V16_MESSAGE_IDEMPOTENCY = """
+CREATE TABLE message_appends (
+    rowid           BIGINT GENERATED ALWAYS AS IDENTITY,
+    session_id      TEXT COLLATE "C" NOT NULL REFERENCES sessions(id),
+    idempotency_key TEXT COLLATE "C" NOT NULL,
+    payload_hash    TEXT COLLATE "C" NOT NULL,
+    message_id      TEXT COLLATE "C" NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    UNIQUE (session_id, idempotency_key),
+    UNIQUE (message_id)
+);
+"""
+
 MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (1, "baseline", _V1_BASELINE),
     (2, "session_locks", _V2_SESSION_LOCKS),
@@ -599,6 +612,7 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (13, "message_origin", _V13_MESSAGE_ORIGIN),
     (14, "session_learn", _V14_SESSION_LEARN),
     (15, "turn_modes", _V15_TURN_MODES),
+    (16, "message_idempotency", _V16_MESSAGE_IDEMPOTENCY),
 )
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

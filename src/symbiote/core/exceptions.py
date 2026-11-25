@@ -48,6 +48,18 @@ class DuplicateEntityError(SymbioteError):
         super().__init__(f"{entity_type} {entity_id!r} already exists")
 
 
+class IdempotencyConflictError(SymbioteError):
+    """An idempotency key was already used with a different payload."""
+
+    def __init__(self, session_id: str, idempotency_key: str) -> None:
+        self.session_id = session_id
+        self.idempotency_key = idempotency_key
+        super().__init__(
+            f"idempotency key {idempotency_key!r} was already used with a "
+            f"different message payload in session {session_id!r}"
+        )
+
+
 class DelegationRefusedError(SymbioteError):
     """Raised by ``spawn`` when the calling session only delegates to a
     revision (``delegation="strict"``) and the target symbiote has none to
